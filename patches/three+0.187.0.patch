@@ -1,5 +1,5 @@
 diff --git a/node_modules/three/examples/jsm/loaders/FBXLoader.js b/node_modules/three/examples/jsm/loaders/FBXLoader.js
-index fc155a4..f756493 100644
+index fc155a4..87c7c0c 100644
 --- a/node_modules/three/examples/jsm/loaders/FBXLoader.js
 +++ b/node_modules/three/examples/jsm/loaders/FBXLoader.js
 @@ -180,13 +180,22 @@ class FBXLoader extends Loader {
@@ -30,7 +30,43 @@ index fc155a4..f756493 100644
  
  	}
  
-@@ -1805,7 +1814,21 @@ class GeometryParser {
+@@ -1119,27 +1128,19 @@ class FBXTreeParser {
+ 
+ 					if ( rawBone.ID === parent.ID ) {
+ 
+-						const subBone = bone;
+-						bone = new Bone();
++						// Skin clusters on different meshes can reference the same FBX model node.
++						if ( bone === null ) {
+ 
+-						bone.matrixWorld.copy( rawBone.transformLink );
++							bone = new Bone();
++							bone.matrixWorld.copy( rawBone.transformLink );
++							bone.name = name ? PropertyBinding.sanitizeNodeName( name ) : '';
++							bone.userData.originalName = name;
++							bone.ID = id;
+ 
+-						// set name and id here - otherwise in cases where "subBone" is created it will not have a name / id
+-
+-						bone.name = name ? PropertyBinding.sanitizeNodeName( name ) : '';
+-						bone.userData.originalName = name;
+-						bone.ID = id;
++						}
+ 
+ 						skeleton.bones[ i ] = bone;
+ 
+-						// In cases where a bone is shared between multiple meshes
+-						// duplicate the bone here and add it as a child of the first bone
+-						if ( subBone !== null ) {
+-
+-							bone.add( subBone );
+-
+-						}
+-
+ 					}
+ 
+ 				} );
+@@ -1805,7 +1806,21 @@ class GeometryParser {
  		if ( geoNode.attrName ) geo.name = geoNode.attrName;
  
  		const geoInfo = this.parseGeoNode( geoNode, skeleton );
@@ -53,7 +89,7 @@ index fc155a4..f756493 100644
  
  		const positionAttribute = new Float32BufferAttribute( buffers.vertex, 3 );
  
-@@ -1972,7 +1995,7 @@ class GeometryParser {
+@@ -1972,7 +1987,7 @@ class GeometryParser {
  
  	}
  
@@ -62,7 +98,7 @@ index fc155a4..f756493 100644
  
  		const buffers = {
  			vertex: [],
-@@ -1982,6 +2005,7 @@ class GeometryParser {
+@@ -1982,6 +1997,7 @@ class GeometryParser {
  			materialIndex: [],
  			vertexWeights: [],
  			weightsIndices: [],
@@ -70,7 +106,7 @@ index fc155a4..f756493 100644
  		};
  
  		let polygonIndex = 0;
-@@ -2143,7 +2167,7 @@ class GeometryParser {
+@@ -2143,7 +2159,7 @@ class GeometryParser {
  
  			if ( endOfFace ) {
  
@@ -79,7 +115,7 @@ index fc155a4..f756493 100644
  
  				polygonIndex ++;
  				faceLength = 0;
-@@ -2212,7 +2236,7 @@ class GeometryParser {
+@@ -2212,7 +2228,7 @@ class GeometryParser {
  	}
  
  	// Generate data for a single face in a geometry. If the face is a quad then split it into 2 tris
@@ -88,7 +124,7 @@ index fc155a4..f756493 100644
  
  		let triangles;
  
-@@ -2261,6 +2285,7 @@ class GeometryParser {
+@@ -2261,6 +2277,7 @@ class GeometryParser {
  		}
  
  		for ( const [ i0, i1, i2 ] of triangles ) {
@@ -96,7 +132,7 @@ index fc155a4..f756493 100644
  
  			buffers.vertex.push( geoInfo.vertexPositions[ facePositionIndexes[ i0 * 3 ] ] );
  			buffers.vertex.push( geoInfo.vertexPositions[ facePositionIndexes[ i0 * 3 + 1 ] ] );
-@@ -2968,7 +2993,14 @@ class AnimationParser {
+@@ -2968,7 +2985,14 @@ class AnimationParser {
  
  		}
  

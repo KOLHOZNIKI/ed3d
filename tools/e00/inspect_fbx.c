@@ -1,11 +1,11 @@
-/* Independent FBX inspection for the single-mesh E00 fixture pairs. */
+/* Independent FBX inspection for the E00 fixture pairs. */
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "ufbx.h"
 
-static ufbx_scene *load(const char *path)
+static ufbx_scene *load(const char *path, size_t mesh_count)
 {
     ufbx_error error;
     ufbx_scene *scene = ufbx_load_file(path, NULL, &error);
@@ -15,8 +15,8 @@ static ufbx_scene *load(const char *path)
         fprintf(stderr, "%s: %s\n", path, description);
         exit(1);
     }
-    if (scene->meshes.count != 1) {
-        fprintf(stderr, "Expected one mesh in %s.\n", path);
+    if (scene->meshes.count != mesh_count) {
+        fprintf(stderr, "Expected %zu meshes in %s.\n", mesh_count, path);
         ufbx_free_scene(scene);
         exit(1);
     }
@@ -328,20 +328,19 @@ static ufbx_scene *evaluate(const ufbx_scene *scene, const ufbx_anim_stack *stac
     return pose;
 }
 
-static ufbx_vec3 posed_point(const ufbx_scene *scene, size_t index)
+static ufbx_vec3 posed_point(const ufbx_scene *scene, uint32_t mesh_id, size_t index)
 {
-    const ufbx_mesh *mesh = scene->meshes.data[0];
+    const ufbx_mesh *mesh = scene->meshes.data[mesh_id];
     ufbx_vec3 point = mesh->skinned_position.values.data[index];
     if (mesh->skinned_is_local) point = ufbx_transform_position(&mesh->instances.data[0]->geometry_to_world, point);
     const double meters = scene->settings.unit_meters;
     return (ufbx_vec3){ .x = point.x * meters, .y = point.y * meters, .z = point.z * meters };
 }
 
-static bool compare_clips(const ufbx_scene *original, const ufbx_scene *exported)
+static bool compare_clips(const ufbx_scene *original, const ufbx_scene *exported,
+                          const ufbx_mesh *mesh, const ufbx_mesh *target_mesh)
 {
     if (original->anim_stacks.count == 0) return exported->anim_stacks.count == 0;
-    const ufbx_mesh *mesh = original->meshes.data[0];
-    const ufbx_mesh *target_mesh = exported->meshes.data[0];
     if (mesh->instances.count != 1 || target_mesh->instances.count != 1) return false;
 
     const ufbx_matrix *matrix = &mesh->instances.data[0]->geometry_to_world;
@@ -373,12 +372,12 @@ static bool compare_clips(const ufbx_scene *original, const ufbx_scene *exported
             const double fraction = sample / 20.0;
             ufbx_scene *left = evaluate(original, a, a->time_begin + duration * fraction);
             ufbx_scene *right = evaluate(exported, b, b->time_begin + target_duration * fraction);
-            const ufbx_vec3 anchor = posed_point(left, 0), first_anchor = posed_point(first, 0);
+            const ufbx_vec3 anchor = posed_point(left, mesh->typed_id, 0), first_anchor = posed_point(first, mesh->typed_id, 0);
             for (size_t vertex = 0; vertex < mesh->num_vertices; vertex++) {
-                const ufbx_vec3 point = posed_point(left, vertex);
-                max_error = fmax(max_error, point_distance(point, posed_point(right, vertex)));
+                const ufbx_vec3 point = posed_point(left, mesh->typed_id, vertex);
+                max_error = fmax(max_error, point_distance(point, posed_point(right, target_mesh->typed_id, vertex)));
                 source_deformation = fmax(source_deformation, fabs(point_distance(point, anchor) -
-                    point_distance(posed_point(first, vertex), first_anchor)));
+                    point_distance(posed_point(first, mesh->typed_id, vertex), first_anchor)));
             }
             samples++;
             ufbx_free_scene(right);
@@ -393,10 +392,77 @@ static bool compare_clips(const ufbx_scene *original, const ufbx_scene *exported
     return names_match && max_start_error <= 1e-5 && max_duration_error <= 1e-5 && max_error <= tolerance && source_deformation > tolerance;
 }
 
+static const ufbx_mesh *find_mesh(const ufbx_scene *scene, const char *name)
+{
+    const ufbx_node *node = ufbx_find_node(scene, name);
+    return node ? node->mesh : NULL;
+}
+
+static bool shared_skeleton(const ufbx_scene *scene, const ufbx_mesh *const meshes[2])
+{
+    const ufbx_node *bones[] = { ufbx_find_node(scene, "Pelvis"), ufbx_find_node(scene, "Spine"), ufbx_find_node(scene, "Chest") };
+    if (scene->bones.count != 3 || !bones[0] || !bones[1] || !bones[2] || bones[1]->parent != bones[0] || bones[2]->parent != bones[1]) return false;
+    for (size_t i = 0; i < 2; i++) {
+        const ufbx_mesh *mesh = meshes[i];
+        if (!mesh || mesh->instances.count != 1 || mesh->skin_deformers.count != 1) return false;
+        const ufbx_skin_cluster_list clusters = mesh->skin_deformers.data[0]->clusters;
+        if (clusters.count != 3) return false;
+        for (size_t j = 0; j < 3; j++) {
+            bool found = false;
+            for (size_t k = 0; k < clusters.count; k++) found |= clusters.data[k]->bone_node == bones[j];
+            if (!bones[j]->bone || !found) return false;
+        }
+    }
+    return true;
+}
+
+static bool compare_shared_skin(const ufbx_scene *original, const ufbx_scene *exported)
+{
+    const char *names[] = { "Body", "Clothing" };
+    const size_t expected_vertices[] = { 40, 32 }, expected_triangles[] = { 76, 48 };
+    const ufbx_mesh *source[] = { find_mesh(original, names[0]), find_mesh(original, names[1]) };
+    const ufbx_mesh *output[] = { find_mesh(exported, names[0]), find_mesh(exported, names[1]) };
+    const bool source_shared = shared_skeleton(original, source), output_shared = shared_skeleton(exported, output);
+    printf("{\"originalSharedSkeleton\":%s,\"exportedSharedSkeleton\":%s,\"originalBoneCount\":%zu,\"exportedBoneCount\":%zu,\"meshes\":[",
+           source_shared ? "true" : "false", output_shared ? "true" : "false", original->bones.count, exported->bones.count);
+    bool compatible = source_shared && output_shared && original->anim_stacks.count == 1 && exported->anim_stacks.count == 1;
+    if (source_shared && output_shared) {
+        for (size_t i = 0; i < 2; i++) {
+            const ufbx_mesh *a = source[i], *b = output[i];
+            const bool topology = same_connectivity(a, b) && a->num_vertices == expected_vertices[i] && a->num_triangles == expected_triangles[i];
+            const bool weights = same_skin_weights(a, b);
+            const ufbx_skin_deformer *skin = a->skin_deformers.data[0];
+            double base_delta = 0.0, bind_delta = 0.0;
+            if (topology) {
+                for (size_t v = 0; v < a->num_vertices; v++) base_delta = fmax(base_delta, point_distance(a->vertices.data[v], b->vertices.data[v]));
+            }
+            if (weights) {
+                for (size_t c = 0; c < skin->clusters.count; c++) {
+                    const ufbx_skin_cluster *left = skin->clusters.data[c], *right = b->skin_deformers.data[0]->clusters.data[c];
+                    for (size_t v = 0; v < 12; v++) {
+                        bind_delta = fmax(bind_delta, fabs(left->geometry_to_bone.v[v] - right->geometry_to_bone.v[v]));
+                        bind_delta = fmax(bind_delta, fabs(left->bind_to_world.v[v] - right->bind_to_world.v[v]));
+                    }
+                }
+            }
+            printf("%s{\"name\":\"%s\",\"controlPoints\":%zu,\"triangles\":%zu,\"maxInfluences\":%zu,\"sameConnectivity\":%s,"
+                   "\"sameRawWeights\":%s,\"maxBaseDelta\":%.9g,\"maxBindMatrixDelta\":%.9g",
+                   i ? "," : "", names[i], a->num_vertices, a->num_triangles, skin->max_weights_per_vertex,
+                   topology ? "true" : "false", weights ? "true" : "false", base_delta, bind_delta);
+            const bool animated = topology && compare_clips(original, exported, a, b);
+            compatible &= topology && weights && animated && base_delta <= 1e-9 && bind_delta <= 1e-9;
+            printf("}");
+        }
+    }
+    printf("],\"compatible\":%s}\n", compatible ? "true" : "false");
+    return compatible;
+}
+
 int main(int argc, char **argv)
 {
-    if (argc != 3 && argc != 5) {
-        fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx [control-point offset-y | --seams offset-y | --atlas source-corners.bin | --baked source-corners.bin | --smooth center | --grid center]\n");
+    const bool shared = argc == 4 && strcmp(argv[3], "--shared-skin") == 0;
+    if (argc != 3 && argc != 5 && !shared) {
+        fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx [--shared-skin | control-point offset-y | --seams offset-y | --atlas source-corners.bin | --baked source-corners.bin | --smooth center | --grid center]\n");
         return 2;
     }
     const bool baked = argc == 5 && strcmp(argv[3], "--baked") == 0;
@@ -416,8 +482,14 @@ int main(int argc, char **argv)
             return 2;
         }
     }
-    ufbx_scene *original = load(argv[1]);
-    ufbx_scene *exported = load(argv[2]);
+    ufbx_scene *original = load(argv[1], shared ? 2 : 1);
+    ufbx_scene *exported = load(argv[2], shared ? 2 : 1);
+    if (shared) {
+        const bool matches = compare_shared_skin(original, exported);
+        ufbx_free_scene(exported);
+        ufbx_free_scene(original);
+        return matches ? 0 : 1;
+    }
     printf("{\"original\":");
     stats(original);
     printf(",\"exported\":");
@@ -497,7 +569,7 @@ int main(int argc, char **argv)
                    edit_matches ? "true" : "false");
         }
     }
-    const bool animation = topology && compare_clips(original, exported);
+    const bool animation = topology && compare_clips(original, exported, a, b);
     puts("}");
     ufbx_free_scene(exported);
     ufbx_free_scene(original);

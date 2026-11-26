@@ -38,12 +38,14 @@ def main():
     parser.add_argument("--repair", action="store_true")
     parser.add_argument("--alpha", action="store_true")
     parser.add_argument("--normal", action="store_true")
-    parser.add_argument("--seams", action="store_true")
+    standalone = parser.add_mutually_exclusive_group()
+    standalone.add_argument("--seams", action="store_true")
+    standalone.add_argument("--shared-skin", action="store_true")
     args = parser.parse_args()
-    if args.seams:
+    if args.seams or args.shared_skin:
         if any((args.tripo_dir, args.animation, args.real_animation, args.edited, args.unwrap, args.rebake,
                 args.paint, args.repair, args.alpha, args.normal)):
-            parser.error("Use --seams with only the Unity version.")
+            parser.error("Use the standalone fixture option with only the Unity version.")
     elif args.tripo_dir is None:
         parser.error("Specify the Tripo fixture directory.")
 
@@ -59,16 +61,23 @@ def main():
         + ("-alpha" if args.alpha else "")
         + ("-normal" if args.normal else "")
         + ("-seams" if args.seams else "")
+        + ("-shared-skin" if args.shared_skin else "")
     )
-    seam_fixture = Path(__file__).with_name("fixtures") / "topology_seams.zip"
-    cases = [
-        ("seams-baseline", seam_fixture, "topology_seams_e00.zip"),
-        ("seams-edited", seam_fixture, "topology_seams_e00_edited.zip"),
-    ] if args.seams else [
-        ("static", args.tripo_dir / "ceramic plate 3d model.zip", "ceramic_plate_3d_model_e00.zip"),
-        ("skinned", args.tripo_dir / "tripo_convert_8b04a473-804b-41a0-ab47-e84ae233629b.zip",
-         "tripo_convert_8b04a473-804b-41a0-ab47-e84ae233629b_e00.zip"),
-    ]
+    fixtures = Path(__file__).with_name("fixtures")
+    if args.shared_skin:
+        cases = [("shared-skin", fixtures / "shared_skin.fbx", "shared_skin_e00.zip")]
+    elif args.seams:
+        seam_fixture = fixtures / "topology_seams.zip"
+        cases = [
+            ("seams-baseline", seam_fixture, "topology_seams_e00.zip"),
+            ("seams-edited", seam_fixture, "topology_seams_e00_edited.zip"),
+        ]
+    else:
+        cases = [
+            ("static", args.tripo_dir / "ceramic plate 3d model.zip", "ceramic_plate_3d_model_e00.zip"),
+            ("skinned", args.tripo_dir / "tripo_convert_8b04a473-804b-41a0-ab47-e84ae233629b.zip",
+             "tripo_convert_8b04a473-804b-41a0-ab47-e84ae233629b_e00.zip"),
+        ]
     if args.animation:
         cases.append(("animated", args.animation, "animated_fixture_e00.zip"))
     if args.real_animation:
@@ -150,6 +159,8 @@ def main():
     if args.seams:
         copy2(Path(__file__).with_name("SeamTopologyProbe.cs"), editors)
         copy2(Path(__file__).with_name("topology-seams.json"), project)
+    if args.shared_skin:
+        copy2(Path(__file__).with_name("SharedSkinProbe.cs"), editors)
     if args.rebake or args.paint:
         for filename in ("TextureBakeProbe.cs", "TextureBakeProbe.shader"):
             copy2(Path(__file__).with_name(filename), editors)

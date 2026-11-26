@@ -6,16 +6,18 @@ import { strToU8, unzipSync, zipSync } from 'fflate';
 import { createServer, preview } from 'vite';
 import { decode } from 'fast-png';
 
-const { values: { edited, glb, 'glb-edited': glbEdited, unwrap, rebake, paint, repair, alpha, normal, seams }, positionals } = parseArgs({
+const { values: { edited, glb, 'glb-edited': glbEdited, unwrap, rebake, paint, repair, alpha, normal, seams,
+  'shared-skin': sharedSkin }, positionals } = parseArgs({
   options: { edited: { type: 'boolean' }, glb: { type: 'string' }, unwrap: { type: 'boolean' }, rebake: { type: 'boolean' },
     paint: { type: 'boolean' }, repair: { type: 'boolean' }, alpha: { type: 'boolean' }, normal: { type: 'boolean' },
-    seams: { type: 'boolean' }, 'glb-edited': { type: 'boolean' } }, allowPositionals: true,
+    seams: { type: 'boolean' }, 'glb-edited': { type: 'boolean' }, 'shared-skin': { type: 'boolean' } }, allowPositionals: true,
 });
-const [tripoPath, chromePath, animatedSource, realAnimatedSource] = seams ? [undefined, ...positionals] : positionals;
-if (!tripoPath && !seams) throw new Error('Supply the path to the Tripo sample directory.');
+const standalone = seams || sharedSkin;
+const [tripoPath, chromePath, animatedSource, realAnimatedSource] = standalone ? [undefined, ...positionals] : positionals;
+if (!tripoPath && !standalone) throw new Error('Supply the path to the Tripo sample directory.');
 if (glbEdited && !glb) throw new Error('--glb-edited requires --glb with the Tripo GLB path.');
-if (seams && (edited || glb || unwrap || rebake || paint || repair || alpha || normal || animatedSource)) {
-  throw new Error('Use --seams [Chrome.exe] as a standalone fixture check.');
+if (standalone && ((seams && sharedSkin) || edited || glb || unwrap || rebake || paint || repair || alpha || normal || animatedSource)) {
+  throw new Error('Use either --seams or --shared-skin with an optional Chrome path as a standalone fixture check.');
 }
 const { chromium } = await import('../../test-results/e00-browser/node_modules/playwright-core/index.mjs');
 const output = resolve('test-results/e00/exports');
@@ -45,7 +47,8 @@ try {
     const input = page.locator('#sources');
     const status = page.getByRole('status');
     const exportButton = page.getByRole('button', { name: 'Export FBX ZIP' });
-    const cases = seams ? [[resolve('tools/e00/fixtures/topology_seams.zip'), 'topology_seams', 13, 0, 0]] : [
+    const cases = sharedSkin ? [[resolve('tools/e00/fixtures/shared_skin.fbx'), 'shared_skin', 124, 3, 1]]
+      : seams ? [[resolve('tools/e00/fixtures/topology_seams.zip'), 'topology_seams', 13, 0, 0]] : [
       [join(tripoPath, 'ceramic plate 3d model.zip'), 'ceramic_plate_3d_model', 9138, 0, 0],
       [join(tripoPath, 'tripo_convert_8b04a473-804b-41a0-ab47-e84ae233629b.zip'), 'tripo_convert_8b04a473', 17623, 67, 0],
       ...(animatedSource ? [[animatedSource, 'animated_fixture', 4, 2, 1]] : []),
@@ -63,6 +66,11 @@ try {
       const [download] = await Promise.all([page.waitForEvent('download'), exportButton.click()]);
       const exported = join(output, download.suggestedFilename());
       await download.saveAs(exported);
+      if (sharedSkin) {
+        const files = unzipSync(await readFile(exported));
+        const manifest = JSON.parse(new TextDecoder().decode(files['manifest.json']));
+        assert.deepEqual(manifest.meshes, { meshes: 2, triangles: 124, bones: 3, clips: 1 });
+      }
       await input.setInputFiles(exported);
       await page.waitForFunction(() => !document.querySelector('#sources').disabled);
       const reimported = await status.textContent();
@@ -71,7 +79,7 @@ try {
       console.log(reimported);
     }
 
-    if (!seams) {
+    if (!standalone) {
       await checkTripoInputs({ page, input, status, exportButton, tripoPath, plate: cases[0][0] });
     }
 
