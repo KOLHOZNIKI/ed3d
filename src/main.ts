@@ -1,13 +1,15 @@
 import { AmbientLight, Box3, DirectionalLight, Mesh, PerspectiveCamera, Scene, SkinnedMesh, Texture, Vector3, WebGLRenderer } from 'three';
 import { exportAsset, importAsset, type ImportedAsset } from './e00/round-trip';
 import { exportGlb, importGlb, type ImportedGlb } from './e00/glb-round-trip';
+import { unwrapAsset } from './e00/uv-atlas';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#viewport');
 const status = document.getElementById('status');
 const sources = document.querySelector<HTMLInputElement>('#sources');
 const exportButton = document.querySelector<HTMLButtonElement>('#export');
+const unwrapButton = document.querySelector<HTMLButtonElement>('#unwrap');
 
-if (!canvas || !status || !sources || !exportButton) {
+if (!canvas || !status || !sources || !exportButton || !unwrapButton) {
   throw new Error('The E00 prototype is missing its workspace elements.');
 }
 
@@ -26,14 +28,19 @@ sources.addEventListener('change', async () => {
   if (!input.length) return;
   sources.disabled = true;
   exportButton.disabled = true;
+  unwrapButton.disabled = true;
   status.textContent = 'Opening local asset…';
   try {
     const glb = input.find(file => /\.glb$/i.test(file.name));
     if (glb && input.length !== 1) throw new Error('Select one GLB file at a time.');
     const imported = glb ? await importGlb(glb) : await importAsset(input);
-    if (asset) releasePreview(asset.scene);
+    if (asset) {
+      releasePreview(asset.scene);
+      if (asset.format === 'fbx') asset.uvAtlas?.geometry.dispose();
+    }
     asset = imported;
     exportButton.textContent = asset.format === 'glb' ? 'Export GLB' : 'Export FBX ZIP';
+    unwrapButton.textContent = 'Generate UV atlas';
     const { stats } = asset;
     status.textContent = `${asset.name} · ${stats.triangles.toLocaleString()} triangles · ${stats.bones} bones · ${stats.clips} clips`;
     if (asset.format === 'glb' && asset.affineCorrections) {
@@ -58,6 +65,7 @@ sources.addEventListener('change', async () => {
     sources.value = '';
     sources.disabled = false;
     exportButton.disabled = !asset;
+    unwrapButton.disabled = asset?.format !== 'fbx';
   }
 });
 
@@ -65,6 +73,7 @@ exportButton.addEventListener('click', async () => {
   if (!asset) return;
   sources.disabled = true;
   exportButton.disabled = true;
+  unwrapButton.disabled = true;
   const glb = asset.format === 'glb';
   status.textContent = glb ? 'Preparing GLB…' : 'Preparing FBX package…';
   try {
@@ -81,6 +90,30 @@ exportButton.addEventListener('click', async () => {
   } finally {
     sources.disabled = false;
     exportButton.disabled = false;
+    unwrapButton.disabled = asset.format !== 'fbx';
+  }
+});
+
+unwrapButton.addEventListener('click', async () => {
+  if (asset?.format !== 'fbx') return;
+  if (asset.uvAtlas) {
+    asset.uvAtlas.geometry.dispose();
+    asset = { ...asset, uvAtlas: undefined };
+    unwrapButton.textContent = 'Generate UV atlas';
+    status.textContent = 'Restored the source UV channels.';
+    return;
+  }
+  sources.disabled = exportButton.disabled = unwrapButton.disabled = true;
+  status.textContent = 'Generating UV atlas…';
+  try {
+    asset = await unwrapAsset(asset);
+    const atlas = asset.uvAtlas!.metrics;
+    status.textContent = `Generated ${atlas.charts} charts at ${atlas.width}×${atlas.height} in UV1. Export writes triangles. Existing textures still use UV0.`;
+    unwrapButton.textContent = 'Discard UV atlas';
+  } catch (error) {
+    status.textContent = error instanceof Error ? error.message : String(error);
+  } finally {
+    sources.disabled = exportButton.disabled = unwrapButton.disabled = false;
   }
 });
 

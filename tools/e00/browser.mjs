@@ -5,8 +5,8 @@ import { parseArgs } from 'node:util';
 import { strToU8, unzipSync, zipSync } from 'fflate';
 import { createServer, preview } from 'vite';
 
-const { values: { edited, glb }, positionals } = parseArgs({
-  options: { edited: { type: 'boolean' }, glb: { type: 'string' } }, allowPositionals: true,
+const { values: { edited, glb, unwrap }, positionals } = parseArgs({
+  options: { edited: { type: 'boolean' }, glb: { type: 'string' }, unwrap: { type: 'boolean' } }, allowPositionals: true,
 });
 const [tripoPath, chromePath, animatedSource, realAnimatedSource] = positionals;
 if (!tripoPath) throw new Error('Supply the path to the Tripo sample directory.');
@@ -115,6 +115,36 @@ try {
         assert.match(reimported, expected);
         assert.equal(Number(expected.exec(reimported)[1].replace(/\D/g, '')), triangles);
         console.log(reimported);
+      }
+    }
+
+    if (unwrap) {
+      const unwrapButton = page.locator('#unwrap');
+      for (const [path, name, triangles, bones, clips] of cases.slice(0, 2)) {
+        await input.setInputFiles(path);
+        await page.waitForFunction(() => !document.querySelector('#sources').disabled);
+        await unwrapButton.click();
+        await page.waitForFunction(() => !document.querySelector('#unwrap').disabled, null, { timeout: 120000 });
+        assert.match(await status.textContent(), /Generated .* in UV1/);
+        const [download] = await Promise.all([page.waitForEvent('download'), exportButton.click()]);
+        assert.ok(download.suggestedFilename().endsWith('_e00_atlas.zip'));
+        const exported = join(output, download.suggestedFilename());
+        await download.saveAs(exported);
+        const bundle = unzipSync(await readFile(exported));
+        const atlas = JSON.parse(new TextDecoder().decode(bundle['manifest.json'])).uvAtlas;
+        assert.equal(atlas.channel, 'uv1');
+        assert.ok(atlas.splitControlPoints > 0);
+        assert.equal(bundle[atlas.sourceCornerMap].length, triangles * 12);
+        console.log(name, atlas);
+
+        await unwrapButton.click();
+        assert.equal(await unwrapButton.textContent(), 'Generate UV atlas');
+        await input.setInputFiles(exported);
+        await page.waitForFunction(() => !document.querySelector('#sources').disabled);
+        const reimported = await status.textContent();
+        const expected = new RegExp(`^${name}.*_e00_atlas · (.*) triangles · ${bones} bones · ${clips} clips`);
+        assert.match(reimported, expected);
+        assert.equal(Number(expected.exec(reimported)[1].replace(/\D/g, '')), triangles);
       }
     }
 

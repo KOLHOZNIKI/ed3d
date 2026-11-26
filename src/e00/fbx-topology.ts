@@ -1,11 +1,13 @@
 import { BufferAttribute, BufferGeometry, Color, Matrix3, SRGBColorSpace, type Matrix4 } from 'three';
+import type { UvAtlasEdit } from './uv-atlas';
 
 type FbxLayer = { dataSize: number };
 type FbxWeights = { indices: ArrayLike<number>; weights: ArrayLike<number> };
 
-interface FbxSourceMesh {
+export interface FbxSourceMesh {
   positions: ArrayLike<number>;
   polygons: ArrayLike<number>;
+  renderCorners: Uint32Array<ArrayBuffer>;
   preTransform: Matrix4;
   normal?: FbxLayer;
   color?: FbxLayer;
@@ -21,7 +23,7 @@ interface FbxExportMesh {
   skin: { clusters: (FbxWeights & { boneIdx: number })[] } | null;
 }
 
-function sourceMesh(geometry: BufferGeometry): FbxSourceMesh {
+export function sourceMesh(geometry: BufferGeometry): FbxSourceMesh {
   const source = geometry.userData.assetFixerFbxSource as FbxSourceMesh | undefined;
   if (!source) throw new Error('The mesh has no source polygon data for export.');
   return source;
@@ -40,8 +42,9 @@ export function offsetControlPointY(geometry: BufferGeometry, controlPoint: numb
   return positions;
 }
 
-export function useSourceTopology(mesh: FbxExportMesh, workingPositions?: Float64Array): void {
-  const source = sourceMesh(mesh.geometry);
+export function useSourceTopology(mesh: FbxExportMesh, workingPositions?: Float64Array, atlas?: UvAtlasEdit): void {
+  const original = sourceMesh(mesh.geometry);
+  const source = atlas ? withAtlas(original, atlas) : original;
   if (source.hasMorphTargets) throw new Error('Export with source topology does not support morph targets yet.');
   if (source.uvs.length > 4) throw new Error('FBX export supports at most four UV sets.');
   if (workingPositions && workingPositions.length !== source.positions.length) throw new Error('The edited FBX has an invalid control point count.');
@@ -123,4 +126,38 @@ export function useSourceTopology(mesh: FbxExportMesh, workingPositions?: Float6
     cluster.weights = original.weights;
   }
   mesh.geometry = geometry;
+}
+
+function withAtlas(original: FbxSourceMesh, atlas: UvAtlasEdit): FbxSourceMesh {
+  const faces = new Uint32Array(original.polygons.length);
+  let face = 0;
+  for (let corner = 0; corner < faces.length; corner++) {
+    faces[corner] = face;
+    if (original.polygons[corner] < 0) face++;
+  }
+  const polygons = Int32Array.from(atlas.sourceCorners, (sourceCorner, corner) => {
+    const index = original.polygons[sourceCorner];
+    const controlPoint = index < 0 ? -index - 1 : index;
+    return corner % 3 === 2 ? -controlPoint - 1 : controlPoint;
+  });
+  const layer: FbxLayer = { dataSize: 2 };
+  const index = atlas.geometry.index;
+  if (!index) throw new Error('The FBX atlas must provide indexed triangle corners.');
+  const uv = atlas.geometry.getAttribute(atlas.channel);
+  const coordinates = [0, 0];
+  return {
+    ...original,
+    polygons,
+    uvs: [...original.uvs, layer],
+    readCorner(corner, _face, controlPoint, attribute) {
+      if (attribute === layer) {
+        const vertex = index.getX(corner);
+        coordinates[0] = uv.getX(vertex);
+        coordinates[1] = uv.getY(vertex);
+        return coordinates;
+      }
+      const sourceCorner = atlas.sourceCorners[corner];
+      return original.readCorner(sourceCorner, faces[sourceCorner], controlPoint, attribute);
+    },
+  };
 }

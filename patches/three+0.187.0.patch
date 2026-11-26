@@ -1,15 +1,18 @@
 diff --git a/node_modules/three/examples/jsm/loaders/FBXLoader.js b/node_modules/three/examples/jsm/loaders/FBXLoader.js
-index fc155a4..6d4db2e 100644
+index fc155a4..53c9063 100644
 --- a/node_modules/three/examples/jsm/loaders/FBXLoader.js
 +++ b/node_modules/three/examples/jsm/loaders/FBXLoader.js
-@@ -1805,6 +1805,19 @@ class GeometryParser {
+@@ -1805,7 +1805,21 @@ class GeometryParser {
  		if ( geoNode.attrName ) geo.name = geoNode.attrName;
  
  		const geoInfo = this.parseGeoNode( geoNode, skeleton );
+-		const buffers = this.genBuffers( geoInfo );
 +		// AssetFixer reads the original control points and corners for FBX export.
++		const buffers = this.genBuffers( geoInfo, true );
 +		geo.userData.assetFixerFbxSource = {
 +			positions: geoInfo.vertexPositions,
 +			polygons: geoInfo.vertexIndices,
++			renderCorners: Uint32Array.from( buffers.sourceCorners ),
 +			preTransform,
 +			normal: geoInfo.normal,
 +			color: geoInfo.color,
@@ -19,10 +22,53 @@ index fc155a4..6d4db2e 100644
 +			hasMorphTargets: morphTargets.length > 0,
 +			readCorner: getData,
 +		};
- 		const buffers = this.genBuffers( geoInfo );
  
  		const positionAttribute = new Float32BufferAttribute( buffers.vertex, 3 );
-@@ -2968,7 +2981,14 @@ class AnimationParser {
+ 
+@@ -1972,7 +1986,7 @@ class GeometryParser {
+ 
+ 	}
+ 
+-	genBuffers( geoInfo ) {
++	genBuffers( geoInfo, trackSourceCorners = false ) {
+ 
+ 		const buffers = {
+ 			vertex: [],
+@@ -1982,6 +1996,7 @@ class GeometryParser {
+ 			materialIndex: [],
+ 			vertexWeights: [],
+ 			weightsIndices: [],
++			sourceCorners: trackSourceCorners ? [] : null,
+ 		};
+ 
+ 		let polygonIndex = 0;
+@@ -2143,7 +2158,7 @@ class GeometryParser {
+ 
+ 			if ( endOfFace ) {
+ 
+-				scope.genFace( buffers, geoInfo, facePositionIndexes, materialIndex, faceNormals, faceColors, faceUVs, faceWeights, faceWeightIndices, faceLength );
++				scope.genFace( buffers, geoInfo, facePositionIndexes, materialIndex, faceNormals, faceColors, faceUVs, faceWeights, faceWeightIndices, faceLength, polygonVertexIndex - faceLength + 1 );
+ 
+ 				polygonIndex ++;
+ 				faceLength = 0;
+@@ -2212,7 +2227,7 @@ class GeometryParser {
+ 	}
+ 
+ 	// Generate data for a single face in a geometry. If the face is a quad then split it into 2 tris
+-	genFace( buffers, geoInfo, facePositionIndexes, materialIndex, faceNormals, faceColors, faceUVs, faceWeights, faceWeightIndices, faceLength ) {
++	genFace( buffers, geoInfo, facePositionIndexes, materialIndex, faceNormals, faceColors, faceUVs, faceWeights, faceWeightIndices, faceLength, sourceStart ) {
+ 
+ 		let triangles;
+ 
+@@ -2261,6 +2276,7 @@ class GeometryParser {
+ 		}
+ 
+ 		for ( const [ i0, i1, i2 ] of triangles ) {
++			buffers.sourceCorners?.push( sourceStart + i0, sourceStart + i1, sourceStart + i2 );
+ 
+ 			buffers.vertex.push( geoInfo.vertexPositions[ facePositionIndexes[ i0 * 3 ] ] );
+ 			buffers.vertex.push( geoInfo.vertexPositions[ facePositionIndexes[ i0 * 3 + 1 ] ] );
+@@ -2968,7 +2984,14 @@ class AnimationParser {
  
  		}
  

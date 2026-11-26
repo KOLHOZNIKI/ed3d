@@ -32,6 +32,7 @@ def main():
     parser.add_argument("--animation", type=Path)
     parser.add_argument("--real-animation", type=Path)
     parser.add_argument("--edited", action="store_true")
+    parser.add_argument("--unwrap", action="store_true")
     args = parser.parse_args()
 
     results = Path("test-results/e00")
@@ -39,6 +40,7 @@ def main():
         f"unity-{args.unity_version}"
         + ("-edited" if args.edited else "")
         + ("-animated" if args.real_animation else "")
+        + ("-atlas" if args.unwrap else "")
     )
     cases = [
         ("static", args.tripo_dir / "ceramic plate 3d model.zip", "ceramic_plate_3d_model_e00.zip"),
@@ -56,6 +58,14 @@ def main():
         case = project / "Assets" / "Fixtures" / name
         copy_bundle(source, case / "original")
         copy_bundle(results / "exports" / exported, case / "exported")
+        if args.unwrap and name in ("static", "skinned"):
+            atlas_case = project / "Assets" / "Fixtures" / f"{name}-atlas"
+            atlas_export = results / "exports" / exported.replace(".zip", "_atlas.zip")
+            copy_bundle(source, atlas_case / "original")
+            copy_bundle(atlas_export, atlas_case / "exported")
+            with ZipFile(atlas_export) as archive:
+                corner_map = "uv-atlas-source-corners.bin"
+                (atlas_case / corner_map).write_bytes(archive.read(corner_map))
         if name in edits:
             edited_case = project / "Assets" / "Fixtures" / f"{name}-edited"
             copy_bundle(source, edited_case / "original")

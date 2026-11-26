@@ -47,6 +47,8 @@ public static class FbxProbe
         public int editedVertexCopies, editedUvCopies;
         public float observedMove, maxUvError;
         public bool sameTriangleConnectivity;
+        public int sourceUv1Vertices, exportedUv1Vertices, unmatchedAtlasVertices, atlasNormalDifferences;
+        public float maxNormalError;
     }
 
     [Serializable] sealed class PositionEdit
@@ -159,12 +161,22 @@ public static class FbxProbe
 
     static Pair Compare(string fixture, Model before, Model after, PositionEdit edit)
     {
+        var atlas = fixture.EndsWith("-atlas", StringComparison.Ordinal);
         float diagonal = Vector3.Distance(before.info.min, before.info.max);
         float tolerance = Mathf.Max(1e-6f, 1e-4f * diagonal);
         var result = new Pair { fixture = fixture, original = before.info, exported = after.info, tolerance = tolerance };
         var baseTolerance = Mathf.Max(1e-7f, 1e-5f * diagonal);
         var expected = before.basePoints;
         Vector2[] beforeUv = null, afterUv = null;
+        Vector3[] beforeNormals = null, afterNormals = null;
+        if (atlas) {
+            beforeUv = before.mesh.uv;
+            afterUv = after.mesh.uv;
+            beforeNormals = before.mesh.normals;
+            afterNormals = after.mesh.normals;
+            if (beforeUv.Length != before.basePoints.Length || afterUv.Length != after.basePoints.Length ||
+                beforeNormals.Length != before.basePoints.Length || afterNormals.Length != after.basePoints.Length) return result;
+        }
         var positionTolerance = edit == null ? tolerance : baseTolerance;
         int[] moved = null;
         var worldOffset = Vector3.zero;
@@ -185,13 +197,29 @@ public static class FbxProbe
             result.editedUvCopies = moved.Select(index => beforeUv[index]).Distinct().Count();
         }
 
-        var matches = MatchPoints(expected, after.basePoints, positionTolerance, beforeUv, afterUv);
+        var matches = MatchPoints(expected, after.basePoints, positionTolerance, beforeUv, afterUv, beforeNormals, afterNormals);
+        var reverse = MatchPoints(after.basePoints, expected, baseTolerance, afterUv, beforeUv, afterNormals, beforeNormals);
         result.baseError = matches.All(index => index >= 0) ? Delta(expected, after.basePoints, matches) : -1;
         result.compatible = result.baseError >= 0 && result.baseError <= baseTolerance
-            && MatchPoints(after.basePoints, expected, baseTolerance, afterUv, beforeUv).All(index => index >= 0)
+            && reverse.All(index => index >= 0)
             && before.info.triangles == after.info.triangles && before.info.boneNames.SequenceEqual(after.info.boneNames)
             && before.info.bindPoses == after.info.bindPoses && before.info.boundBaseColor == after.info.boundBaseColor
             && before.info.boundNormal == after.info.boundNormal && before.info.clips.SequenceEqual(after.info.clips);
+        if (atlas) {
+            var atlasUv = after.mesh.uv2;
+            result.sourceUv1Vertices = before.mesh.uv2.Length;
+            result.exportedUv1Vertices = atlasUv.Length;
+            result.unmatchedAtlasVertices = reverse.Count(index => index < 0);
+            if (result.unmatchedAtlasVertices == 0) {
+                result.maxUvError = Enumerable.Range(0, reverse.Length).Max(i => Vector2.Distance(afterUv[i], beforeUv[reverse[i]]));
+                result.maxNormalError = Delta(afterNormals, beforeNormals, reverse);
+                result.atlasNormalDifferences = Enumerable.Range(0, reverse.Length)
+                    .Count(i => (afterNormals[i] - beforeNormals[reverse[i]]).sqrMagnitude > 1e-10f);
+            }
+            result.compatible &= result.sourceUv1Vertices == 0 && atlasUv.Length == after.mesh.vertexCount
+                && after.mesh.vertexCount > before.mesh.vertexCount
+                && atlasUv.All(uv => uv.x >= 0 && uv.x <= 1 && uv.y >= 0 && uv.y <= 1);
+        }
         if (edit != null && result.baseError >= 0) {
             result.observedMove = Vector3.Distance(before.basePoints[moved[0]], after.basePoints[matches[moved[0]]]);
             result.maxUvError = Enumerable.Range(0, matches.Length).Max(i => Vector2.Distance(beforeUv[i], afterUv[matches[i]]));
@@ -203,6 +231,9 @@ public static class FbxProbe
         if (before.skin == null || after.skin == null || result.baseError < 0) return result;
 
         result.maxWeightError = WeightDelta(before, after, matches);
+        if (atlas && reverse.All(index => index >= 0)) {
+            result.maxWeightError = Mathf.Max(result.maxWeightError, WeightDelta(after, before, reverse));
+        }
         if (edit != null) before.ApplyPoseProbeMove(moved, worldOffset);
         var rest = before.PosedPoints();
         result.restError = Delta(rest, after.PosedPoints(), matches);
@@ -279,7 +310,8 @@ public static class FbxProbe
         return triangles;
     }
 
-    static int[] MatchPoints(Vector3[] source, Vector3[] target, float tolerance, Vector2[] sourceUv = null, Vector2[] targetUv = null)
+    static int[] MatchPoints(Vector3[] source, Vector3[] target, float tolerance, Vector2[] sourceUv = null, Vector2[] targetUv = null,
+        Vector3[] sourceNormals = null, Vector3[] targetNormals = null)
     {
         Vector3Int Cell(Vector3 point) => Vector3Int.FloorToInt(point / tolerance);
         var buckets = new Dictionary<Vector3Int, List<int>>();
@@ -292,6 +324,7 @@ public static class FbxProbe
         for (int i = 0; i < source.Length; i++) {
             var cell = Cell(source[i]);
             var best = tolerance * tolerance;
+            var bestNormal = 1e-6f;
             matches[i] = -1;
             for (int x = -1; x <= 1; x++) for (int y = -1; y <= 1; y++) for (int z = -1; z <= 1; z++) {
                 if (!buckets.TryGetValue(cell + new Vector3Int(x, y, z), out var bucket)) continue;
@@ -299,7 +332,10 @@ public static class FbxProbe
                     if (sourceUv != null && (sourceUv[i] - targetUv[candidate]).sqrMagnitude > 1e-12f) continue;
                     var distance = (source[i] - target[candidate]).sqrMagnitude;
                     if (distance > best) continue;
+                    var normal = sourceNormals == null ? 0f : (sourceNormals[i] - targetNormals[candidate]).sqrMagnitude;
+                    if (normal > 1e-6f || (distance == best && normal > bestNormal)) continue;
                     best = distance;
+                    bestNormal = normal;
                     matches[i] = candidate;
                 }
             }

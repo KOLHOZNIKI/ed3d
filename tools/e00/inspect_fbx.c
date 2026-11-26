@@ -91,6 +91,84 @@ static double point_distance(ufbx_vec3 a, ufbx_vec3 b)
     return length3((ufbx_vec3){ .x = a.x - b.x, .y = a.y - b.y, .z = a.z - b.z });
 }
 
+static bool compare_atlas(const ufbx_mesh *a, const ufbx_mesh *b, const char *map_path)
+{
+    if (a->num_vertices != b->num_vertices || a->num_triangles != b->num_triangles ||
+        b->num_faces != b->num_triangles || b->num_indices != 3 * b->num_faces ||
+        a->uv_sets.count != 1 || b->uv_sets.count != 2 || !a->vertex_normal.exists || !b->vertex_normal.exists) return false;
+
+    FILE *map = fopen(map_path, "rb");
+    uint32_t *faces = malloc(a->num_indices * sizeof(*faces));
+    size_t *triangles = calloc(a->num_faces, sizeof(*triangles));
+    unsigned *boundary = calloc(a->num_indices, sizeof(*boundary));
+    if (!map || !faces || !triangles || !boundary) {
+        fprintf(stderr, "Could not open the atlas corner map or allocate probe buffers.\n");
+        exit(2);
+    }
+    for (size_t face = 0; face < a->num_faces; face++) {
+        const ufbx_face polygon = a->faces.data[face];
+        for (size_t i = 0; i < polygon.num_indices; i++) faces[polygon.index_begin + i] = (uint32_t)face;
+    }
+
+    double max_position = 0.0, max_normal = 0.0, max_uv0 = 0.0;
+    size_t valid_uv_triangles = 0;
+    bool mapped = true;
+    for (size_t i = 0; i < a->num_vertices; i++) {
+        max_position = fmax(max_position, point_distance(a->vertices.data[i], b->vertices.data[i]));
+    }
+    const ufbx_vertex_vec2 *old_uv = &a->uv_sets.data[0].vertex_uv;
+    const ufbx_vertex_vec2 *new_uv0 = &b->uv_sets.data[0].vertex_uv;
+    const ufbx_vertex_vec2 *atlas_uv = &b->uv_sets.data[1].vertex_uv;
+    for (size_t i = 0; mapped && i < b->num_faces; i++) {
+        const ufbx_face triangle = b->faces.data[i];
+        uint32_t source[3];
+        ufbx_vec2 uv[3];
+        if (triangle.num_indices != 3 || triangle.index_begin != i * 3) { mapped = false; break; }
+        for (size_t k = 0; k < 3; k++) {
+            unsigned char bytes[4];
+            if (fread(bytes, 1, sizeof(bytes), map) != sizeof(bytes)) { mapped = false; break; }
+            source[k] = (uint32_t)bytes[0] | (uint32_t)bytes[1] << 8 | (uint32_t)bytes[2] << 16 | (uint32_t)bytes[3] << 24;
+            const size_t original = source[k], target = triangle.index_begin + k;
+            if (original >= a->num_indices || a->vertex_indices.data[original] != b->vertex_indices.data[target] ||
+                faces[original] != faces[source[0]]) { mapped = false; break; }
+            const ufbx_vec2 p = ufbx_get_vertex_vec2(old_uv, original), q = ufbx_get_vertex_vec2(new_uv0, target);
+            max_uv0 = fmax(max_uv0, hypot(p.x - q.x, p.y - q.y));
+            max_normal = fmax(max_normal, normal_angle(ufbx_get_vertex_vec3(&a->vertex_normal, original),
+                                                      ufbx_get_vertex_vec3(&b->vertex_normal, target)));
+            uv[k] = ufbx_get_vertex_vec2(atlas_uv, target);
+        }
+        if (!mapped) break;
+        const size_t face = faces[source[0]], sides = a->faces.data[face].num_indices;
+        size_t spread = 0;
+        for (size_t k = 0; k < 3; k++) {
+            const size_t step = (sides + source[(k + 1) % 3] - source[k]) % sides;
+            if (step == 0) mapped = false;
+            if (step == 1) boundary[source[k]]++;
+            spread += step;
+        }
+        mapped &= spread == sides;
+        triangles[face]++;
+        const double area = (uv[1].x - uv[0].x) * (uv[2].y - uv[0].y) - (uv[1].y - uv[0].y) * (uv[2].x - uv[0].x);
+        bool valid = fabs(area) > 0.0;
+        for (size_t k = 0; k < 3; k++) valid &= uv[k].x >= 0 && uv[k].x <= 1 && uv[k].y >= 0 && uv[k].y <= 1;
+        if (valid) valid_uv_triangles++;
+    }
+    for (size_t i = 0; i < a->num_faces; i++) mapped &= triangles[i] == a->faces.data[i].num_indices - 2;
+    for (size_t i = 0; i < a->num_indices; i++) mapped &= boundary[i] == 1;
+    mapped &= fgetc(map) == EOF;
+    fclose(map);
+    free(boundary);
+    free(triangles);
+    free(faces);
+
+    const bool weights = same_skin_weights(a, b);
+    printf(",\"atlas\":{\"sameMappedControlPointsAndPolygonBoundaries\":%s,\"sameSourceSkinWeights\":%s,"
+           "\"maxPositionDeltaByControlPoint\":%.9g,\"maxUv0DeltaByCorner\":%.9g,\"maxNormalAngleByCorner\":%.9g,"
+           "\"validUv1Triangles\":%zu}", mapped ? "true" : "false", weights ? "true" : "false",
+           max_position, max_uv0, max_normal, valid_uv_triangles);
+    return mapped && weights && max_position == 0 && max_uv0 == 0 && max_normal <= 1e-4 && valid_uv_triangles == b->num_faces;
+}
+
 static ufbx_scene *evaluate(const ufbx_scene *scene, const ufbx_anim_stack *stack, double time)
 {
     ufbx_error error;
@@ -173,10 +251,11 @@ static bool compare_clips(const ufbx_scene *original, const ufbx_scene *exported
 int main(int argc, char **argv)
 {
     if (argc != 3 && argc != 5) {
-        fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx [control-point offset-y]\n");
+        fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx [control-point offset-y | --atlas source-corners.bin]\n");
         return 2;
     }
-    const bool edited = argc == 5;
+    const bool atlas = argc == 5 && strcmp(argv[3], "--atlas") == 0;
+    const bool edited = argc == 5 && !atlas;
     unsigned long long control_point = 0;
     double offset_y = 0.0;
     if (edited) {
@@ -196,6 +275,13 @@ int main(int argc, char **argv)
     stats(exported);
 
     const ufbx_mesh *a = original->meshes.data[0], *b = exported->meshes.data[0];
+    if (atlas) {
+        const bool matches = compare_atlas(a, b, argv[4]);
+        puts("}");
+        ufbx_free_scene(exported);
+        ufbx_free_scene(original);
+        return matches ? 0 : 1;
+    }
     const bool topology = same_connectivity(a, b);
     const bool weights = same_skin_weights(a, b);
     bool edit_matches = !edited;

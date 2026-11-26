@@ -4,6 +4,7 @@ import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { validateFbxAxes } from './fbx-profile';
 import { offsetControlPointY, useSourceTopology } from './fbx-topology';
 import { sceneStats } from './scene-stats';
+import type { UvAtlasEdit } from './uv-atlas';
 import { inputLimit, pack, unpack, type Files } from './zip';
 
 const imagePattern = /\.(png|jpe?g)$/i;
@@ -27,6 +28,7 @@ export interface ImportedAsset {
   images: Files;
   imagePathsByUrl: Map<string, string>;
   positionEdit?: Readonly<{ geometry: Mesh['geometry']; positions: Float64Array; controlPoint: number; offsetY: number }>;
+  uvAtlas?: UvAtlasEdit;
 }
 
 export async function importAsset(input: readonly File[]): Promise<ImportedAsset> {
@@ -94,7 +96,7 @@ export async function importAsset(input: readonly File[]): Promise<ImportedAsset
 
 export function moveControlPointY(asset: ImportedAsset, controlPoint: number, offsetY: number): ImportedAsset {
   const mesh = asset.scene.getObjectByProperty('isMesh', true);
-  if (!(mesh instanceof Mesh) || asset.stats.meshes !== 1 || asset.positionEdit) {
+  if (!(mesh instanceof Mesh) || asset.stats.meshes !== 1 || asset.positionEdit || asset.uvAtlas) {
     throw new Error('The E00 position probe accepts one edit on a single mesh.');
   }
   const positions = offsetControlPointY(mesh.geometry, controlPoint, offsetY);
@@ -103,13 +105,16 @@ export function moveControlPointY(asset: ImportedAsset, controlPoint: number, of
 
 export async function exportAsset(asset: ImportedAsset): Promise<{ name: string; bytes: Uint8Array<ArrayBuffer> }> {
   const edit = asset.positionEdit;
-  const name = asset.name.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) + (edit ? '_e00_edited' : '_e00');
+  const atlas = asset.uvAtlas;
+  const suffix = atlas ? '_e00_atlas' : edit ? '_e00_edited' : '_e00';
+  const name = asset.name.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) + suffix;
   const files: Files = new Map();
   const linked: { semantic: string; file: string; source: string | null }[] = [];
   const assigned = new Set<string>();
   const pending: Promise<void>[] = [];
   const fbx = new FBXExporter().register((plan: ExportPlan) => {
-    for (const mesh of plan.meshes) useSourceTopology(mesh, edit?.geometry === mesh.geometry ? edit.positions : undefined);
+    for (const mesh of plan.meshes) useSourceTopology(mesh, edit?.geometry === mesh.geometry ? edit.positions : undefined,
+      atlas?.inputGeometry === mesh.geometry ? atlas : undefined);
     for (const entry of plan.textures?.textures.values() ?? []) {
       const image = entry.texture.image;
       if (!(image instanceof HTMLImageElement) || !image.naturalWidth) throw new Error('An FBX texture could not be decoded.');
@@ -140,13 +145,22 @@ export async function exportAsset(asset: ImportedAsset): Promise<{ name: string;
   }
   const model = `${name}.fbx`;
   files.set(model, new Uint8Array(fbx));
+  const cornerMap = 'uv-atlas-source-corners.bin';
+  if (atlas) {
+    const bytes = new Uint8Array(atlas.sourceCorners.byteLength);
+    const view = new DataView(bytes.buffer);
+    atlas.sourceCorners.forEach((corner, index) => view.setUint32(index * 4, corner, true));
+    files.set(cornerMap, bytes);
+  }
   files.set('manifest.json', new TextEncoder().encode(JSON.stringify({
     stage: 'E00', model, unitsInCentimeters: asset.unitScale, meshes: asset.stats,
     positionEdit: edit && { controlPoint: edit.controlPoint, offsetY: edit.offsetY },
+    uvAtlas: atlas && { channel: atlas.channel, sourceCornerMap: cornerMap, ...atlas.metrics },
     textures: linked, unassignedTextures: unassigned,
     warnings: [
       'Prototype export. FBX material properties and rig representation may change.',
       'Unassigned textures are carried as files and require manual assignment in Unity.',
+      ...(atlas ? ['Atlas export writes triangles with UV1. Existing textures continue to use UV0.'] : []),
     ],
   }, null, 2) + '\n'));
   return { name: `${name}.zip`, bytes: await pack(files) };
