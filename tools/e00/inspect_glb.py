@@ -1,12 +1,12 @@
 """Compare the single indexed skinned Tripo fixture without Three.js."""
 
+from argparse import ArgumentParser
 from functools import cache
 from hashlib import sha256
 import json
-from math import cos, dist, sin
+from math import cos, dist, isfinite, sin
 from pathlib import Path
-from struct import Struct, unpack_from
-import sys
+from struct import Struct, pack, unpack_from
 
 
 class Glb:
@@ -82,11 +82,13 @@ class Glb:
 
         return [world(joint) for joint in self.joints]
 
-    def deformed(self, bend=False):
+    def deformed(self, bend=False, positions=None):
         matrices = [multiply(joint, inverse_bind) for joint, inverse_bind in zip(self.joint_world_matrices(bend), self.bind)]
         attrs = self.attributes
+        if positions is None:
+            positions = attrs["POSITION"]
         points = []
-        for position, joints, weights in zip(attrs["POSITION"], attrs["JOINTS_0"], attrs["WEIGHTS_0"]):
+        for position, joints, weights in zip(positions, attrs["JOINTS_0"], attrs["WEIGHTS_0"]):
             parts = [(point(matrices[joint], position), weight) for joint, weight in zip(joints, weights) if weight]
             points.append(tuple(sum(coords[axis] * weight for coords, weight in parts) for axis in range(3)))
         return points
@@ -113,10 +115,45 @@ def transform(node):
     )
 
 
-def compare(before, after):
+def check_position_edit(before, after, edit):
+    original = before.attributes["POSITION"]
+    exported = after.attributes["POSITION"]
+    vertex, offset = edit["vertex"], edit["offsetY"]
+    assert type(vertex) is int and 0 <= vertex < len(original), "Invalid position accessor index"
+    assert isfinite(offset) and offset != 0, "Expected a finite nonzero Y offset"
+    assert len(original) == len(exported), "Position accessor count changed"
+    x, y, z = original[vertex]
+    expected_y, = unpack_from("<f", pack("<f", y + offset))
+    assert isfinite(expected_y) and expected_y != y, "Offset did not produce a valid float32 position"
+    changed = [i for i, (source, target) in enumerate(zip(original, exported)) if source != target]
+    assert changed == [vertex], f"Expected only position {vertex} to change, found {changed[:8]} ({len(changed)} total)"
+    expected = original.copy()
+    expected[vertex] = (x, expected_y, z)
+    assert exported[vertex] == expected[vertex], "Edited position differs from the expected float32 offset"
+    nearest = min(dist(original[vertex], value) for i, value in enumerate(original) if i != vertex)
+    assert nearest > abs(offset), "The edit fixture must isolate the selected source vertex"
+    affected_indices = [i for i, (index,) in enumerate(before.indices) if index == vertex]
+    assert affected_indices, "The edited vertex must be used by a triangle"
+    return expected, {
+        "vertex": vertex, "changedPositions": len(changed), "requestedOffsetY": offset,
+        "observedOffset": [b - a for a, b in zip(original[vertex], exported[vertex])],
+        "originalPosition": original[vertex], "exportedPosition": exported[vertex],
+        "nearestOtherSourceVertexMeters": nearest, "affectedTriangles": len({i // 3 for i in affected_indices}),
+    }
+
+
+def compare(before, after, position_edit=None):
     assert before.indices == after.indices, "Triangle indices or their order changed"
     assert before.attributes.keys() == after.attributes.keys()
+    expected_positions = before.attributes["POSITION"]
+    exact_attributes = sorted(before.attributes)
+    edit_result = None
+    if position_edit is not None:
+        expected_positions, edit_result = check_position_edit(before, after, position_edit)
+        exact_attributes.remove("POSITION")
     for key, values in before.attributes.items():
+        if key == "POSITION":
+            values = expected_positions
         assert values == after.attributes[key], f"{key} changed"
     assert before.primitive["extensions"]["FB_ngon_encoding"] == after.primitive["extensions"]["FB_ngon_encoding"]
     assert before.joint_names == after.joint_names and before.joint_parent_names() == after.joint_parent_names()
@@ -136,22 +173,30 @@ def compare(before, after):
         mime, name, payload, channel = before.texture(role)
         assert before.texture(role) == after.texture(role), f"{role} image bytes or binding changed"
         images[role] = {"name": name, "mimeType": mime, "bytes": len(payload), "sha256": sha256(payload).hexdigest(), "uvChannel": channel}
-    rest, bent = before.deformed(), before.deformed(bend=True)
+    rest, bent = before.deformed(positions=expected_positions), before.deformed(bend=True, positions=expected_positions)
     rest_error = max(map(dist, rest, after.deformed()))
     bend_error = max(map(dist, bent, after.deformed(bend=True)))
     motion = max(map(dist, rest, bent))
     assert max(rest_error, bend_error) <= 1e-6 and motion > 0.01
-    return {
+    report = {
         "sourceSha256": sha256(before.bytes).hexdigest(),
         "exportedSha256": sha256(after.bytes).hexdigest(),
         "vertices": len(before.attributes["POSITION"]), "triangles": len(before.indices) // 3,
-        "joints": len(before.joints), "exactAttributes": sorted(before.attributes), "exactTriangleIndices": True,
+        "joints": len(before.joints), "exactAttributes": exact_attributes, "exactTriangleIndices": True,
         "preservedPolygonMarker": True, "textures": images, "affineRowsRepaired": repaired,
         "maxInverseBindComponentDelta": bind_delta, "maxJointWorldMatrixComponentDelta": joint_delta,
         "maxRestPositionDeltaMeters": rest_error, "maxBentPositionDeltaMeters": bend_error, "sourceBendMovementMeters": motion,
     }
+    if edit_result is not None:
+        report["positionEdit"] = edit_result
+    return report
 
 
 if __name__ == "__main__":
-    original, exported = map(Path, sys.argv[1:])
-    print(json.dumps(compare(Glb(original), Glb(exported)), indent=2))
+    parser = ArgumentParser(description=__doc__)
+    parser.add_argument("original", type=Path)
+    parser.add_argument("exported", type=Path)
+    parser.add_argument("--position-edit", type=Path, help="JSON with the expected vertex index and Y offset")
+    args = parser.parse_args()
+    edit = json.loads(args.position_edit.read_text(encoding="utf-8")) if args.position_edit is not None else None
+    print(json.dumps(compare(Glb(args.original), Glb(args.exported), edit), indent=2))

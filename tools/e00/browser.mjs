@@ -6,13 +6,14 @@ import { strToU8, unzipSync, zipSync } from 'fflate';
 import { createServer, preview } from 'vite';
 import { decode } from 'fast-png';
 
-const { values: { edited, glb, unwrap, rebake, paint, repair, alpha, normal, seams }, positionals } = parseArgs({
+const { values: { edited, glb, 'glb-edited': glbEdited, unwrap, rebake, paint, repair, alpha, normal, seams }, positionals } = parseArgs({
   options: { edited: { type: 'boolean' }, glb: { type: 'string' }, unwrap: { type: 'boolean' }, rebake: { type: 'boolean' },
     paint: { type: 'boolean' }, repair: { type: 'boolean' }, alpha: { type: 'boolean' }, normal: { type: 'boolean' },
-    seams: { type: 'boolean' } }, allowPositionals: true,
+    seams: { type: 'boolean' }, 'glb-edited': { type: 'boolean' } }, allowPositionals: true,
 });
 const [tripoPath, chromePath, animatedSource, realAnimatedSource] = seams ? [undefined, ...positionals] : positionals;
 if (!tripoPath && !seams) throw new Error('Supply the path to the Tripo sample directory.');
+if (glbEdited && !glb) throw new Error('--glb-edited requires --glb with the Tripo GLB path.');
 if (seams && (edited || glb || unwrap || rebake || paint || repair || alpha || normal || animatedSource)) {
   throw new Error('Use --seams [Chrome.exe] as a standalone fixture check.');
 }
@@ -20,7 +21,7 @@ const { chromium } = await import('../../test-results/e00-browser/node_modules/p
 const output = resolve('test-results/e00/exports');
 await mkdir(output, { recursive: true });
 const localServer = { host: '127.0.0.1', port: 4270 };
-const dev = edited || paint || repair || seams;
+const dev = edited || paint || repair || seams || glbEdited;
 const server = dev
   ? await createServer({ server: localServer, optimizeDeps: { include: ['xatlas-wasm'] } })
   : await preview({ preview: localServer });
@@ -313,6 +314,44 @@ try {
       const exported = join(output, download.suggestedFilename());
       await download.saveAs(exported);
       await checkGlb(exported, `${sourceName}_e00`);
+      if (glbEdited) {
+        const edit = JSON.parse(await readFile(new URL('./glb-position-edit.json', import.meta.url), 'utf8'));
+        await page.evaluate(() => {
+          const file = document.createElement('input');
+          file.id = 'glb-edit-source';
+          file.type = 'file';
+          file.hidden = true;
+          document.body.append(file);
+        });
+        await page.locator('#glb-edit-source').setInputFiles(glb);
+        const [editedDownload] = await Promise.all([page.waitForEvent('download'), page.evaluate(async ({ vertex, offsetY }) => {
+          const { importGlb, exportGlb } = await import('/src/e00/glb-round-trip.ts');
+          // Use a fresh import instead of changing the scene owned by the viewport.
+          const asset = await importGlb(document.querySelector('#glb-edit-source').files[0]);
+          if (asset.stats.meshes !== 1 || asset.skins.size !== 1) throw new Error('Expected one skinned mesh.');
+          const mesh = asset.skins.keys().next().value;
+          const positions = mesh.geometry.getAttribute('position');
+          if (positions.itemSize !== 3 || !(positions.array instanceof Float32Array) ||
+              !Number.isInteger(vertex) || vertex < 0 || vertex >= positions.count) {
+            throw new Error('Expected a valid float32 position accessor index.');
+          }
+          const y = positions.getY(vertex);
+          const moved = Math.fround(y + offsetY);
+          if (!Number.isFinite(moved) || moved === y) throw new Error('Expected a finite position change.');
+          positions.setY(vertex, moved);
+          const { bytes, name } = await exportGlb(asset);
+          const url = URL.createObjectURL(new Blob([bytes], { type: 'model/gltf-binary' }));
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = name.replace(/\.glb$/, '_edited.glb');
+          link.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }, edit)]);
+        assert.equal(editedDownload.suggestedFilename(), `${sourceName}_e00_edited.glb`);
+        const editedExport = join(output, editedDownload.suggestedFilename());
+        await editedDownload.saveAs(editedExport);
+        await checkGlb(editedExport, `${sourceName}_e00_edited`);
+      }
     }
     assert.deepEqual(outsideRequests, []);
     assert.deepEqual(errors, []);

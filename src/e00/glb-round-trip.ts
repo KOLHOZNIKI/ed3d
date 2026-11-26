@@ -102,8 +102,8 @@ export async function exportGlb(asset: ImportedGlb): Promise<{ name: string; byt
   const exporter = new GLTFExporter().register(writer => {
     const binaryWriter = writer as typeof writer & BinaryWriter;
     const imageIndices = new Map<object, number>();
-    // The pinned writer normally encodes every image through a canvas. In this
-    // unedited GLB path the embedded payload is still the authoritative image.
+    // The pinned writer normally encodes every image through a canvas. The
+    // original embedded payload remains authoritative for unchanged textures.
     binaryWriter.processImage = (image, _format, flipY) => {
       const payload = asset.images.get(image);
       if (!payload || flipY) throw new Error('The GLB contains a texture that cannot be exported unchanged.');
