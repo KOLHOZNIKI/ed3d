@@ -1,5 +1,6 @@
 import { AmbientLight, Box3, DirectionalLight, Mesh, PerspectiveCamera, Scene, SkinnedMesh, Texture, Vector3, WebGLRenderer } from 'three';
 import { exportAsset, importAsset, type ImportedAsset } from './e00/round-trip';
+import { exportGlb, importGlb, type ImportedGlb } from './e00/glb-round-trip';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#viewport');
 const status = document.getElementById('status');
@@ -7,7 +8,7 @@ const sources = document.querySelector<HTMLInputElement>('#sources');
 const exportButton = document.querySelector<HTMLButtonElement>('#export');
 
 if (!canvas || !status || !sources || !exportButton) {
-  throw new Error('The FBX prototype is missing its workspace elements.');
+  throw new Error('The E00 prototype is missing its workspace elements.');
 }
 
 const context = canvas.getContext('webgl2', { antialias: true });
@@ -19,7 +20,7 @@ light.position.set(3, 5, 4);
 scene.add(light);
 renderer?.setClearColor(0x151b25);
 
-let asset: ImportedAsset | undefined;
+let asset: ImportedAsset | ImportedGlb | undefined;
 sources.addEventListener('change', async () => {
   const input = Array.from(sources.files ?? []);
   if (!input.length) return;
@@ -27,11 +28,17 @@ sources.addEventListener('change', async () => {
   exportButton.disabled = true;
   status.textContent = 'Opening local asset…';
   try {
-    const imported = await importAsset(input);
+    const glb = input.find(file => /\.glb$/i.test(file.name));
+    if (glb && input.length !== 1) throw new Error('Select one GLB file at a time.');
+    const imported = glb ? await importGlb(glb) : await importAsset(input);
     if (asset) releasePreview(asset.scene);
     asset = imported;
+    exportButton.textContent = asset.format === 'glb' ? 'Export GLB' : 'Export FBX ZIP';
     const { stats } = asset;
     status.textContent = `${asset.name} · ${stats.triangles.toLocaleString()} triangles · ${stats.bones} bones · ${stats.clips} clips`;
+    if (asset.format === 'glb' && asset.affineCorrections) {
+      status.textContent += ` · Corrected rounding in ${asset.affineCorrections} inverse bind matrices for GLB export`;
+    }
     if (renderer) {
       scene.add(asset.scene);
       const bounds = new Box3().setFromObject(asset.scene);
@@ -58,16 +65,17 @@ exportButton.addEventListener('click', async () => {
   if (!asset) return;
   sources.disabled = true;
   exportButton.disabled = true;
-  status.textContent = 'Preparing FBX package…';
+  const glb = asset.format === 'glb';
+  status.textContent = glb ? 'Preparing GLB…' : 'Preparing FBX package…';
   try {
-    const output = await exportAsset(asset);
-    const url = URL.createObjectURL(new Blob([output.bytes], { type: 'application/zip' }));
+    const output = asset.format === 'glb' ? await exportGlb(asset) : await exportAsset(asset);
+    const url = URL.createObjectURL(new Blob([output.bytes], { type: glb ? 'model/gltf-binary' : 'application/zip' }));
     const link = document.createElement('a');
     link.href = url;
     link.download = output.name;
     link.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    status.textContent = `Exported ${output.name}. See manifest.json for material assignments and scope.`;
+    status.textContent = `Exported ${output.name}.` + (glb ? '' : ' See manifest.json for material assignments and scope.');
   } catch (error) {
     status.textContent = error instanceof Error ? error.message : String(error);
   } finally {

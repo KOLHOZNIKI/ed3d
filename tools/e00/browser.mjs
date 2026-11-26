@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import { mkdir, readFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
+import { parseArgs } from 'node:util';
 import { strToU8, unzipSync, zipSync } from 'fflate';
 import { createServer, preview } from 'vite';
 
-const args = process.argv.slice(2);
-const edited = args.includes('--edited');
-const [tripoPath, chromePath, animatedSource, realAnimatedSource] = args.filter(arg => arg !== '--edited');
+const { values: { edited, glb }, positionals } = parseArgs({
+  options: { edited: { type: 'boolean' }, glb: { type: 'string' } }, allowPositionals: true,
+});
+const [tripoPath, chromePath, animatedSource, realAnimatedSource] = positionals;
 if (!tripoPath) throw new Error('Supply the path to the Tripo sample directory.');
 const { chromium } = await import('../../test-results/e00-browser/node_modules/playwright-core/index.mjs');
 const output = resolve('test-results/e00/exports');
@@ -116,6 +118,27 @@ try {
       }
     }
 
+    if (glb) {
+      const sourceName = basename(glb, '.glb');
+      const checkGlb = async (path, name) => {
+        await input.setInputFiles(path);
+        await page.waitForFunction(() => !document.querySelector('#sources').disabled);
+        const message = await status.textContent();
+        const [asset, triangles, bones, clips] = message.split(' · ');
+        assert.equal(asset, name);
+        assert.equal(Number(triangles.replace(/\D/g, '')), 17623);
+        assert.equal(bones, '67 bones');
+        assert.equal(clips, '0 clips');
+        assert.ok(await page.locator('#viewport').isVisible());
+        console.log(message);
+      };
+      await checkGlb(glb, sourceName);
+      const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Export GLB' }).click()]);
+      assert.equal(download.suggestedFilename(), `${sourceName}_e00.glb`);
+      const exported = join(output, download.suggestedFilename());
+      await download.saveAs(exported);
+      await checkGlb(exported, `${sourceName}_e00`);
+    }
     assert.deepEqual(outsideRequests, []);
     assert.deepEqual(errors, []);
   } finally {

@@ -38,3 +38,26 @@ index fc155a4..6d4db2e 100644
  
  	}
  
+diff --git a/node_modules/three/examples/jsm/loaders/GLTFLoader.js b/node_modules/three/examples/jsm/loaders/GLTFLoader.js
+index 09228b9..e148d01 100644
+--- a/node_modules/three/examples/jsm/loaders/GLTFLoader.js
++++ b/node_modules/three/examples/jsm/loaders/GLTFLoader.js
+@@ -495,7 +495,8 @@ class GLTFLoader extends Loader {
+ 			requestHeader: this.requestHeader,
+ 			manager: this.manager,
+ 			ktx2Loader: this.ktx2Loader,
+-			meshoptDecoder: this.meshoptDecoder
++			meshoptDecoder: this.meshoptDecoder,
++			assetFixerPreserveSkinWeights: this.assetFixerPreserveSkinWeights === true
+ 
+ 		} );
+ 
+@@ -4003,7 +4004,7 @@ class GLTFParser {
+ 						? new SkinnedMesh( geometry, material )
+ 						: new Mesh( geometry, material );
+ 
+-					if ( mesh.isSkinnedMesh === true ) {
++					if ( mesh.isSkinnedMesh === true && ! parser.options.assetFixerPreserveSkinWeights ) {
+ 
+ 						// normalize skin weights to fix malformed assets (see #15319)
+ 						mesh.normalizeSkinWeights();

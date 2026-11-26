@@ -1,6 +1,6 @@
 # AssetFixer
 
-AssetFixer is a local browser-based editor for refining generated 3D assets before importing them into Unity. The E00 prototype opens and exports FBX packages in the browser.
+AssetFixer is a local browser-based editor for refining generated 3D assets before importing them into Unity. The E00 prototype opens and exports FBX packages and self-contained GLB files in the browser.
 
 ## Local development
 
@@ -11,7 +11,7 @@ npm ci
 npm run dev
 ```
 
-Open the localhost URL printed by Vite. Choose a Tripo ZIP or select a binary FBX and its PNG or JPEG textures together. Use **Export FBX ZIP** to download the reconstructed FBX, external maps, and `manifest.json`. Extract the package into Unity's `Assets` folder to import it. The manifest identifies textures that require manual assignment.
+Open the localhost URL printed by Vite. Choose a self-contained GLB and use **Export GLB** to download a new binary. For FBX, choose a Tripo ZIP or select a binary FBX and its PNG or JPEG textures together. **Export FBX ZIP** downloads the reconstructed FBX, external maps, and `manifest.json`. Extract the package into Unity's `Assets` folder to import it. The manifest identifies textures that require manual assignment.
 
 | Command | Purpose |
 | --- | --- |
@@ -19,7 +19,7 @@ Open the localhost URL printed by Vite. Choose a Tripo ZIP or select a binary FB
 | `npm run build` | Check types and generate the static build in `dist/`. |
 | `npm run preview` | Serve the production build locally after building it. |
 
-`npm ci` uses the versions recorded in `package-lock.json` and applies the FBX patches in `patches/`.
+`npm ci` uses the versions recorded in `package-lock.json` and applies the format adapter patches in `patches/`.
 
 ## Dependencies
 
@@ -35,4 +35,4 @@ Open the localhost URL printed by Vite. Choose a Tripo ZIP or select a binary FB
 
 ## E00 verification
 
-The [FBX and ZIP report](Docs/E00_FBX_Round_Trip.md) records the Unity and ufbx results, source polygon preservation, and commands to repeat the checks. The [technical specification](Docs/AssetFixer_Technical_Specification_v1.0.md#sec-21) covers the rest of E00.
+The [FBX and ZIP report](Docs/E00_FBX_Round_Trip.md) records the Unity and ufbx results. The [GLB report](Docs/E00_GLB_Round_Trip.md) covers the Tripo character, exact texture and weight checks, and Khronos validation. The [technical specification](Docs/AssetFixer_Technical_Specification_v1.0.md#sec-21) covers the rest of E00.

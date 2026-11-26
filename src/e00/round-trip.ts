@@ -1,8 +1,9 @@
 import { FBXExporter } from '@comfyorg/fbx-exporter-three';
-import { LoadingManager, Mesh, SkinnedMesh, type Group, type Texture } from 'three';
+import { LoadingManager, Mesh, type Group, type Texture } from 'three';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { validateFbxAxes } from './fbx-profile';
 import { offsetControlPointY, useSourceTopology } from './fbx-topology';
+import { sceneStats } from './scene-stats';
 import { inputLimit, pack, unpack, type Files } from './zip';
 
 const imagePattern = /\.(png|jpe?g)$/i;
@@ -18,10 +19,11 @@ type TextureEntry = { texture: Texture; fileName: string; slotName: string };
 type ExportPlan = { meshes: Parameters<typeof useSourceTopology>[0][]; textures?: { textures: Map<Texture, TextureEntry> } };
 
 export interface ImportedAsset {
+  format: 'fbx';
   name: string;
   scene: Group;
   unitScale: number;
-  stats: { meshes: number; triangles: number; bones: number; clips: number };
+  stats: ReturnType<typeof sceneStats>;
   images: Files;
   imagePathsByUrl: Map<string, string>;
   positionEdit?: Readonly<{ geometry: Mesh['geometry']; positions: Float64Array; controlPoint: number; offsetY: number }>;
@@ -83,19 +85,8 @@ export async function importAsset(input: readonly File[]): Promise<ImportedAsset
     if (typeof unitScale !== 'number' || !Number.isFinite(unitScale) || unitScale <= 0) {
       throw new Error('FBX does not declare a valid unit scale.');
     }
-    const stats = { meshes: 0, triangles: 0, bones: 0, clips: scene.animations.length };
-    const bones = new Set();
-    scene.traverse(object => {
-      if (!(object instanceof Mesh)) return;
-      stats.meshes++;
-      stats.triangles += (object.geometry.index?.count ?? object.geometry.getAttribute('position').count) / 3;
-      if (object instanceof SkinnedMesh) {
-        for (const bone of object.skeleton.bones) bones.add(bone);
-      }
-    });
-    if (!stats.meshes) throw new Error('The FBX contains no meshes.');
-    stats.bones = bones.size;
-    return { name: basename(modelPath).slice(0, -4), scene, unitScale, stats, images, imagePathsByUrl };
+    const stats = sceneStats(scene, 'FBX');
+    return { format: 'fbx', name: basename(modelPath).slice(0, -4), scene, unitScale, stats, images, imagePathsByUrl };
   } finally {
     for (const url of [...urls.values(), ...embedded]) URL.revokeObjectURL(url);
   }
