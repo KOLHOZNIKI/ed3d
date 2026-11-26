@@ -6,6 +6,7 @@ import { offsetControlPointY, useSourceTopology } from './fbx-topology';
 import { sceneStats } from './scene-stats';
 import type { TextureBake } from './rebake';
 import type { TexturePaint } from './paint';
+import type { RepairPatch } from './repair';
 import type { UvAtlasEdit } from './uv-atlas';
 import { inputLimit, pack, unpack, type Files } from './zip';
 
@@ -30,6 +31,7 @@ export interface ImportedAsset {
   images: Files;
   imagePathsByUrl: Map<string, string>;
   positionEdit?: Readonly<{ geometry: Mesh['geometry']; positions: Float64Array; controlPoint: number; offsetY: number }>;
+  repairPatch?: RepairPatch;
   uvAtlas?: UvAtlasEdit;
   textureBake?: TextureBake;
   texturePaint?: TexturePaint;
@@ -100,7 +102,7 @@ export async function importAsset(input: readonly File[]): Promise<ImportedAsset
 
 export function moveControlPointY(asset: ImportedAsset, controlPoint: number, offsetY: number): ImportedAsset {
   const mesh = asset.scene.getObjectByProperty('isMesh', true);
-  if (!(mesh instanceof Mesh) || asset.stats.meshes !== 1 || asset.positionEdit || asset.uvAtlas) {
+  if (!(mesh instanceof Mesh) || asset.stats.meshes !== 1 || asset.positionEdit || asset.uvAtlas || asset.repairPatch) {
     throw new Error('The E00 position probe accepts one edit on a single mesh.');
   }
   const positions = offsetControlPointY(mesh.geometry, controlPoint, offsetY);
@@ -112,7 +114,9 @@ export async function exportAsset(asset: ImportedAsset): Promise<{ name: string;
   const atlas = asset.uvAtlas;
   const bake = asset.textureBake;
   const paint = asset.texturePaint;
-  const suffix = paint ? '_e00_painted' : bake ? '_e00_baked' : atlas ? '_e00_atlas' : edit ? '_e00_edited' : '_e00';
+  const repair = asset.repairPatch;
+  const suffix = repair ? `_e00_${repair.metadata.method}` : paint ? '_e00_painted' : bake ? '_e00_baked'
+    : atlas ? '_e00_atlas' : edit ? '_e00_edited' : '_e00';
   const name = asset.name.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) + suffix;
   const files: Files = new Map();
   const linked: { semantic: string; file: string; source: string | null; rebaked?: true }[] = [];
@@ -120,7 +124,7 @@ export async function exportAsset(asset: ImportedAsset): Promise<{ name: string;
   const pending: Promise<void>[] = [];
   const fbx = new FBXExporter().register((plan: ExportPlan) => {
     for (const mesh of plan.meshes) useSourceTopology(mesh, edit?.geometry === mesh.geometry ? edit.positions : undefined,
-      atlas?.inputGeometry === mesh.geometry ? atlas : undefined, !!bake);
+      atlas?.inputGeometry === mesh.geometry ? atlas : undefined, !!bake, repair?.inputGeometry === mesh.geometry ? repair : undefined);
     for (const entry of plan.textures?.textures.values() ?? []) {
       const image = entry.texture.image;
       if (!(image instanceof HTMLImageElement) || !image.naturalWidth) throw new Error('An FBX texture could not be decoded.');
@@ -170,16 +174,18 @@ export async function exportAsset(asset: ImportedAsset): Promise<{ name: string;
   }
   const model = `${name}.fbx`;
   files.set(model, new Uint8Array(fbx));
-  const cornerMap = 'uv-atlas-source-corners.bin';
-  if (atlas) {
-    const bytes = new Uint8Array(atlas.sourceCorners.byteLength);
+  const cornerMap = repair ? 'repair-source-corners.bin' : 'uv-atlas-source-corners.bin';
+  const sourceCorners = repair?.sourceCorners ?? atlas?.sourceCorners;
+  if (sourceCorners) {
+    const bytes = new Uint8Array(sourceCorners.byteLength);
     const view = new DataView(bytes.buffer);
-    atlas.sourceCorners.forEach((corner, index) => view.setUint32(index * 4, corner, true));
+    sourceCorners.forEach((corner, index) => view.setUint32(index * 4, corner, true));
     files.set(cornerMap, bytes);
   }
   files.set('manifest.json', new TextEncoder().encode(JSON.stringify({
     stage: 'E00', model, unitsInCentimeters: asset.unitScale, meshes: asset.stats,
     positionEdit: edit && { controlPoint: edit.controlPoint, offsetY: edit.offsetY },
+    repair: repair && { ...repair.metadata, sourceCornerMap: cornerMap },
     uvAtlas: atlas && { channel: bake ? 'uv0' : atlas.channel, sourceCornerMap: cornerMap, ...atlas.metrics },
     textureBake: bake && {
       source: 'Original import', layout: 'uv1', exportedLayout: 'uv0', originalLayout: 'uv1',

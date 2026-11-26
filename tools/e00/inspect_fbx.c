@@ -169,6 +169,68 @@ static bool compare_atlas(const ufbx_mesh *a, const ufbx_mesh *b, const char *ma
     return mapped && weights && max_position == 0 && max_uv0 == 0 && max_normal <= 1e-4 && valid_uv_triangles == b->num_faces;
 }
 
+static bool compare_repair(const ufbx_mesh *a, const ufbx_mesh *b, size_t center, bool smooth)
+{
+    if (center >= a->num_vertices || a->num_vertices != b->num_vertices || a->num_triangles != b->num_triangles ||
+        a->uv_sets.count != 1 || b->uv_sets.count != 1 || b->num_faces != a->num_faces + (smooth ? 4 : 0)) return false;
+    size_t target_face = 0, replaced = 0, uv_copies = 0;
+    ufbx_vec2 center_uvs[4];
+    ufbx_vec3 estimate = { 0 };
+    double max_uv = 0, max_normal = 0;
+    for (size_t f = 0; f < a->num_faces; f++) {
+        ufbx_face face = a->faces.data[f];
+        size_t center_corner = face.num_indices;
+        for (size_t c = 0; c < face.num_indices; c++) {
+            if (a->vertex_indices.data[face.index_begin + c] == center) center_corner = c;
+        }
+        const bool patch = center_corner < face.num_indices;
+        if (patch) {
+            if (face.num_indices != 4 || replaced++ >= 4) return false;
+            ufbx_vec2 uv = ufbx_get_vertex_vec2(&a->vertex_uv, face.index_begin + center_corner);
+            bool seen = false;
+            for (size_t k = 0; k < uv_copies; k++) seen |= center_uvs[k].x == uv.x && center_uvs[k].y == uv.y;
+            if (!seen) center_uvs[uv_copies++] = uv;
+            for (size_t k = 1; k < 4; k++) {
+                // A side midpoint belongs to two input quads and a corner to one.
+                const double weight = smooth ? (k == 2 ? 0.125 : 0.0625) : (k == 2 ? -0.25 : 0.25);
+                const ufbx_vec3 p = a->vertices.data[a->vertex_indices.data[face.index_begin + (center_corner + k) % 4]];
+                estimate.x += weight * p.x;
+                estimate.y += weight * p.y;
+                estimate.z += weight * p.z;
+            }
+        }
+        const bool split = patch && smooth;
+        for (size_t t = 0; t < (split ? 2u : 1u); t++) {
+            if (target_face >= b->num_faces) return false;
+            const ufbx_face polygon = b->faces.data[target_face++];
+            const size_t size = split ? 3 : face.num_indices;
+            if (polygon.num_indices != size) return false;
+            for (size_t c = 0; c < size; c++) {
+                const size_t source_offset = split ? (center_corner + (c ? c + t : 0)) % 4 : c;
+                const size_t src = face.index_begin + source_offset, dst = polygon.index_begin + c;
+                if (a->vertex_indices.data[src] != b->vertex_indices.data[dst]) return false;
+                const ufbx_vec2 u = ufbx_get_vertex_vec2(&a->vertex_uv, src), v = ufbx_get_vertex_vec2(&b->vertex_uv, dst);
+                if (!isfinite(u.x) || !isfinite(u.y) || !isfinite(v.x) || !isfinite(v.y)) return false;
+                max_uv = fmax(max_uv, hypot(u.x - v.x, u.y - v.y));
+                max_normal = fmax(max_normal, normal_angle(ufbx_get_vertex_vec3(&a->vertex_normal, src),
+                    ufbx_get_vertex_vec3(&b->vertex_normal, dst)));
+            }
+        }
+    }
+    double max_outer = 0;
+    for (size_t i = 0; i < a->num_vertices; i++) {
+        if (i != center) max_outer = fmax(max_outer, point_distance(a->vertices.data[i], b->vertices.data[i]));
+    }
+    const double center_error = point_distance(estimate, b->vertices.data[center]);
+    const double center_move = point_distance(a->vertices.data[center], b->vertices.data[center]);
+    printf(",\"repair\":{\"method\":\"%s\",\"sourceFacesReplaced\":%zu,\"centerUvCopies\":%zu,"
+           "\"maxPositionDeltaOutsideCenter\":%.9g,\"centerMove\":%.9g,\"centerError\":%.9g,"
+           "\"maxUvDeltaBySourceCorner\":%.9g,\"maxNormalAngleBySourceCorner\":%.9g}",
+           smooth ? "smooth" : "grid", replaced, uv_copies, max_outer, center_move, center_error, max_uv, max_normal);
+    return replaced == 4 && target_face == b->num_faces && center_move > 1e-5 && center_error < 1e-12 &&
+        max_outer == 0 && max_uv == 0 && max_normal <= 1e-4 && same_skin_weights(a, b);
+}
+
 static ufbx_scene *evaluate(const ufbx_scene *scene, const ufbx_anim_stack *stack, double time)
 {
     ufbx_error error;
@@ -251,12 +313,14 @@ static bool compare_clips(const ufbx_scene *original, const ufbx_scene *exported
 int main(int argc, char **argv)
 {
     if (argc != 3 && argc != 5) {
-        fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx [control-point offset-y | --atlas source-corners.bin | --baked source-corners.bin]\n");
+        fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx [control-point offset-y | --atlas source-corners.bin | --baked source-corners.bin | --smooth center | --grid center]\n");
         return 2;
     }
     const bool baked = argc == 5 && strcmp(argv[3], "--baked") == 0;
     const bool atlas = baked || (argc == 5 && strcmp(argv[3], "--atlas") == 0);
-    const bool edited = argc == 5 && !atlas;
+    const bool smooth = argc == 5 && strcmp(argv[3], "--smooth") == 0;
+    const bool repair = smooth || (argc == 5 && strcmp(argv[3], "--grid") == 0);
+    const bool edited = argc == 5 && !atlas && !repair;
     unsigned long long control_point = 0;
     double offset_y = 0.0;
     if (edited) {
@@ -278,6 +342,15 @@ int main(int argc, char **argv)
     const ufbx_mesh *a = original->meshes.data[0], *b = exported->meshes.data[0];
     if (atlas) {
         const bool matches = compare_atlas(a, b, argv[4], baked);
+        puts("}");
+        ufbx_free_scene(exported);
+        ufbx_free_scene(original);
+        return matches ? 0 : 1;
+    }
+    if (repair) {
+        char *end;
+        const size_t center = (size_t)strtoull(argv[4], &end, 10);
+        const bool matches = argv[4][0] != '-' && end != argv[4] && !*end && compare_repair(a, b, center, smooth);
         puts("}");
         ufbx_free_scene(exported);
         ufbx_free_scene(original);

@@ -35,6 +35,7 @@ def main():
     parser.add_argument("--unwrap", action="store_true")
     parser.add_argument("--rebake", action="store_true")
     parser.add_argument("--paint", action="store_true")
+    parser.add_argument("--repair", action="store_true")
     args = parser.parse_args()
 
     results = Path("test-results/e00")
@@ -45,6 +46,7 @@ def main():
         + ("-atlas" if args.unwrap else "")
         + ("-bake" if args.rebake else "")
         + ("-paint" if args.paint else "")
+        + ("-repair" if args.repair else "")
     )
     cases = [
         ("static", args.tripo_dir / "ceramic plate 3d model.zip", "ceramic_plate_3d_model_e00.zip"),
@@ -59,6 +61,17 @@ def main():
     if args.edited:
         edits = json.loads(Path(__file__).with_name("position-edits.json").read_text(encoding="utf-8"))
     for name, source, exported in cases:
+        if args.repair:
+            if name != "static":
+                continue
+            for method in ("smooth", "grid"):
+                case = project / "Assets" / "Fixtures" / method
+                result = results / "exports" / exported.replace(".zip", f"_{method}.zip")
+                copy_bundle(source, case / "original")
+                copy_bundle(result, case / "exported")
+                with ZipFile(result) as archive:
+                    (case / "repair.json").write_text(json.dumps(json.loads(archive.read("manifest.json"))["repair"]), encoding="utf-8")
+            continue
         if args.paint:
             if name != "static":
                 continue
@@ -102,6 +115,8 @@ def main():
             copy2(Path(__file__).with_name(filename), editors)
     if args.paint:
         copy2(Path(__file__).with_name("PaintProbe.cs"), editors)
+    if args.repair:
+        copy2(Path(__file__).with_name("RepairProbe.cs"), editors)
     settings = project / "ProjectSettings"
     settings.mkdir(exist_ok=True)
     (settings / "ProjectVersion.txt").write_text(f"m_EditorVersion: {args.unity_version}\n", encoding="utf-8")

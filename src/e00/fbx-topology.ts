@@ -1,5 +1,6 @@
 import { BufferAttribute, BufferGeometry, Color, Matrix3, SRGBColorSpace, type Matrix4 } from 'three';
 import type { UvAtlasEdit } from './uv-atlas';
+import type { RepairPatch } from './repair';
 
 type FbxLayer = { dataSize: number };
 type FbxWeights = { indices: ArrayLike<number>; weights: ArrayLike<number> };
@@ -42,9 +43,10 @@ export function offsetControlPointY(geometry: BufferGeometry, controlPoint: numb
   return positions;
 }
 
-export function useSourceTopology(mesh: FbxExportMesh, workingPositions?: Float64Array, atlas?: UvAtlasEdit, promoteAtlas = false): void {
+export function useSourceTopology(mesh: FbxExportMesh, workingPositions?: Float64Array, atlas?: UvAtlasEdit, promoteAtlas = false,
+  repair?: RepairPatch): void {
   const original = sourceMesh(mesh.geometry);
-  const source = atlas ? withAtlas(original, atlas, promoteAtlas) : original;
+  const source = repair ? withRepair(original, repair) : atlas ? withAtlas(original, atlas, promoteAtlas) : original;
   if (source.hasMorphTargets) throw new Error('Export with source topology does not support morph targets yet.');
   if (source.uvs.length > 4) throw new Error('FBX export supports at most four UV sets.');
   if (workingPositions && workingPositions.length !== source.positions.length) throw new Error('The edited FBX has an invalid control point count.');
@@ -128,13 +130,31 @@ export function useSourceTopology(mesh: FbxExportMesh, workingPositions?: Float6
   mesh.geometry = geometry;
 }
 
-function withAtlas(original: FbxSourceMesh, atlas: UvAtlasEdit, promote: boolean): FbxSourceMesh {
+function faceByCorner(original: FbxSourceMesh): Uint32Array<ArrayBuffer> {
   const faces = new Uint32Array(original.polygons.length);
   let face = 0;
   for (let corner = 0; corner < faces.length; corner++) {
     faces[corner] = face;
     if (original.polygons[corner] < 0) face++;
   }
+  return faces;
+}
+
+function withRepair(original: FbxSourceMesh, repair: RepairPatch): FbxSourceMesh {
+  const faces = faceByCorner(original);
+  return {
+    ...original,
+    positions: repair.positions,
+    polygons: repair.polygons,
+    readCorner(corner, _face, controlPoint, attribute) {
+      const source = repair.sourceCorners[corner];
+      return original.readCorner(source, faces[source], controlPoint, attribute);
+    },
+  };
+}
+
+function withAtlas(original: FbxSourceMesh, atlas: UvAtlasEdit, promote: boolean): FbxSourceMesh {
+  const faces = faceByCorner(original);
   const polygons = Int32Array.from(atlas.sourceCorners, (sourceCorner, corner) => {
     const index = original.polygons[sourceCorner];
     const controlPoint = index < 0 ? -index - 1 : index;

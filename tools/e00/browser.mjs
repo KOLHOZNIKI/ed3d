@@ -5,8 +5,9 @@ import { parseArgs } from 'node:util';
 import { strToU8, unzipSync, zipSync } from 'fflate';
 import { createServer, preview } from 'vite';
 
-const { values: { edited, glb, unwrap, rebake, paint }, positionals } = parseArgs({
-  options: { edited: { type: 'boolean' }, glb: { type: 'string' }, unwrap: { type: 'boolean' }, rebake: { type: 'boolean' }, paint: { type: 'boolean' } }, allowPositionals: true,
+const { values: { edited, glb, unwrap, rebake, paint, repair }, positionals } = parseArgs({
+  options: { edited: { type: 'boolean' }, glb: { type: 'string' }, unwrap: { type: 'boolean' }, rebake: { type: 'boolean' },
+    paint: { type: 'boolean' }, repair: { type: 'boolean' } }, allowPositionals: true,
 });
 const [tripoPath, chromePath, animatedSource, realAnimatedSource] = positionals;
 if (!tripoPath) throw new Error('Supply the path to the Tripo sample directory.');
@@ -14,10 +15,11 @@ const { chromium } = await import('../../test-results/e00-browser/node_modules/p
 const output = resolve('test-results/e00/exports');
 await mkdir(output, { recursive: true });
 const localServer = { host: '127.0.0.1', port: 4270 };
-const server = edited || paint
+const dev = edited || paint || repair;
+const server = dev
   ? await createServer({ server: localServer, optimizeDeps: { include: ['xatlas-wasm'] } })
   : await preview({ preview: localServer });
-if (edited || paint) await server.listen();
+if (dev) await server.listen();
 
 try {
   const browser = await chromium.launch({
@@ -117,6 +119,65 @@ try {
         assert.match(reimported, expected);
         assert.equal(Number(expected.exec(reimported)[1].replace(/\D/g, '')), triangles);
         console.log(reimported);
+      }
+    }
+
+    if (repair) {
+      const fixture = JSON.parse(await readFile(new URL('./plate-repair.json', import.meta.url), 'utf8'));
+      const [sourcePath, name, triangles] = cases[0];
+      await page.evaluate(() => {
+        const file = document.createElement('input');
+        file.id = 'repair-source';
+        file.type = 'file';
+        file.hidden = true;
+        document.body.append(file);
+      });
+      await page.locator('#repair-source').setInputFiles(sourcePath);
+      const original = unzipSync(await readFile(sourcePath));
+      for (const method of ['smooth', 'grid']) {
+        const [download] = await Promise.all([page.waitForEvent('download'), page.evaluate(async ({ center, method }) => {
+          const { importAsset, exportAsset } = await import('/src/e00/round-trip.ts');
+          const { repairQuadPatch } = await import('/src/e00/repair.ts');
+          const source = await importAsset([...document.querySelector('#repair-source').files]);
+          try {
+            repairQuadPatch(source, -1, method);
+            throw new Error('Expected the repair to reject an invalid patch.');
+          } catch (error) {
+            if (!error.message.includes('exactly four quads')) throw error;
+          }
+          const working = repairQuadPatch(source, center, method);
+          if (source.repairPatch || working.repairPatch.inputGeometry !== source.scene.getObjectByProperty('isMesh', true).geometry) {
+            throw new Error('The fill must create a separate working snapshot.');
+          }
+          const { bytes, name } = await exportAsset(working);
+          const link = document.createElement('a');
+          link.href = URL.createObjectURL(new Blob([bytes], { type: 'application/zip' }));
+          link.download = name;
+          link.click();
+          setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+        }, { center: fixture.center, method })]);
+        assert.equal(download.suggestedFilename(), `${name}_e00_${method}.zip`);
+        const exported = join(output, download.suggestedFilename());
+        await download.saveAs(exported);
+        const files = unzipSync(await readFile(exported));
+        const manifest = JSON.parse(new TextDecoder().decode(files['manifest.json']));
+        const patch = manifest.repair;
+        assert.equal(patch.method, method);
+        assert.equal(patch.center, fixture.center);
+        assert.deepEqual(patch.removed.map(face => face.face), fixture.faces);
+        assert.equal(new Set(patch.boundary).size, 8);
+        assert.equal(patch.replacementPolygons, method === 'smooth' ? 8 : 4);
+        assert.equal(files[patch.sourceCornerMap].length, 4 * (fixture.originalCorners + (method === 'smooth' ? 8 : 0)));
+        const distance = Math.hypot(...patch.after.map((value, i) => value - patch.before[i]));
+        assert.ok(distance > 0.0005 && distance < 0.01);
+        for (const texture of manifest.textures) assert.deepEqual(files[texture.file], original[texture.source]);
+        await input.setInputFiles(exported);
+        await page.waitForFunction(() => !document.querySelector('#sources').disabled);
+        const message = await status.textContent();
+        const expected = new RegExp(`^${name}_e00_${method} · (.*) triangles · 0 bones · 0 clips`);
+        assert.match(message, expected);
+        assert.equal(Number(expected.exec(message)[1].replace(/\D/g, '')), triangles);
+        console.log(method, { center: patch.center, boundary: patch.boundary, distance, triangles });
       }
     }
 

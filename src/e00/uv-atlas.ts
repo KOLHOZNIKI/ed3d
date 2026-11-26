@@ -16,7 +16,7 @@ export interface UvAtlasEdit {
 
 export async function unwrapAsset(asset: ImportedAsset): Promise<ImportedAsset> {
   const mesh = asset.scene.getObjectByProperty('isMesh', true);
-  if (!(mesh instanceof Mesh) || asset.stats.meshes !== 1 || asset.positionEdit || asset.uvAtlas) {
+  if (!(mesh instanceof Mesh) || asset.stats.meshes !== 1 || asset.positionEdit || asset.uvAtlas || asset.repairPatch) {
     throw new Error('The E00 atlas probe requires one unedited FBX mesh.');
   }
   const geometry = mesh.geometry;
