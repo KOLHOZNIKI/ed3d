@@ -1,6 +1,6 @@
 # E00 texture rebake
 
-The later [UV transform and alpha probe](E00_UV_Transforms_Alpha.md) extends the same export path to one transformed RGBA8 Base Color with mask or blend alpha.
+The later [UV transform and alpha probe](E00_UV_Transforms_Alpha.md) extends the same export path to one transformed RGBA8 Base Color with mask or blend alpha. The [directional normal probe](E00_Directional_Normals.md) measures world-space error on controlled rotated and mirrored charts.
 
 **Generate UV atlas** builds a candidate UV1 layout. **Rebake textures** transfers maps from the original import to that layout in a local browser worker. **Discard texture bake** restores the atlas with the source textures on UV0. The viewport shows the original import during this probe. In the baked FBX ZIP, the atlas becomes the first UV set so Unity materials and MikkTSpace tangent generation use it by default. The original UV coordinates remain in the second set.
 

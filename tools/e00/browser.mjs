@@ -6,9 +6,9 @@ import { strToU8, unzipSync, zipSync } from 'fflate';
 import { createServer, preview } from 'vite';
 import { decode } from 'fast-png';
 
-const { values: { edited, glb, unwrap, rebake, paint, repair, alpha }, positionals } = parseArgs({
+const { values: { edited, glb, unwrap, rebake, paint, repair, alpha, normal }, positionals } = parseArgs({
   options: { edited: { type: 'boolean' }, glb: { type: 'string' }, unwrap: { type: 'boolean' }, rebake: { type: 'boolean' },
-    paint: { type: 'boolean' }, repair: { type: 'boolean' }, alpha: { type: 'boolean' } }, allowPositionals: true,
+    paint: { type: 'boolean' }, repair: { type: 'boolean' }, alpha: { type: 'boolean' }, normal: { type: 'boolean' } }, allowPositionals: true,
 });
 const [tripoPath, chromePath, animatedSource, realAnimatedSource] = positionals;
 if (!tripoPath) throw new Error('Supply the path to the Tripo sample directory.');
@@ -277,6 +277,32 @@ try {
         assert.match(await status.textContent(), new RegExp(`^${name}_e00_baked · 4 triangles · 0 bones`));
         console.log(name, { charts: manifest.uvAtlas.charts, width: image.width, height: image.height, hiddenRgb, alphaLevels: observed.size });
       }
+    }
+
+    if (normal) {
+      await input.setInputFiles(resolve('test-results/e00/normal-fixture/directional_normals.zip'));
+      await page.waitForFunction(() => !document.querySelector('#sources').disabled);
+      assert.match(await status.textContent(), /^directional_normals · 4 triangles · 0 bones/);
+      await page.locator('#unwrap').click();
+      await page.waitForFunction(() => !document.querySelector('#unwrap').disabled, null, { timeout: 120000 });
+      assert.match(await status.textContent(), /Generated 2 charts/);
+      await page.getByRole('button', { name: 'Rebake textures' }).click();
+      await page.waitForFunction(() => !document.querySelector('#rebake').disabled, null, { timeout: 120000 });
+      assert.match(await status.textContent(), /Rebaked 2 maps from UV0 to UV1/);
+      const [download] = await Promise.all([page.waitForEvent('download'), exportButton.click()]);
+      assert.equal(download.suggestedFilename(), 'directional_normals_e00_baked.zip');
+      const exported = join(output, download.suggestedFilename());
+      await download.saveAs(exported);
+      const files = unzipSync(await readFile(exported));
+      const manifest = JSON.parse(new TextDecoder().decode(files['manifest.json']));
+      assert.deepEqual(manifest.textures.map(map => map.semantic).sort(), ['BaseColor', 'Normal']);
+      const image = decode(files[manifest.textures.find(map => map.semantic === 'Normal').file]);
+      assert.equal(image.width, manifest.textureBake.width);
+      assert.equal(image.height, manifest.textureBake.height);
+      await input.setInputFiles(exported);
+      await page.waitForFunction(() => !document.querySelector('#sources').disabled);
+      assert.match(await status.textContent(), /^directional_normals_e00_baked · 4 triangles · 0 bones/);
+      console.log('Directional normals', { charts: manifest.uvAtlas.charts, width: image.width, height: image.height });
     }
 
     if (glb) {

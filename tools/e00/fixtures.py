@@ -37,6 +37,7 @@ def main():
     parser.add_argument("--paint", action="store_true")
     parser.add_argument("--repair", action="store_true")
     parser.add_argument("--alpha", action="store_true")
+    parser.add_argument("--normal", action="store_true")
     args = parser.parse_args()
 
     results = Path("test-results/e00")
@@ -49,6 +50,7 @@ def main():
         + ("-paint" if args.paint else "")
         + ("-repair" if args.repair else "")
         + ("-alpha" if args.alpha else "")
+        + ("-normal" if args.normal else "")
     )
     cases = [
         ("static", args.tripo_dir / "ceramic plate 3d model.zip", "ceramic_plate_3d_model_e00.zip"),
@@ -64,10 +66,18 @@ def main():
             (mode, results / "alpha-fixture" / f"alpha_transform_{mode}.zip", f"alpha_transform_{mode}_e00_baked.zip")
             for mode in ("mask", "blend")
         ]
+    if args.normal:
+        cases = [("directional", results / "normal-fixture" / "directional_normals.zip", "directional_normals_e00_baked.zip")]
     edits = {}
     if args.edited:
         edits = json.loads(Path(__file__).with_name("position-edits.json").read_text(encoding="utf-8"))
     for name, source, exported in cases:
+        if args.normal:
+            case = project / "Assets" / "Fixtures" / name
+            copy_bundle(source, case / "original")
+            copy_bundle(results / "exports" / exported, case / "exported")
+            copy_corner_map(results / "exports" / exported, case)
+            continue
         if args.alpha:
             case = project / "Assets" / "Fixtures" / name
             for bundle, location in ((source, case / "original"), (results / "exports" / exported, case / "exported")):
@@ -135,6 +145,9 @@ def main():
     if args.alpha:
         copy2(Path(__file__).with_name("AlphaBakeProbe.cs"), editors)
         copy2(Path(__file__).parent.parent / "unity" / "AssetFixerAlphaMaterialImporter.cs", editors)
+    if args.normal:
+        for filename in ("NormalBakeProbe.cs", "NormalBakeProbe.shader"):
+            copy2(Path(__file__).with_name(filename), editors)
     settings = project / "ProjectSettings"
     settings.mkdir(exist_ok=True)
     (settings / "ProjectVersion.txt").write_text(f"m_EditorVersion: {args.unity_version}\n", encoding="utf-8")
