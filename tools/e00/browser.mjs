@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { strToU8, unzipSync, zipSync } from 'fflate';
 import { createServer, preview } from 'vite';
 
-const { values: { edited, glb, unwrap, rebake }, positionals } = parseArgs({
-  options: { edited: { type: 'boolean' }, glb: { type: 'string' }, unwrap: { type: 'boolean' }, rebake: { type: 'boolean' } }, allowPositionals: true,
+const { values: { edited, glb, unwrap, rebake, paint }, positionals } = parseArgs({
+  options: { edited: { type: 'boolean' }, glb: { type: 'string' }, unwrap: { type: 'boolean' }, rebake: { type: 'boolean' }, paint: { type: 'boolean' } }, allowPositionals: true,
 });
 const [tripoPath, chromePath, animatedSource, realAnimatedSource] = positionals;
 if (!tripoPath) throw new Error('Supply the path to the Tripo sample directory.');
@@ -14,8 +14,10 @@ const { chromium } = await import('../../test-results/e00-browser/node_modules/p
 const output = resolve('test-results/e00/exports');
 await mkdir(output, { recursive: true });
 const localServer = { host: '127.0.0.1', port: 4270 };
-const server = edited ? await createServer({ server: localServer }) : await preview({ preview: localServer });
-if (edited) await server.listen();
+const server = edited || paint
+  ? await createServer({ server: localServer, optimizeDeps: { include: ['xatlas-wasm'] } })
+  : await preview({ preview: localServer });
+if (edited || paint) await server.listen();
 
 try {
   const browser = await chromium.launch({
@@ -118,7 +120,7 @@ try {
       }
     }
 
-    if (unwrap || rebake) {
+    if (unwrap || rebake || paint) {
       const unwrapButton = page.locator('#unwrap');
       for (const [path, name, triangles, bones, clips] of cases.slice(0, 2)) {
         await input.setInputFiles(path);
@@ -137,8 +139,8 @@ try {
         assert.equal(bundle[atlas.sourceCornerMap].length, triangles * 12);
         console.log(name, atlas);
 
-        let bakedExport;
-        if (rebake) {
+        let bakedExport, paintedExport;
+        if (rebake || (paint && !bones)) {
           const button = page.getByRole('button', { name: 'Rebake textures' });
           await button.click();
           await page.waitForFunction(() => !document.querySelector('#rebake').disabled, null, { timeout: 120000 });
@@ -160,15 +162,19 @@ try {
             assert.equal(files[map.file][0], 137);
           }
           console.log(name, manifest.textureBake);
+          if (paint && !bones) {
+            paintedExport = await checkSeamStroke(page, bakedExport, exportButton, status);
+          }
           await page.getByRole('button', { name: 'Discard texture bake' }).click();
           assert.match(await status.textContent(), /original maps on UV0/);
         }
         await unwrapButton.click();
         assert.equal(await unwrapButton.textContent(), 'Generate UV atlas');
-        await input.setInputFiles(bakedExport ?? exported);
+        await input.setInputFiles(paintedExport ?? bakedExport ?? exported);
         await page.waitForFunction(() => !document.querySelector('#sources').disabled);
         const reimported = await status.textContent();
-        const expected = new RegExp(`^${name}.*_e00_${bakedExport ? 'baked' : 'atlas'} · (.*) triangles · ${bones} bones · ${clips} clips`);
+        const kind = paintedExport ? 'painted' : bakedExport ? 'baked' : 'atlas';
+        const expected = new RegExp(`^${name}.*_e00_${kind} · (.*) triangles · ${bones} bones · ${clips} clips`);
         assert.match(reimported, expected);
         assert.equal(Number(expected.exec(reimported)[1].replace(/\D/g, '')), triangles);
       }
@@ -202,4 +208,111 @@ try {
   }
 } finally {
   await server.close();
+}
+
+async function checkSeamStroke(page, bakedExport, exportButton, status) {
+  await page.evaluate(() => {
+    const reference = document.createElement('input');
+    reference.type = 'file';
+    reference.id = 'paint-reference';
+    reference.hidden = true;
+    document.body.append(reference);
+  });
+  await page.locator('#paint-reference').setInputFiles(bakedExport);
+  const path = await page.evaluate(async () => {
+    const { importAsset } = await import('/src/e00/round-trip.ts');
+    const { Box3, PerspectiveCamera, Raycaster, Vector2, Vector3 } = await import('/node_modules/three/build/three.module.js');
+    const asset = await importAsset([...document.querySelector('#paint-reference').files]);
+    const mesh = asset.scene.getObjectByProperty('isMesh', true);
+    const bounds = new Box3().setFromObject(asset.scene);
+    const center = bounds.getCenter(new Vector3());
+    const radius = bounds.getSize(new Vector3()).length() / 2;
+    const canvas = document.querySelector('#viewport');
+    const camera = new PerspectiveCamera(40, canvas.width / canvas.height, radius / 100, radius * 100);
+    camera.position.copy(center).addScaledVector(new Vector3(0.6, 0.45, 1).normalize(), 3.5 * radius);
+    camera.lookAt(center);
+    camera.updateMatrixWorld();
+    asset.scene.updateMatrixWorld(true);
+    const ray = new Raycaster();
+    const pointer = new Vector2();
+    const { polygons, renderCorners } = mesh.geometry.userData.assetFixerFbxSource;
+    const { uv, uv1, normal } = mesh.geometry.attributes;
+    const controlPoint = i => {
+      const index = polygons[renderCorners[i]];
+      return index < 0 ? -1 - index : index;
+    };
+    const different = (attr, i, j) => Math.hypot(attr.getX(i) - attr.getX(j), attr.getY(i) - attr.getY(j)) > 1e-6;
+    const sharedSeam = (a, b) => {
+      const shared = [];
+      for (let i = 3 * a; i < 3 * a + 3; i++) for (let j = 3 * b; j < 3 * b + 3; j++) {
+        if (controlPoint(i) === controlPoint(j)) shared.push([i, j]);
+      }
+      return shared.length === 2 && shared.every(([i, j]) => !different(uv1, i, j)) &&
+        shared.some(([i, j]) => different(uv, i, j));
+    };
+    const trace = (y, rise) => {
+      const samples = [];
+      const crossings = [];
+      for (let i = 0; i <= 224; i++) {
+        const x = 235 + i * 0.75;
+        const h = y + i * rise / 224;
+        pointer.set(2 * x / canvas.width - 1, 1 - 2 * h / canvas.height);
+        ray.setFromCamera(pointer, camera);
+        const hit = ray.intersectObject(mesh, false)[0];
+        if (!hit?.uv || hit.faceIndex == null || normal.getY(hit.faceIndex * 3) < 0.3) return;
+        const previous = samples.at(-1);
+        if (previous && previous.face !== hit.faceIndex && sharedSeam(previous.face, hit.faceIndex)) crossings.push(i);
+        samples.push({ x, y: h, u: hit.uv.x, v: hit.uv.y, face: hit.faceIndex });
+      }
+      return { samples, crossings };
+    };
+    for (const rise of [20, 0, -20]) {
+      for (const y of [222, 215, 230, 240, 205, 198, 247, 256]) {
+        const route = trace(y, rise);
+        if (!route?.crossings.length) continue;
+        const lanes = [-8, -4, 4, 8].map(offset => trace(y + offset, rise));
+        if (lanes.every(Boolean)) return { ...route, lanes, width: canvas.width, height: canvas.height, color: '#15e4f2' };
+      }
+    }
+    throw new Error('No continuous stroke crossing a new UV seam was found on the top of the plate.');
+  });
+  assert.ok(path.crossings.length > 0);
+  const canvas = page.locator('#viewport');
+  await canvas.scrollIntoViewIfNeeded();
+  const start = path.samples[0], end = path.samples.at(-1);
+  const draw = async () => {
+    const box = await canvas.boundingBox();
+    await page.mouse.move(box.x + start.x * box.width / path.width, box.y + start.y * box.height / path.height);
+    await page.mouse.down();
+    await page.mouse.move(box.x + end.x * box.width / path.width, box.y + end.y * box.height / path.height, { steps: 68 });
+    await page.mouse.up();
+    await page.waitForFunction(() => !document.querySelector('#paint').disabled);
+    assert.match(await status.textContent(), /^Painted .* Base Color texels\./);
+  };
+  await page.locator('#paint').click();
+  await draw();
+  await page.getByRole('button', { name: 'Undo stroke' }).click();
+  await page.waitForFunction(() => !document.querySelector('#paint').disabled);
+  assert.equal(await status.textContent(), 'Undid the last stroke.');
+  const [undone] = await Promise.all([page.waitForEvent('download'), exportButton.click()]);
+  assert.ok(undone.suggestedFilename().endsWith('_e00_baked.zip'));
+  const original = unzipSync(await readFile(bakedExport));
+  const reverted = unzipSync(await readFile(await undone.path()));
+  const originalManifest = JSON.parse(new TextDecoder().decode(original['manifest.json']));
+  const originalMap = originalManifest.textures.find(map => map.semantic === 'BaseColor').file;
+  assert.deepEqual(reverted[originalMap], original[originalMap]);
+  await draw();
+  const [painted] = await Promise.all([page.waitForEvent('download'), exportButton.click()]);
+  assert.ok(painted.suggestedFilename().endsWith('_e00_painted.zip'));
+  const exported = join(output, painted.suggestedFilename());
+  await painted.saveAs(exported);
+  const files = unzipSync(await readFile(exported));
+  const manifest = JSON.parse(new TextDecoder().decode(files['manifest.json']));
+  assert.equal(manifest.texturePaint.strokes, 1);
+  assert.equal(manifest.texturePaint.channel, 'uv0');
+  assert.ok(manifest.texturePaint.lastStrokeTexels > 0);
+  await writeFile(join(output, 'ceramic-plate-stroke.json'), JSON.stringify(path, null, 2));
+  await canvas.screenshot({ path: join(output, 'ceramic-plate-browser-stroke.png') });
+  console.log('Plate 3D brush', { samples: path.samples.length, crossings: path.crossings, ...manifest.texturePaint });
+  return exported;
 }

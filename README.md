@@ -15,6 +15,8 @@ Open the localhost URL printed by Vite. Choose a self-contained GLB and use **Ex
 
 For a single FBX mesh with one UV set, use **Generate UV atlas** to add UV1. **Rebake textures** transfers the maps from the original import. The baked FBX promotes the atlas to the primary UV channel for Unity and retains the original coordinates in the second channel.
 
+After rebaking a static mesh with one base color map, turn on **3D brush (visible projection)** and drag on the model. **Undo stroke** restores the preceding texture. **Export FBX ZIP** packages the painted map.
+
 | Command | Purpose |
 | --- | --- |
 | `npm run typecheck` | Check the application with strict TypeScript settings. |
@@ -39,3 +41,5 @@ For a single FBX mesh with one UV set, use **Generate UV atlas** to add UV1. **R
 ## E00 verification
 
 The [FBX and ZIP report](Docs/E00_FBX_Round_Trip.md) records the Unity and ufbx results. The [GLB report](Docs/E00_GLB_Round_Trip.md) covers the Tripo character, exact texture and weight checks, and Khronos validation. The [xatlas report](Docs/E00_XAtlas.md) covers UV1 generation and vertex attributes at seams. The [texture rebake report](Docs/E00_Texture_Rebake.md) covers the texture transfer and Unity render comparisons. The [technical specification](Docs/AssetFixer_Technical_Specification_v1.0.md#sec-21) covers the rest of E00.
+
+The [3D brush report](Docs/E00_3D_Brush.md) covers the exported stroke across two new UV seams on the plate.

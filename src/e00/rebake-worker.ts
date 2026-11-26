@@ -1,7 +1,7 @@
 import { generateTangents } from 'three/addons/libs/mikktspace.module.js';
 import { Vector3 } from 'three';
 import type { TextureBake } from './rebake';
-import { rasterize } from './atlas-raster';
+import { paddingSources, rasterize } from './atlas-raster';
 
 export interface BakeMap {
   slot: string;
@@ -41,37 +41,6 @@ const srgb = Float32Array.from({ length: 256 }, (_, i) => {
 
 function encodeSrgb(x: number): number {
   return 255 * (x <= 0.0031308 ? 12.92 * x : 1.055 * x ** (1 / 2.4) - 0.055);
-}
-
-function paddingSources(faces: Int32Array, width: number): number {
-  const queue = new Int32Array(faces.length);
-  let tail = 0, head = 0, padded = 0;
-  const adjacent = (pixel: number, visit: (neighbor: number) => void) => {
-    if (pixel % width !== 0) visit(pixel - 1);
-    if ((pixel + 1) % width !== 0) visit(pixel + 1);
-    if (pixel >= width) visit(pixel - width);
-    if (pixel + width < faces.length) visit(pixel + width);
-  };
-  const seed = (pixel: number) => {
-    if (!faces[pixel]) return;
-    let edge = false;
-    adjacent(pixel, neighbor => { if (!faces[neighbor]) edge = true; });
-    if (edge) queue[tail++] = pixel;
-  };
-  for (let p = 0; p < faces.length; p++) seed(p);
-  // Extend edge colors through the unused atlas so coarse mip levels never sample black voids.
-  // Each empty texel gets exactly one source. Padding never overwrites triangle samples.
-  while (head < tail) {
-    const pixel = queue[head++];
-    const source = faces[pixel] < 0 ? faces[pixel] : -(pixel + 1);
-    adjacent(pixel, neighbor => {
-      if (faces[neighbor] !== 0) return;
-      faces[neighbor] = source;
-      queue[tail++] = neighbor;
-      padded++;
-    });
-  }
-  return padded;
 }
 
 const lerpAttribute = (attr: Float32Array, stride: number, i: number, j: number, a: number, b: number, c: number) =>

@@ -5,6 +5,7 @@ import { validateFbxAxes } from './fbx-profile';
 import { offsetControlPointY, useSourceTopology } from './fbx-topology';
 import { sceneStats } from './scene-stats';
 import type { TextureBake } from './rebake';
+import type { TexturePaint } from './paint';
 import type { UvAtlasEdit } from './uv-atlas';
 import { inputLimit, pack, unpack, type Files } from './zip';
 
@@ -31,6 +32,7 @@ export interface ImportedAsset {
   positionEdit?: Readonly<{ geometry: Mesh['geometry']; positions: Float64Array; controlPoint: number; offsetY: number }>;
   uvAtlas?: UvAtlasEdit;
   textureBake?: TextureBake;
+  texturePaint?: TexturePaint;
 }
 
 export async function importAsset(input: readonly File[]): Promise<ImportedAsset> {
@@ -109,7 +111,8 @@ export async function exportAsset(asset: ImportedAsset): Promise<{ name: string;
   const edit = asset.positionEdit;
   const atlas = asset.uvAtlas;
   const bake = asset.textureBake;
-  const suffix = bake ? '_e00_baked' : atlas ? '_e00_atlas' : edit ? '_e00_edited' : '_e00';
+  const paint = asset.texturePaint;
+  const suffix = paint ? '_e00_painted' : bake ? '_e00_baked' : atlas ? '_e00_atlas' : edit ? '_e00_edited' : '_e00';
   const name = asset.name.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) + suffix;
   const files: Files = new Map();
   const linked: { semantic: string; file: string; source: string | null; rebaked?: true }[] = [];
@@ -128,7 +131,7 @@ export async function exportAsset(asset: ImportedAsset): Promise<{ name: string;
         const semantic = textureSemantics[entry.slotName];
         const file = `${name}.fbm/${semantic}.png`;
         entry.fileName = file;
-        files.set(file, baked.png);
+        files.set(file, entry.slotName === 'map' && paint ? paint.png : baked.png);
         linked.push({ semantic, file, source: baked.source, rebaked: true });
         assigned.add(baked.source);
         continue;
@@ -183,6 +186,7 @@ export async function exportAsset(asset: ImportedAsset): Promise<{ name: string;
       width: bake.width, height: bake.height, padding: bake.padding, covered: bake.covered,
       padded: bake.padded, boundaryOnlyTriangles: bake.boundaryOnlyTriangles, auxiliaryMaps,
     },
+    texturePaint: paint && { semantic: 'BaseColor', channel: 'uv0', strokes: paint.strokes, lastStrokeTexels: paint.lastStrokeTexels },
     textures: linked, unassignedTextures: unassigned,
     warnings: [
       'Prototype export. FBX material properties and rig representation may change.',

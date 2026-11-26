@@ -47,3 +47,37 @@ export function rasterize(width: number, height: number, targetUv: Float32Array)
   }
   return { faces, wb, wc, covered, boundaryOnlyTriangles: smallTriangles.length, overlaps };
 }
+
+export function paddingSources(faces: Int32Array, width: number, distance = Infinity): number {
+  const queue = new Int32Array(faces.length);
+  let tail = 0, head = 0, padded = 0;
+  const adjacent = (pixel: number, visit: (neighbor: number) => void) => {
+    if (pixel % width !== 0) visit(pixel - 1);
+    if ((pixel + 1) % width !== 0) visit(pixel + 1);
+    if (pixel >= width) visit(pixel - width);
+    if (pixel + width < faces.length) visit(pixel + width);
+  };
+  const seed = (pixel: number) => {
+    if (!faces[pixel]) return;
+    let edge = false;
+    adjacent(pixel, neighbor => { if (!faces[neighbor]) edge = true; });
+    if (edge) queue[tail++] = pixel;
+  };
+  for (let p = 0; p < faces.length; p++) seed(p);
+  // Empty texels take one nearest source. Painting can preserve the rest of the
+  // baked gutter by limiting the number of wavefront steps.
+  for (let ring = 0; ring < distance && head < tail; ring++) {
+    const end = tail;
+    while (head < end) {
+      const pixel = queue[head++];
+      const source = faces[pixel] < 0 ? faces[pixel] : -(pixel + 1);
+      adjacent(pixel, neighbor => {
+        if (faces[neighbor] !== 0) return;
+        faces[neighbor] = source;
+        queue[tail++] = neighbor;
+        padded++;
+      });
+    }
+  }
+  return padded;
+}

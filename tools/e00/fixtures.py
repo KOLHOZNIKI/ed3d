@@ -34,6 +34,7 @@ def main():
     parser.add_argument("--edited", action="store_true")
     parser.add_argument("--unwrap", action="store_true")
     parser.add_argument("--rebake", action="store_true")
+    parser.add_argument("--paint", action="store_true")
     args = parser.parse_args()
 
     results = Path("test-results/e00")
@@ -43,6 +44,7 @@ def main():
         + ("-animated" if args.real_animation else "")
         + ("-atlas" if args.unwrap else "")
         + ("-bake" if args.rebake else "")
+        + ("-paint" if args.paint else "")
     )
     cases = [
         ("static", args.tripo_dir / "ceramic plate 3d model.zip", "ceramic_plate_3d_model_e00.zip"),
@@ -57,6 +59,17 @@ def main():
     if args.edited:
         edits = json.loads(Path(__file__).with_name("position-edits.json").read_text(encoding="utf-8"))
     for name, source, exported in cases:
+        if args.paint:
+            if name != "static":
+                continue
+            case = project / "Assets" / "Fixtures" / name
+            painted = results / "exports" / exported.replace(".zip", "_painted.zip")
+            copy_bundle(source, case / "original")
+            copy_bundle(results / "exports" / exported.replace(".zip", "_baked.zip"), case / "reference")
+            copy_bundle(painted, case / "exported")
+            copy_corner_map(painted, case)
+            copy2(results / "exports" / "ceramic-plate-stroke.json", project / "ceramic-plate-stroke.json")
+            continue
         if args.rebake and name in ("static", "skinned"):
             case = project / "Assets" / "Fixtures" / name
             baked_export = results / "exports" / exported.replace(".zip", "_baked.zip")
@@ -84,9 +97,11 @@ def main():
     editors = project / "Assets" / "Editor"
     editors.mkdir(parents=True, exist_ok=True)
     copy2(Path(__file__).with_name("FbxProbe.cs"), editors)
-    if args.rebake:
+    if args.rebake or args.paint:
         for filename in ("TextureBakeProbe.cs", "TextureBakeProbe.shader"):
             copy2(Path(__file__).with_name(filename), editors)
+    if args.paint:
+        copy2(Path(__file__).with_name("PaintProbe.cs"), editors)
     settings = project / "ProjectSettings"
     settings.mkdir(exist_ok=True)
     (settings / "ProjectVersion.txt").write_text(f"m_EditorVersion: {args.unity_version}\n", encoding="utf-8")
