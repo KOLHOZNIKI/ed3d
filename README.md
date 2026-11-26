@@ -13,7 +13,7 @@ npm run dev
 
 Open the localhost URL printed by Vite. Choose a self-contained GLB and use **Export GLB** to download a new binary. For FBX, choose a Tripo ZIP or select a binary FBX and its PNG or JPEG textures together. **Export FBX ZIP** downloads the reconstructed FBX, external maps, and `manifest.json`. Extract the package into Unity's `Assets` folder to import it. The manifest identifies textures that require manual assignment.
 
-For a single FBX mesh with one UV set, use **Generate UV atlas** to add UV1. The atlas export writes triangles and keeps existing textures on UV0.
+For a single FBX mesh with one UV set, use **Generate UV atlas** to add UV1. **Rebake textures** transfers the maps from the original import. The baked FBX promotes the atlas to the primary UV channel for Unity and retains the original coordinates in the second channel.
 
 | Command | Purpose |
 | --- | --- |
@@ -38,4 +38,4 @@ For a single FBX mesh with one UV set, use **Generate UV atlas** to add UV1. The
 
 ## E00 verification
 
-The [FBX and ZIP report](Docs/E00_FBX_Round_Trip.md) records the Unity and ufbx results. The [GLB report](Docs/E00_GLB_Round_Trip.md) covers the Tripo character, exact texture and weight checks, and Khronos validation. The [xatlas report](Docs/E00_XAtlas.md) covers UV1 generation and vertex attributes at seams. The [technical specification](Docs/AssetFixer_Technical_Specification_v1.0.md#sec-21) covers the rest of E00.
+The [FBX and ZIP report](Docs/E00_FBX_Round_Trip.md) records the Unity and ufbx results. The [GLB report](Docs/E00_GLB_Round_Trip.md) covers the Tripo character, exact texture and weight checks, and Khronos validation. The [xatlas report](Docs/E00_XAtlas.md) covers UV1 generation and vertex attributes at seams. The [texture rebake report](Docs/E00_Texture_Rebake.md) covers the texture transfer and Unity render comparisons. The [technical specification](Docs/AssetFixer_Technical_Specification_v1.0.md#sec-21) covers the rest of E00.

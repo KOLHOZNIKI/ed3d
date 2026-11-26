@@ -4,6 +4,7 @@ import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { validateFbxAxes } from './fbx-profile';
 import { offsetControlPointY, useSourceTopology } from './fbx-topology';
 import { sceneStats } from './scene-stats';
+import type { TextureBake } from './rebake';
 import type { UvAtlasEdit } from './uv-atlas';
 import { inputLimit, pack, unpack, type Files } from './zip';
 
@@ -29,6 +30,7 @@ export interface ImportedAsset {
   imagePathsByUrl: Map<string, string>;
   positionEdit?: Readonly<{ geometry: Mesh['geometry']; positions: Float64Array; controlPoint: number; offsetY: number }>;
   uvAtlas?: UvAtlasEdit;
+  textureBake?: TextureBake;
 }
 
 export async function importAsset(input: readonly File[]): Promise<ImportedAsset> {
@@ -106,19 +108,31 @@ export function moveControlPointY(asset: ImportedAsset, controlPoint: number, of
 export async function exportAsset(asset: ImportedAsset): Promise<{ name: string; bytes: Uint8Array<ArrayBuffer> }> {
   const edit = asset.positionEdit;
   const atlas = asset.uvAtlas;
-  const suffix = atlas ? '_e00_atlas' : edit ? '_e00_edited' : '_e00';
+  const bake = asset.textureBake;
+  const suffix = bake ? '_e00_baked' : atlas ? '_e00_atlas' : edit ? '_e00_edited' : '_e00';
   const name = asset.name.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) + suffix;
   const files: Files = new Map();
-  const linked: { semantic: string; file: string; source: string | null }[] = [];
+  const linked: { semantic: string; file: string; source: string | null; rebaked?: true }[] = [];
   const assigned = new Set<string>();
   const pending: Promise<void>[] = [];
   const fbx = new FBXExporter().register((plan: ExportPlan) => {
     for (const mesh of plan.meshes) useSourceTopology(mesh, edit?.geometry === mesh.geometry ? edit.positions : undefined,
-      atlas?.inputGeometry === mesh.geometry ? atlas : undefined);
+      atlas?.inputGeometry === mesh.geometry ? atlas : undefined, !!bake);
     for (const entry of plan.textures?.textures.values() ?? []) {
       const image = entry.texture.image;
       if (!(image instanceof HTMLImageElement) || !image.naturalWidth) throw new Error('An FBX texture could not be decoded.');
       const source = asset.imagePathsByUrl.get(image.src) ?? null;
+      const baked = bake?.maps.find(map => map.slot === entry.slotName && map.source === source);
+      if (bake && !baked) throw new Error(`The atlas export has no baked ${entry.slotName} map.`);
+      if (baked) {
+        const semantic = textureSemantics[entry.slotName];
+        const file = `${name}.fbm/${semantic}.png`;
+        entry.fileName = file;
+        files.set(file, baked.png);
+        linked.push({ semantic, file, source: baked.source, rebaked: true });
+        assigned.add(baked.source);
+        continue;
+      }
       const extension = source?.match(imagePattern)?.[1].toLowerCase() ?? 'png';
       const location = `${name}.fbm/texture_${linked.length + 1}.${extension}`;
       entry.fileName = location;
@@ -137,8 +151,16 @@ export async function exportAsset(asset: ImportedAsset): Promise<{ name: string;
   await Promise.all(pending);
 
   const unassigned = [];
+  const auxiliaryMaps = [];
   for (const [source, bytes] of asset.images) {
     if (assigned.has(source)) continue;
+    const baked = bake?.maps.find(map => map.source === source);
+    if (baked) {
+      const file = `unassigned/${baked.slot}.png`;
+      files.set(file, baked.png);
+      auxiliaryMaps.push({ semantic: baked.slot, file, source, colorSpace: 'linear', channel: 'uv0' });
+      continue;
+    }
     const file = `unassigned/${source}`;
     unassigned.push({ source, file });
     files.set(file, bytes);
@@ -155,12 +177,18 @@ export async function exportAsset(asset: ImportedAsset): Promise<{ name: string;
   files.set('manifest.json', new TextEncoder().encode(JSON.stringify({
     stage: 'E00', model, unitsInCentimeters: asset.unitScale, meshes: asset.stats,
     positionEdit: edit && { controlPoint: edit.controlPoint, offsetY: edit.offsetY },
-    uvAtlas: atlas && { channel: atlas.channel, sourceCornerMap: cornerMap, ...atlas.metrics },
+    uvAtlas: atlas && { channel: bake ? 'uv0' : atlas.channel, sourceCornerMap: cornerMap, ...atlas.metrics },
+    textureBake: bake && {
+      source: 'Original import', layout: 'uv1', exportedLayout: 'uv0', originalLayout: 'uv1',
+      width: bake.width, height: bake.height, padding: bake.padding, covered: bake.covered,
+      padded: bake.padded, boundaryOnlyTriangles: bake.boundaryOnlyTriangles, auxiliaryMaps,
+    },
     textures: linked, unassignedTextures: unassigned,
     warnings: [
       'Prototype export. FBX material properties and rig representation may change.',
       'Unassigned textures are carried as files and require manual assignment in Unity.',
-      ...(atlas ? ['Atlas export writes triangles with UV1. Existing textures continue to use UV0.'] : []),
+      ...(bake ? ['Baked textures use the atlas in UV0 for Unity. The original UV layout is retained in UV1.']
+        : atlas ? ['Atlas export writes triangles with UV1. Existing textures continue to use UV0.'] : []),
     ],
   }, null, 2) + '\n'));
   return { name: `${name}.zip`, bytes: await pack(files) };

@@ -1,6 +1,6 @@
 # E00 xatlas probe
 
-The prototype uses `xatlas-wasm@0.1.3` in a local Web Worker. It unwraps the same indexed control-point triangles that the FBX loader uses for preview. The probe requests a target resolution of 1024 and four texels of padding. xatlas chooses the packing dimensions. [xatlas source](https://github.com/jpcy/xatlas) and [WebAssembly wrapper API](https://github.com/mode777/xatlas-wasm/blob/main/API.md)
+The prototype uses `xatlas-wasm@0.1.3` in a local Web Worker. It unwraps the same indexed control-point triangles that the FBX loader uses for preview. This first probe requested a target resolution of 1024 and four texels of padding. The [texture rebake probe](E00_Texture_Rebake.md) records the later overlap checks and increased padding. xatlas chooses the packing dimensions. [xatlas source](https://github.com/jpcy/xatlas) and [WebAssembly wrapper API](https://github.com/mode777/xatlas-wasm/blob/main/API.md)
 
 The loader tracks the original FBX polygon corner behind each triangle corner. The probe checks that every xatlas index resolves to the same control point through `xref`. A render vertex is shared only when its xatlas vertex and all original render attributes match. The probe checks every remapped corner component by component, including position, normal, joint indices, weights, and UV0.
 
@@ -8,7 +8,7 @@ The loader tracks the original FBX polygon corner behind each triangle corner. T
 
 ## Results
 
-The production build opened the two local Tripo ZIPs, generated UV1, exported each FBX ZIP, and reopened both exports in Chrome. The browser made zero external requests.
+The production build at the end of the first probe opened the two local Tripo ZIPs, generated UV1, exported each FBX ZIP, and reopened both exports in Chrome. The browser made zero external requests.
 
 | Tripo fixture | Triangles | Control points | UV charts | Atlas dimensions | Control points split by xatlas | Render vertices after remap |
 | --- | ---: | ---: | ---: | --- | ---: | ---: |
@@ -19,7 +19,7 @@ ufbx v0.23.0 verified original control-point positions and UV0 exactly. The corn
 
 Unity 2022.3.62f2 and 6000.3.9f1 imported UV1 for all 6,358 plate vertices and all 19,407 character vertices. The source meshes had 6,067 and 17,425 vertices, respectively. Imported positions and UV0 matched exactly. Seven character normals differed by more than `1e-5` in vector length after Unity import. The largest difference was `6.97e-4` (about `0.04°`). The independent FBX reader measured agreement within floating-point precision. The maximum Unity bone weight difference was zero. The character retained 67 bones and a valid Humanoid Avatar. The maximum world-space deformation difference over three forearm rotations was `5.57e-7 m`.
 
-This probe supports a single unedited FBX mesh that has one authored UV set and can be exported via the existing E00 path. The new channel is available for the later texture rebake. Multi-mesh atlases, mesh edits before unwrapping, morph targets, and GLB unwrapping require separate coverage.
+This probe supports a single unedited FBX mesh that has one authored UV set and can be exported via the existing E00 path. Multi-mesh atlases, mesh edits before unwrapping, morph targets, and GLB unwrapping require separate coverage.
 
 ## Reproduce on Windows
 

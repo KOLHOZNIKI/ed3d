@@ -91,7 +91,7 @@ static double point_distance(ufbx_vec3 a, ufbx_vec3 b)
     return length3((ufbx_vec3){ .x = a.x - b.x, .y = a.y - b.y, .z = a.z - b.z });
 }
 
-static bool compare_atlas(const ufbx_mesh *a, const ufbx_mesh *b, const char *map_path)
+static bool compare_atlas(const ufbx_mesh *a, const ufbx_mesh *b, const char *map_path, bool primary_atlas)
 {
     if (a->num_vertices != b->num_vertices || a->num_triangles != b->num_triangles ||
         b->num_faces != b->num_triangles || b->num_indices != 3 * b->num_faces ||
@@ -117,8 +117,8 @@ static bool compare_atlas(const ufbx_mesh *a, const ufbx_mesh *b, const char *ma
         max_position = fmax(max_position, point_distance(a->vertices.data[i], b->vertices.data[i]));
     }
     const ufbx_vertex_vec2 *old_uv = &a->uv_sets.data[0].vertex_uv;
-    const ufbx_vertex_vec2 *new_uv0 = &b->uv_sets.data[0].vertex_uv;
-    const ufbx_vertex_vec2 *atlas_uv = &b->uv_sets.data[1].vertex_uv;
+    const ufbx_vertex_vec2 *restored_uv = &b->uv_sets.data[primary_atlas ? 1 : 0].vertex_uv;
+    const ufbx_vertex_vec2 *atlas_uv = &b->uv_sets.data[primary_atlas ? 0 : 1].vertex_uv;
     for (size_t i = 0; mapped && i < b->num_faces; i++) {
         const ufbx_face triangle = b->faces.data[i];
         uint32_t source[3];
@@ -131,7 +131,7 @@ static bool compare_atlas(const ufbx_mesh *a, const ufbx_mesh *b, const char *ma
             const size_t original = source[k], target = triangle.index_begin + k;
             if (original >= a->num_indices || a->vertex_indices.data[original] != b->vertex_indices.data[target] ||
                 faces[original] != faces[source[0]]) { mapped = false; break; }
-            const ufbx_vec2 p = ufbx_get_vertex_vec2(old_uv, original), q = ufbx_get_vertex_vec2(new_uv0, target);
+            const ufbx_vec2 p = ufbx_get_vertex_vec2(old_uv, original), q = ufbx_get_vertex_vec2(restored_uv, target);
             max_uv0 = fmax(max_uv0, hypot(p.x - q.x, p.y - q.y));
             max_normal = fmax(max_normal, normal_angle(ufbx_get_vertex_vec3(&a->vertex_normal, original),
                                                       ufbx_get_vertex_vec3(&b->vertex_normal, target)));
@@ -162,9 +162,9 @@ static bool compare_atlas(const ufbx_mesh *a, const ufbx_mesh *b, const char *ma
     free(faces);
 
     const bool weights = same_skin_weights(a, b);
-    printf(",\"atlas\":{\"sameMappedControlPointsAndPolygonBoundaries\":%s,\"sameSourceSkinWeights\":%s,"
+    printf(",\"atlas\":{\"layout\":\"%s\",\"sameMappedControlPointsAndPolygonBoundaries\":%s,\"sameSourceSkinWeights\":%s,"
            "\"maxPositionDeltaByControlPoint\":%.9g,\"maxUv0DeltaByCorner\":%.9g,\"maxNormalAngleByCorner\":%.9g,"
-           "\"validUv1Triangles\":%zu}", mapped ? "true" : "false", weights ? "true" : "false",
+           "\"validAtlasTriangles\":%zu}", primary_atlas ? "uv0" : "uv1", mapped ? "true" : "false", weights ? "true" : "false",
            max_position, max_uv0, max_normal, valid_uv_triangles);
     return mapped && weights && max_position == 0 && max_uv0 == 0 && max_normal <= 1e-4 && valid_uv_triangles == b->num_faces;
 }
@@ -251,10 +251,11 @@ static bool compare_clips(const ufbx_scene *original, const ufbx_scene *exported
 int main(int argc, char **argv)
 {
     if (argc != 3 && argc != 5) {
-        fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx [control-point offset-y | --atlas source-corners.bin]\n");
+        fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx [control-point offset-y | --atlas source-corners.bin | --baked source-corners.bin]\n");
         return 2;
     }
-    const bool atlas = argc == 5 && strcmp(argv[3], "--atlas") == 0;
+    const bool baked = argc == 5 && strcmp(argv[3], "--baked") == 0;
+    const bool atlas = baked || (argc == 5 && strcmp(argv[3], "--atlas") == 0);
     const bool edited = argc == 5 && !atlas;
     unsigned long long control_point = 0;
     double offset_y = 0.0;
@@ -276,7 +277,7 @@ int main(int argc, char **argv)
 
     const ufbx_mesh *a = original->meshes.data[0], *b = exported->meshes.data[0];
     if (atlas) {
-        const bool matches = compare_atlas(a, b, argv[4]);
+        const bool matches = compare_atlas(a, b, argv[4], baked);
         puts("}");
         ufbx_free_scene(exported);
         ufbx_free_scene(original);

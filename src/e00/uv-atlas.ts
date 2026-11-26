@@ -9,7 +9,7 @@ export interface UvAtlasEdit {
   sourceCorners: Uint32Array<ArrayBuffer>;
   channel: 'uv1';
   metrics: {
-    width: number; height: number; charts: number; milliseconds: number;
+    width: number; height: number; charts: number; separatedFaces: number; milliseconds: number;
     controlPoints: number; chartVertices: number; renderVertices: number; splitControlPoints: number;
   };
 }
@@ -110,7 +110,7 @@ function remap(input: BufferGeometry, source: FbxSourceMesh, controlPoints: Uint
   const vertexCounts = new Uint32Array(source.positions.length / 3);
   for (const xref of atlas.xrefs) vertexCounts[xref]++;
   const metrics = {
-    width: atlas.width, height: atlas.height, charts: atlas.charts, milliseconds: atlas.milliseconds,
+    width: atlas.width, height: atlas.height, charts: atlas.charts, separatedFaces: atlas.separatedFaces, milliseconds: atlas.milliseconds,
     controlPoints: vertexCounts.length, chartVertices: atlas.xrefs.length, renderVertices: sourcePreviewVertices.length,
     splitControlPoints: vertexCounts.reduce((count, vertices) => count + Number(vertices > 1), 0),
   };

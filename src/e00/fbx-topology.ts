@@ -42,9 +42,9 @@ export function offsetControlPointY(geometry: BufferGeometry, controlPoint: numb
   return positions;
 }
 
-export function useSourceTopology(mesh: FbxExportMesh, workingPositions?: Float64Array, atlas?: UvAtlasEdit): void {
+export function useSourceTopology(mesh: FbxExportMesh, workingPositions?: Float64Array, atlas?: UvAtlasEdit, promoteAtlas = false): void {
   const original = sourceMesh(mesh.geometry);
-  const source = atlas ? withAtlas(original, atlas) : original;
+  const source = atlas ? withAtlas(original, atlas, promoteAtlas) : original;
   if (source.hasMorphTargets) throw new Error('Export with source topology does not support morph targets yet.');
   if (source.uvs.length > 4) throw new Error('FBX export supports at most four UV sets.');
   if (workingPositions && workingPositions.length !== source.positions.length) throw new Error('The edited FBX has an invalid control point count.');
@@ -128,7 +128,7 @@ export function useSourceTopology(mesh: FbxExportMesh, workingPositions?: Float6
   mesh.geometry = geometry;
 }
 
-function withAtlas(original: FbxSourceMesh, atlas: UvAtlasEdit): FbxSourceMesh {
+function withAtlas(original: FbxSourceMesh, atlas: UvAtlasEdit, promote: boolean): FbxSourceMesh {
   const faces = new Uint32Array(original.polygons.length);
   let face = 0;
   for (let corner = 0; corner < faces.length; corner++) {
@@ -148,7 +148,7 @@ function withAtlas(original: FbxSourceMesh, atlas: UvAtlasEdit): FbxSourceMesh {
   return {
     ...original,
     polygons,
-    uvs: [...original.uvs, layer],
+    uvs: promote ? [layer, ...original.uvs] : [...original.uvs, layer],
     readCorner(corner, _face, controlPoint, attribute) {
       if (attribute === layer) {
         const vertex = index.getX(corner);

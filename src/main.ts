@@ -2,14 +2,16 @@ import { AmbientLight, Box3, DirectionalLight, Mesh, PerspectiveCamera, Scene, S
 import { exportAsset, importAsset, type ImportedAsset } from './e00/round-trip';
 import { exportGlb, importGlb, type ImportedGlb } from './e00/glb-round-trip';
 import { unwrapAsset } from './e00/uv-atlas';
+import { rebakeAsset } from './e00/rebake';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#viewport');
 const status = document.getElementById('status');
 const sources = document.querySelector<HTMLInputElement>('#sources');
 const exportButton = document.querySelector<HTMLButtonElement>('#export');
 const unwrapButton = document.querySelector<HTMLButtonElement>('#unwrap');
+const rebakeButton = document.querySelector<HTMLButtonElement>('#rebake');
 
-if (!canvas || !status || !sources || !exportButton || !unwrapButton) {
+if (!canvas || !status || !sources || !exportButton || !unwrapButton || !rebakeButton) {
   throw new Error('The E00 prototype is missing its workspace elements.');
 }
 
@@ -29,6 +31,7 @@ sources.addEventListener('change', async () => {
   sources.disabled = true;
   exportButton.disabled = true;
   unwrapButton.disabled = true;
+  rebakeButton.disabled = true;
   status.textContent = 'Opening local asset…';
   try {
     const glb = input.find(file => /\.glb$/i.test(file.name));
@@ -41,6 +44,7 @@ sources.addEventListener('change', async () => {
     asset = imported;
     exportButton.textContent = asset.format === 'glb' ? 'Export GLB' : 'Export FBX ZIP';
     unwrapButton.textContent = 'Generate UV atlas';
+    rebakeButton.textContent = 'Rebake textures';
     const { stats } = asset;
     status.textContent = `${asset.name} · ${stats.triangles.toLocaleString()} triangles · ${stats.bones} bones · ${stats.clips} clips`;
     if (asset.format === 'glb' && asset.affineCorrections) {
@@ -66,6 +70,7 @@ sources.addEventListener('change', async () => {
     sources.disabled = false;
     exportButton.disabled = !asset;
     unwrapButton.disabled = asset?.format !== 'fbx';
+    rebakeButton.disabled = asset?.format !== 'fbx' || !asset.uvAtlas;
   }
 });
 
@@ -74,6 +79,7 @@ exportButton.addEventListener('click', async () => {
   sources.disabled = true;
   exportButton.disabled = true;
   unwrapButton.disabled = true;
+  rebakeButton.disabled = true;
   const glb = asset.format === 'glb';
   status.textContent = glb ? 'Preparing GLB…' : 'Preparing FBX package…';
   try {
@@ -91,6 +97,7 @@ exportButton.addEventListener('click', async () => {
     sources.disabled = false;
     exportButton.disabled = false;
     unwrapButton.disabled = asset.format !== 'fbx';
+    rebakeButton.disabled = asset.format !== 'fbx' || !asset.uvAtlas;
   }
 });
 
@@ -98,12 +105,14 @@ unwrapButton.addEventListener('click', async () => {
   if (asset?.format !== 'fbx') return;
   if (asset.uvAtlas) {
     asset.uvAtlas.geometry.dispose();
-    asset = { ...asset, uvAtlas: undefined };
+    asset = { ...asset, uvAtlas: undefined, textureBake: undefined };
     unwrapButton.textContent = 'Generate UV atlas';
+    rebakeButton.textContent = 'Rebake textures';
+    rebakeButton.disabled = true;
     status.textContent = 'Restored the source UV channels.';
     return;
   }
-  sources.disabled = exportButton.disabled = unwrapButton.disabled = true;
+  sources.disabled = exportButton.disabled = unwrapButton.disabled = rebakeButton.disabled = true;
   status.textContent = 'Generating UV atlas…';
   try {
     asset = await unwrapAsset(asset);
@@ -114,6 +123,29 @@ unwrapButton.addEventListener('click', async () => {
     status.textContent = error instanceof Error ? error.message : String(error);
   } finally {
     sources.disabled = exportButton.disabled = unwrapButton.disabled = false;
+    rebakeButton.disabled = !asset.uvAtlas;
+  }
+});
+
+rebakeButton.addEventListener('click', async () => {
+  if (asset?.format !== 'fbx' || !asset.uvAtlas) return;
+  if (asset.textureBake) {
+    asset = { ...asset, textureBake: undefined };
+    rebakeButton.textContent = 'Rebake textures';
+    status.textContent = 'Restored the UV atlas with the original maps on UV0.';
+    return;
+  }
+  sources.disabled = exportButton.disabled = unwrapButton.disabled = rebakeButton.disabled = true;
+  status.textContent = 'Rebaking the original textures from UV0 to UV1…';
+  try {
+    asset = await rebakeAsset(asset);
+    const bake = asset.textureBake!;
+    status.textContent = `Rebaked ${bake.maps.length} maps from UV0 to UV1 at ${bake.width}×${bake.height}. FBX export makes the atlas primary for Unity.`;
+    rebakeButton.textContent = 'Discard texture bake';
+  } catch (error) {
+    status.textContent = error instanceof Error ? error.message : String(error);
+  } finally {
+    sources.disabled = exportButton.disabled = unwrapButton.disabled = rebakeButton.disabled = false;
   }
 });
 

@@ -33,6 +33,7 @@ def main():
     parser.add_argument("--real-animation", type=Path)
     parser.add_argument("--edited", action="store_true")
     parser.add_argument("--unwrap", action="store_true")
+    parser.add_argument("--rebake", action="store_true")
     args = parser.parse_args()
 
     results = Path("test-results/e00")
@@ -41,6 +42,7 @@ def main():
         + ("-edited" if args.edited else "")
         + ("-animated" if args.real_animation else "")
         + ("-atlas" if args.unwrap else "")
+        + ("-bake" if args.rebake else "")
     )
     cases = [
         ("static", args.tripo_dir / "ceramic plate 3d model.zip", "ceramic_plate_3d_model_e00.zip"),
@@ -55,6 +57,14 @@ def main():
     if args.edited:
         edits = json.loads(Path(__file__).with_name("position-edits.json").read_text(encoding="utf-8"))
     for name, source, exported in cases:
+        if args.rebake and name in ("static", "skinned"):
+            case = project / "Assets" / "Fixtures" / name
+            baked_export = results / "exports" / exported.replace(".zip", "_baked.zip")
+            copy_bundle(source, case / "original")
+            copy_bundle(baked_export, case / "exported")
+            copy_bundle(results / "exports" / exported.replace(".zip", "_atlas.zip"), case / "reference")
+            copy_corner_map(baked_export, case)
+            continue
         case = project / "Assets" / "Fixtures" / name
         copy_bundle(source, case / "original")
         copy_bundle(results / "exports" / exported, case / "exported")
@@ -63,9 +73,7 @@ def main():
             atlas_export = results / "exports" / exported.replace(".zip", "_atlas.zip")
             copy_bundle(source, atlas_case / "original")
             copy_bundle(atlas_export, atlas_case / "exported")
-            with ZipFile(atlas_export) as archive:
-                corner_map = "uv-atlas-source-corners.bin"
-                (atlas_case / corner_map).write_bytes(archive.read(corner_map))
+            copy_corner_map(atlas_export, atlas_case)
         if name in edits:
             edited_case = project / "Assets" / "Fixtures" / f"{name}-edited"
             copy_bundle(source, edited_case / "original")
@@ -76,6 +84,9 @@ def main():
     editors = project / "Assets" / "Editor"
     editors.mkdir(parents=True, exist_ok=True)
     copy2(Path(__file__).with_name("FbxProbe.cs"), editors)
+    if args.rebake:
+        for filename in ("TextureBakeProbe.cs", "TextureBakeProbe.shader"):
+            copy2(Path(__file__).with_name(filename), editors)
     settings = project / "ProjectSettings"
     settings.mkdir(exist_ok=True)
     (settings / "ProjectVersion.txt").write_text(f"m_EditorVersion: {args.unity_version}\n", encoding="utf-8")
@@ -84,6 +95,12 @@ def main():
     modules = {f"com.unity.modules.{module}": "1.0.0" for module in ("animation", "imageconversion", "jsonserialize")}
     (packages / "manifest.json").write_text(json.dumps({"dependencies": modules}), encoding="utf-8")
     print(project.resolve())
+
+
+def copy_corner_map(bundle, target):
+    with ZipFile(bundle) as archive:
+        corner_map = "uv-atlas-source-corners.bin"
+        (target / corner_map).write_bytes(archive.read(corner_map))
 
 
 if __name__ == "__main__":
