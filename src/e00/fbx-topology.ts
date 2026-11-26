@@ -21,17 +21,36 @@ interface FbxExportMesh {
   skin: { clusters: (FbxWeights & { boneIdx: number })[] } | null;
 }
 
-export function useSourceTopology(mesh: FbxExportMesh): void {
-  const source = mesh.geometry.userData.assetFixerFbxSource as FbxSourceMesh | undefined;
+function sourceMesh(geometry: BufferGeometry): FbxSourceMesh {
+  const source = geometry.userData.assetFixerFbxSource as FbxSourceMesh | undefined;
   if (!source) throw new Error('The mesh has no source polygon data for export.');
+  return source;
+}
+
+export function offsetControlPointY(geometry: BufferGeometry, controlPoint: number, offsetY: number): Float64Array {
+  const source = sourceMesh(geometry);
+  if (!Number.isInteger(controlPoint) || controlPoint < 0 || controlPoint >= source.positions.length / 3) {
+    throw new Error('Invalid FBX control point.');
+  }
+  const positions = Float64Array.from(source.positions);
+  const y = 3 * controlPoint + 1;
+  const moved = positions[y] + offsetY;
+  if (!Number.isFinite(moved) || moved === positions[y]) throw new Error('The offset must produce a finite position change.');
+  positions[y] = moved;
+  return positions;
+}
+
+export function useSourceTopology(mesh: FbxExportMesh, workingPositions?: Float64Array): void {
+  const source = sourceMesh(mesh.geometry);
   if (source.hasMorphTargets) throw new Error('Export with source topology does not support morph targets yet.');
   if (source.uvs.length > 4) throw new Error('FBX export supports at most four UV sets.');
+  if (workingPositions && workingPositions.length !== source.positions.length) throw new Error('The edited FBX has an invalid control point count.');
 
   // The writer consumes positions by control point and other attributes by polygon corner.
   // This geometry is private to the export plan. The preview still uses triangulated buffers.
   const geometry = new BufferGeometry();
   geometry.name = mesh.geometry.name;
-  const positions = new BufferAttribute(Float64Array.from(source.positions), 3).applyMatrix4(source.preTransform);
+  const positions = new BufferAttribute(workingPositions?.slice() ?? Float64Array.from(source.positions), 3).applyMatrix4(source.preTransform);
   if (!Number.isInteger(positions.count) || !positions.count || !positions.array.every(Number.isFinite)) {
     throw new Error('Invalid FBX control point positions.');
   }

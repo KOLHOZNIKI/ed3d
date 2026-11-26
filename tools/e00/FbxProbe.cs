@@ -44,6 +44,14 @@ public static class FbxProbe
         public int clipSamples;
         public string testedBone;
         public bool originalHumanoidAvatar, exportedHumanoidAvatar;
+        public int editedVertexCopies, editedUvCopies;
+        public float observedMove, maxUvError;
+        public bool sameTriangleConnectivity;
+    }
+
+    [Serializable] sealed class PositionEdit
+    {
+        public float offsetY;
     }
 
     [Serializable] sealed class AssetInfo
@@ -63,6 +71,7 @@ public static class FbxProbe
         public readonly AnimationClip[] clips;
         public readonly Vector3[] basePoints;
         public readonly AssetInfo info;
+        Mesh poseMesh;
 
         public Model(string path)
         {
@@ -103,8 +112,22 @@ public static class FbxProbe
             }
         }
 
+        public void ApplyPoseProbeMove(int[] indices, Vector3 worldOffset)
+        {
+            poseMesh = UnityEngine.Object.Instantiate(mesh);
+            var vertices = poseMesh.vertices;
+            var localOffset = meshTransform.InverseTransformVector(worldOffset);
+            foreach (int index in indices) vertices[index] += localOffset;
+            poseMesh.vertices = vertices;
+            skin.sharedMesh = poseMesh;
+        }
+
         Vector3[] WorldPoints(Mesh source) => source.vertices.Select(meshTransform.TransformPoint).ToArray();
-        public void Dispose() => UnityEngine.Object.DestroyImmediate(root);
+        public void Dispose()
+        {
+            UnityEngine.Object.DestroyImmediate(root);
+            if (poseMesh != null) UnityEngine.Object.DestroyImmediate(poseMesh);
+        }
     }
 
     public static void Run()
@@ -116,12 +139,14 @@ public static class FbxProbe
             var output = Directory.GetFiles(Path.Combine(fixture, "exported"), "*.fbx").Single();
             input = input.Replace('\\', '/');
             output = output.Replace('\\', '/');
+            var editPath = Path.Combine(fixture, "position-edit.json");
+            var edit = File.Exists(editPath) ? JsonUtility.FromJson<PositionEdit>(File.ReadAllText(editPath)) : null;
             Pair comparison;
             using (var original = new Model(input))
             using (var exported = new Model(output)) {
-                comparison = Compare(Path.GetFileName(fixture), original, exported);
+                comparison = Compare(Path.GetFileName(fixture), original, exported, edit);
             }
-            if (comparison.fixture == "skinned") {
+            if (comparison.fixture.StartsWith("skinned", StringComparison.Ordinal)) {
                 comparison.originalHumanoidAvatar = HasHumanoidAvatar(input);
                 comparison.exportedHumanoidAvatar = HasHumanoidAvatar(output);
             }
@@ -132,22 +157,53 @@ public static class FbxProbe
         Debug.Log($"E00 measured {comparisons.Count} FBX pairs. See e00-report.json.");
     }
 
-    static Pair Compare(string fixture, Model before, Model after)
+    static Pair Compare(string fixture, Model before, Model after, PositionEdit edit)
     {
         float diagonal = Vector3.Distance(before.info.min, before.info.max);
         float tolerance = Mathf.Max(1e-6f, 1e-4f * diagonal);
         var result = new Pair { fixture = fixture, original = before.info, exported = after.info, tolerance = tolerance };
-        var matches = MatchPoints(before.basePoints, after.basePoints, tolerance);
-        result.baseError = matches.All(index => index >= 0) ? Delta(before.basePoints, after.basePoints, matches) : -1;
         var baseTolerance = Mathf.Max(1e-7f, 1e-5f * diagonal);
+        var expected = before.basePoints;
+        Vector2[] beforeUv = null, afterUv = null;
+        var positionTolerance = edit == null ? tolerance : baseTolerance;
+        int[] moved = null;
+        var worldOffset = Vector3.zero;
+        if (edit != null) {
+            beforeUv = before.mesh.uv;
+            afterUv = after.mesh.uv;
+            var unchanged = MatchPoints(before.basePoints, after.basePoints, baseTolerance);
+            moved = Enumerable.Range(0, unchanged.Length).Where(index => unchanged[index] < 0).ToArray();
+            result.editedVertexCopies = moved.Length;
+            if (moved.Length == 0 || moved.Any(index => Vector3.Distance(before.basePoints[index], before.basePoints[moved[0]]) > baseTolerance)
+                || beforeUv.Length != before.basePoints.Length || afterUv.Length != after.basePoints.Length) {
+                result.baseError = -1;
+                return result;
+            }
+            expected = (Vector3[])before.basePoints.Clone();
+            worldOffset = before.meshTransform.TransformVector(Vector3.up * edit.offsetY);
+            foreach (int index in moved) expected[index] += worldOffset;
+            result.editedUvCopies = moved.Select(index => beforeUv[index]).Distinct().Count();
+        }
+
+        var matches = MatchPoints(expected, after.basePoints, positionTolerance, beforeUv, afterUv);
+        result.baseError = matches.All(index => index >= 0) ? Delta(expected, after.basePoints, matches) : -1;
         result.compatible = result.baseError >= 0 && result.baseError <= baseTolerance
-            && MatchPoints(after.basePoints, before.basePoints, baseTolerance).All(index => index >= 0)
+            && MatchPoints(after.basePoints, expected, baseTolerance, afterUv, beforeUv).All(index => index >= 0)
             && before.info.triangles == after.info.triangles && before.info.boneNames.SequenceEqual(after.info.boneNames)
             && before.info.bindPoses == after.info.bindPoses && before.info.boundBaseColor == after.info.boundBaseColor
             && before.info.boundNormal == after.info.boundNormal && before.info.clips.SequenceEqual(after.info.clips);
+        if (edit != null && result.baseError >= 0) {
+            result.observedMove = Vector3.Distance(before.basePoints[moved[0]], after.basePoints[matches[moved[0]]]);
+            result.maxUvError = Enumerable.Range(0, matches.Length).Max(i => Vector2.Distance(beforeUv[i], afterUv[matches[i]]));
+            var canonical = MatchPoints(after.basePoints, after.basePoints, baseTolerance, afterUv, afterUv);
+            result.sameTriangleConnectivity = TriangleKeys(before.mesh, i => canonical[matches[i]])
+                .SequenceEqual(TriangleKeys(after.mesh, i => canonical[i]));
+            result.compatible &= result.editedUvCopies > 1 && result.sameTriangleConnectivity;
+        }
         if (before.skin == null || after.skin == null || result.baseError < 0) return result;
 
         result.maxWeightError = WeightDelta(before, after, matches);
+        if (edit != null) before.ApplyPoseProbeMove(moved, worldOffset);
         result.restError = Delta(before.PosedPoints(), after.PosedPoints(), matches);
         var joint = before.skin.bones.FirstOrDefault(bone => bone.name == "Left_LowerArm" || bone.name == "Hinge");
         if (joint == null) throw new InvalidOperationException($"No designated probe joint for {fixture}.");
@@ -205,7 +261,21 @@ public static class FbxProbe
         }
     }
 
-    static int[] MatchPoints(Vector3[] source, Vector3[] target, float tolerance)
+    static (int, int, int)[] TriangleKeys(Mesh mesh, Func<int, int> key)
+    {
+        var indices = mesh.triangles;
+        var triangles = new (int, int, int)[indices.Length / 3];
+        for (int triangle = 0; triangle < triangles.Length; triangle++) {
+            int offset = triangle * 3;
+            int a = key(indices[offset]), b = key(indices[offset + 1]), c = key(indices[offset + 2]);
+            // Normalize cyclic order while retaining winding.
+            triangles[triangle] = a <= b && a <= c ? (a, b, c) : b <= c ? (b, c, a) : (c, a, b);
+        }
+        Array.Sort(triangles);
+        return triangles;
+    }
+
+    static int[] MatchPoints(Vector3[] source, Vector3[] target, float tolerance, Vector2[] sourceUv = null, Vector2[] targetUv = null)
     {
         Vector3Int Cell(Vector3 point) => Vector3Int.FloorToInt(point / tolerance);
         var buckets = new Dictionary<Vector3Int, List<int>>();
@@ -222,6 +292,7 @@ public static class FbxProbe
             for (int x = -1; x <= 1; x++) for (int y = -1; y <= 1; y++) for (int z = -1; z <= 1; z++) {
                 if (!buckets.TryGetValue(cell + new Vector3Int(x, y, z), out var bucket)) continue;
                 foreach (var candidate in bucket) {
+                    if (sourceUv != null && (sourceUv[i] - targetUv[candidate]).sqrMagnitude > 1e-12f) continue;
                     var distance = (source[i] - target[candidate]).sqrMagnitude;
                     if (distance > best) continue;
                     best = distance;

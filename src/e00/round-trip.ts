@@ -2,7 +2,7 @@ import { FBXExporter } from '@comfyorg/fbx-exporter-three';
 import { LoadingManager, Mesh, SkinnedMesh, type Group, type Texture } from 'three';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { validateFbxAxes } from './fbx-profile';
-import { useSourceTopology } from './fbx-topology';
+import { offsetControlPointY, useSourceTopology } from './fbx-topology';
 import { inputLimit, pack, unpack, type Files } from './zip';
 
 const imagePattern = /\.(png|jpe?g)$/i;
@@ -24,6 +24,7 @@ export interface ImportedAsset {
   stats: { meshes: number; triangles: number; bones: number; clips: number };
   images: Files;
   imagePathsByUrl: Map<string, string>;
+  positionEdit?: Readonly<{ geometry: Mesh['geometry']; positions: Float64Array; controlPoint: number; offsetY: number }>;
 }
 
 export async function importAsset(input: readonly File[]): Promise<ImportedAsset> {
@@ -100,14 +101,24 @@ export async function importAsset(input: readonly File[]): Promise<ImportedAsset
   }
 }
 
+export function moveControlPointY(asset: ImportedAsset, controlPoint: number, offsetY: number): ImportedAsset {
+  const mesh = asset.scene.getObjectByProperty('isMesh', true);
+  if (!(mesh instanceof Mesh) || asset.stats.meshes !== 1 || asset.positionEdit) {
+    throw new Error('The E00 position probe accepts one edit on a single mesh.');
+  }
+  const positions = offsetControlPointY(mesh.geometry, controlPoint, offsetY);
+  return { ...asset, positionEdit: { geometry: mesh.geometry, positions, controlPoint, offsetY } };
+}
+
 export async function exportAsset(asset: ImportedAsset): Promise<{ name: string; bytes: Uint8Array<ArrayBuffer> }> {
-  const name = asset.name.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) + '_e00';
+  const edit = asset.positionEdit;
+  const name = asset.name.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) + (edit ? '_e00_edited' : '_e00');
   const files: Files = new Map();
   const linked: { semantic: string; file: string; source: string | null }[] = [];
   const assigned = new Set<string>();
   const pending: Promise<void>[] = [];
   const fbx = new FBXExporter().register((plan: ExportPlan) => {
-    for (const mesh of plan.meshes) useSourceTopology(mesh);
+    for (const mesh of plan.meshes) useSourceTopology(mesh, edit?.geometry === mesh.geometry ? edit.positions : undefined);
     for (const entry of plan.textures?.textures.values() ?? []) {
       const image = entry.texture.image;
       if (!(image instanceof HTMLImageElement) || !image.naturalWidth) throw new Error('An FBX texture could not be decoded.');
@@ -140,6 +151,7 @@ export async function exportAsset(asset: ImportedAsset): Promise<{ name: string;
   files.set(model, new Uint8Array(fbx));
   files.set('manifest.json', new TextEncoder().encode(JSON.stringify({
     stage: 'E00', model, unitsInCentimeters: asset.unitScale, meshes: asset.stats,
+    positionEdit: edit && { controlPoint: edit.controlPoint, offsetY: edit.offsetY },
     textures: linked, unassignedTextures: unassigned,
     warnings: [
       'Prototype export. FBX material properties and rig representation may change.',

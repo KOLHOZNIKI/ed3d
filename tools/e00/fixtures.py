@@ -30,10 +30,11 @@ def main():
     parser.add_argument("tripo_dir", type=Path)
     parser.add_argument("unity_version")
     parser.add_argument("--animation", type=Path)
+    parser.add_argument("--edited", action="store_true")
     args = parser.parse_args()
 
     results = Path("test-results/e00")
-    project = results / f"unity-{args.unity_version}"
+    project = results / (f"unity-{args.unity_version}" + ("-edited" if args.edited else ""))
     cases = [
         ("static", args.tripo_dir / "ceramic plate 3d model.zip", "ceramic_plate_3d_model_e00.zip"),
         ("skinned", args.tripo_dir / "tripo_convert_8b04a473-804b-41a0-ab47-e84ae233629b.zip",
@@ -41,10 +42,19 @@ def main():
     ]
     if args.animation:
         cases.append(("animated", args.animation, "animated_fixture_e00.zip"))
+    edits = {}
+    if args.edited:
+        edits = json.loads(Path(__file__).with_name("position-edits.json").read_text(encoding="utf-8"))
     for name, source, exported in cases:
         case = project / "Assets" / "Fixtures" / name
         copy_bundle(source, case / "original")
         copy_bundle(results / "exports" / exported, case / "exported")
+        if name in edits:
+            edited_case = project / "Assets" / "Fixtures" / f"{name}-edited"
+            copy_bundle(source, edited_case / "original")
+            edited_export = exported.replace(".zip", "_edited.zip")
+            copy_bundle(results / "exports" / edited_export, edited_case / "exported")
+            (edited_case / "position-edit.json").write_text(json.dumps(edits[name]), encoding="utf-8")
 
     editors = project / "Assets" / "Editor"
     editors.mkdir(parents=True, exist_ok=True)

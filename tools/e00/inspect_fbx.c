@@ -88,9 +88,21 @@ static double normal_angle(ufbx_vec3 a, ufbx_vec3 b)
 
 int main(int argc, char **argv)
 {
-    if (argc != 3) {
-        fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx\n");
+    if (argc != 3 && argc != 5) {
+        fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx [control-point offset-y]\n");
         return 2;
+    }
+    const bool edited = argc == 5;
+    unsigned long long control_point = 0;
+    double offset_y = 0.0;
+    if (edited) {
+        char *end_index, *end_offset;
+        control_point = strtoull(argv[3], &end_index, 10);
+        offset_y = strtod(argv[4], &end_offset);
+        if (argv[3][0] == '-' || end_index == argv[3] || *end_index || end_offset == argv[4] || *end_offset || !isfinite(offset_y) || offset_y == 0.0) {
+            fprintf(stderr, "Expected a nonnegative control point index and a finite nonzero Y offset.\n");
+            return 2;
+        }
     }
     ufbx_scene *original = load(argv[1]);
     ufbx_scene *exported = load(argv[2]);
@@ -102,33 +114,54 @@ int main(int argc, char **argv)
     const ufbx_mesh *a = original->meshes.data[0], *b = exported->meshes.data[0];
     const bool topology = same_connectivity(a, b);
     const bool weights = same_skin_weights(a, b);
+    bool edit_matches = !edited;
     printf(",\"samePolygonConnectivity\":%s,\"sameSourceSkinWeights\":%s", topology ? "true" : "false", weights ? "true" : "false");
     if (topology) {
-        double position = 0.0, uv = 0.0, normal = 0.0;
-        const bool has_uv = a->vertex_uv.exists && b->vertex_uv.exists;
+        double position = 0.0, uv = 0.0, normal = 0.0, position_error = 0.0;
+        size_t changed = 0, corner_uses = 0;
+        ufbx_vec3 observed = { .x = 0, .y = 0, .z = 0 };
+        bool same_uv_sets = a->uv_sets.count == b->uv_sets.count;
         const bool has_normal = a->vertex_normal.exists && b->vertex_normal.exists;
         for (size_t i = 0; i < a->num_vertices; i++) {
             const ufbx_vec3 p = a->vertices.data[i], q = b->vertices.data[i];
-            ufbx_vec3 delta = { .x = p.x - q.x, .y = p.y - q.y, .z = p.z - q.z };
+            ufbx_vec3 delta = { .x = q.x - p.x, .y = q.y - p.y, .z = q.z - p.z };
             position = fmax(position, length3(delta));
+            if (length3(delta) > 1e-12) changed++;
+            if (edited && i == control_point) {
+                observed = delta;
+                delta.y -= offset_y;
+            }
+            position_error = fmax(position_error, length3(delta));
         }
-        for (size_t i = 0; i < a->num_indices; i++) {
-            if (has_uv) {
-                const ufbx_vec2 s = ufbx_get_vertex_vec2(&a->vertex_uv, i);
-                const ufbx_vec2 t = ufbx_get_vertex_vec2(&b->vertex_uv, i);
+        for (size_t set = 0; same_uv_sets && set < a->uv_sets.count; set++) {
+            const ufbx_vertex_vec2 *left = &a->uv_sets.data[set].vertex_uv, *right = &b->uv_sets.data[set].vertex_uv;
+            same_uv_sets = left->exists == right->exists;
+            if (!same_uv_sets || !left->exists) continue;
+            for (size_t i = 0; i < a->num_indices; i++) {
+                const ufbx_vec2 s = ufbx_get_vertex_vec2(left, i), t = ufbx_get_vertex_vec2(right, i);
                 uv = fmax(uv, hypot(s.x - t.x, s.y - t.y));
             }
+        }
+        for (size_t i = 0; i < a->num_indices; i++) {
+            if (edited && a->vertex_indices.data[i] == control_point) corner_uses++;
             if (has_normal) {
                 normal = fmax(normal, normal_angle(ufbx_get_vertex_vec3(&a->vertex_normal, i),
                                                    ufbx_get_vertex_vec3(&b->vertex_normal, i)));
             }
         }
         printf(",\"maxPositionDeltaByControlPoint\":%.9g", position);
-        if (has_uv) printf(",\"maxUvDeltaInCornerOrder\":%.9g", uv);
+        if (same_uv_sets && a->uv_sets.count) printf(",\"maxUvDeltaInCornerOrder\":%.9g", uv);
         if (has_normal) printf(",\"maxNormalAngleInCornerOrder\":%.9g", normal);
+        if (edited) {
+            edit_matches = corner_uses > 1 && changed == 1 && position_error <= 1e-9 && same_uv_sets && a->uv_sets.count && uv <= 1e-9;
+            printf(",\"positionEdit\":{\"controlPoint\":%llu,\"offsetY\":%.9g,\"observedOffset\":[%.9g,%.9g,%.9g],"
+                   "\"affectedCorners\":%zu,\"changedControlPoints\":%zu,\"maxPositionError\":%.9g,\"matches\":%s}",
+                   control_point, offset_y, observed.x, observed.y, observed.z, corner_uses, changed, position_error,
+                   edit_matches ? "true" : "false");
+        }
     }
     puts("}");
     ufbx_free_scene(exported);
     ufbx_free_scene(original);
-    return topology && weights ? 0 : 1;
+    return topology && weights && edit_matches ? 0 : 1;
 }
