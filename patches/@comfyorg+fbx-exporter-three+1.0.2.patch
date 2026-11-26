@@ -1,0 +1,64 @@
+diff --git a/node_modules/@comfyorg/fbx-exporter-three/dist/builders/objects/geometry.js b/node_modules/@comfyorg/fbx-exporter-three/dist/builders/objects/geometry.js
+index 9a2c23e..facbc7b 100644
+--- a/node_modules/@comfyorg/fbx-exporter-three/dist/builders/objects/geometry.js
++++ b/node_modules/@comfyorg/fbx-exporter-three/dist/builders/objects/geometry.js
+@@ -160,10 +160,12 @@ export function writeGeometry(ctx) {
+     if (bake)
+         bakeVertices(verts, transformCtx.globalMatrix);
+     elemDataSingleFloat64Array(geom, 'Vertices', verts);
+-    const t_lvi = loopVertexIndices(geometry);
+-    const t_ls = polygonLoopStarts(t_lvi.length);
+-    const t_pvi = new Int32Array(t_lvi);
+-    applyFaceTerminator(t_pvi, t_ls);
++    // AssetFixer provides terminated polygon indices and already expanded corner attributes.
++    let t_pvi = geometry.userData?.assetFixerFbxPolygons;
++    if (!t_pvi) {
++        t_pvi = loopVertexIndices(geometry);
++        applyFaceTerminator(t_pvi, polygonLoopStarts(t_pvi.length));
++    }
+     elemDataSingleInt32Array(geom, 'PolygonVertexIndex', t_pvi);
+     elemDataSingleInt32Array(geom, 'Edges', new Int32Array(0));
+     let wroteNormals = false;
+@@ -294,14 +296,15 @@ function writeMaterialLayer(geom, geometry, materialSlotCount, groups, slotRemap
+     const layer = elemDataSingleInt32(geom, 'LayerElementMaterial', 0);
+     elemDataSingleInt32(layer, 'Version', FBX_GEOMETRY_MATERIAL_VERSION);
+     elemDataSingleString(layer, 'Name', '');
+-    if (materialSlotCount <= 1 || groups.length === 0) {
++    const polygonMaterials = geometry.userData?.assetFixerFbxFaceMaterials;
++    if (materialSlotCount <= 1 || (!polygonMaterials && groups.length === 0)) {
+         elemDataSingleString(layer, 'MappingInformationType', 'AllSame');
+         elemDataSingleString(layer, 'ReferenceInformationType', 'IndexToDirect');
+         elemDataSingleInt32Array(layer, 'Materials', new Int32Array([0]));
+         return;
+     }
+     const numLoops = geometry.index ? geometry.index.count : geometry.attributes.position.count;
+-    const numPolys = numLoops / 3;
++    const numPolys = polygonMaterials?.length ?? numLoops / 3;
+     const t_pm = new Int32Array(numPolys);
+     const remap = slotRemap || identityRemap(materialSlotCount);
+     const remapAt = (meshIdx) => {
+@@ -310,12 +313,18 @@ function writeMaterialLayer(geom, geometry, materialSlotCount, groups, slotRemap
+         const fbxIdx = remap[meshIdx];
+         return fbxIdx >= 0 && fbxIdx < materialSlotCount ? fbxIdx : 0;
+     };
+-    for (const g of groups) {
+-        const polyStart = Math.floor(g.start / 3);
+-        const polyCount = Math.floor(g.count / 3);
+-        const fbxIdx = remapAt(g.materialIndex);
+-        for (let i = 0; i < polyCount; i++)
+-            t_pm[polyStart + i] = fbxIdx;
++    if (polygonMaterials) {
++        for (let i = 0; i < polygonMaterials.length; i++) {
++            t_pm[i] = remapAt(polygonMaterials[i]);
++        }
++    } else {
++        for (const g of groups) {
++            const polyStart = Math.floor(g.start / 3);
++            const polyCount = Math.floor(g.count / 3);
++            const fbxIdx = remapAt(g.materialIndex);
++            for (let i = 0; i < polyCount; i++)
++                t_pm[polyStart + i] = fbxIdx;
++        }
+     }
+     elemDataSingleString(layer, 'MappingInformationType', 'ByPolygon');
+     elemDataSingleString(layer, 'ReferenceInformationType', 'IndexToDirect');

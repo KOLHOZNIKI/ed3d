@@ -1,0 +1,24 @@
+diff --git a/node_modules/three/examples/jsm/loaders/FBXLoader.js b/node_modules/three/examples/jsm/loaders/FBXLoader.js
+index fc155a4..421f04c 100644
+--- a/node_modules/three/examples/jsm/loaders/FBXLoader.js
++++ b/node_modules/three/examples/jsm/loaders/FBXLoader.js
+@@ -1805,6 +1805,19 @@ class GeometryParser {
+ 		if ( geoNode.attrName ) geo.name = geoNode.attrName;
+ 
+ 		const geoInfo = this.parseGeoNode( geoNode, skeleton );
++		// AssetFixer reads the original control points and corners for FBX export.
++		geo.userData.assetFixerFbxSource = {
++			positions: geoInfo.vertexPositions,
++			polygons: geoInfo.vertexIndices,
++			preTransform,
++			normal: geoInfo.normal,
++			color: geoInfo.color,
++			uvs: geoInfo.uv ?? [],
++			material: geoInfo.material,
++			skin: skeleton?.rawBones,
++			hasMorphTargets: morphTargets.length > 0,
++			readCorner: getData,
++		};
+ 		const buffers = this.genBuffers( geoInfo );
+ 
+ 		const positionAttribute = new Float32BufferAttribute( buffers.vertex, 3 );

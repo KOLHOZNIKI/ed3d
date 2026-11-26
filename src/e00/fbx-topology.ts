@@ -1,0 +1,107 @@
+import { BufferAttribute, BufferGeometry, Color, Matrix3, SRGBColorSpace, type Matrix4 } from 'three';
+
+type FbxLayer = { dataSize: number };
+type FbxWeights = { indices: ArrayLike<number>; weights: ArrayLike<number> };
+
+interface FbxSourceMesh {
+  positions: ArrayLike<number>;
+  polygons: ArrayLike<number>;
+  preTransform: Matrix4;
+  normal?: FbxLayer;
+  color?: FbxLayer;
+  uvs: FbxLayer[];
+  material?: FbxLayer;
+  skin?: FbxWeights[];
+  hasMorphTargets: boolean;
+  readCorner: (corner: number, polygon: number, controlPoint: number, layer: FbxLayer) => ArrayLike<number>;
+}
+
+interface FbxExportMesh {
+  geometry: BufferGeometry;
+  skin: { clusters: (FbxWeights & { boneIdx: number })[] } | null;
+}
+
+export function useSourceTopology(mesh: FbxExportMesh): void {
+  const source = mesh.geometry.userData.assetFixerFbxSource as FbxSourceMesh | undefined;
+  if (!source) throw new Error('The mesh has no source polygon data for export.');
+  if (source.hasMorphTargets) throw new Error('Export with source topology does not support morph targets yet.');
+  if (source.uvs.length > 4) throw new Error('FBX export supports at most four UV sets.');
+
+  // The writer consumes positions by control point and other attributes by polygon corner.
+  // This geometry is private to the export plan. The preview still uses triangulated buffers.
+  const geometry = new BufferGeometry();
+  geometry.name = mesh.geometry.name;
+  const positions = new BufferAttribute(Float64Array.from(source.positions), 3).applyMatrix4(source.preTransform);
+  if (!Number.isInteger(positions.count) || !positions.count || !positions.array.every(Number.isFinite)) {
+    throw new Error('Invalid FBX control point positions.');
+  }
+  geometry.setAttribute('position', positions);
+  geometry.userData.assetFixerFbxPolygons = Int32Array.from(source.polygons);
+
+  const layers = new Map<string, FbxLayer>();
+  if (source.normal) layers.set('normal', source.normal);
+  if (source.color) layers.set('color', source.color);
+  source.uvs.forEach((layer, index) => layers.set(index === 0 ? 'uv' : `uv${index}`, layer));
+  const attributes = Array.from(layers, ([name, layer]) => {
+    const values = new Float64Array(source.polygons.length * layer.dataSize);
+    geometry.setAttribute(name, new BufferAttribute(values, layer.dataSize));
+    return { layer, values };
+  });
+
+  const faceMaterials: number[] = [];
+  let faceStart = 0;
+  for (let corner = 0; corner < source.polygons.length; corner++) {
+    const encoded = source.polygons[corner];
+    const controlPoint = encoded < 0 ? -encoded - 1 : encoded;
+    if (!Number.isInteger(controlPoint) || controlPoint >= positions.count) {
+      throw new Error('An FBX polygon refers to an invalid control point.');
+    }
+    const face = faceMaterials.length;
+    for (const { layer, values } of attributes) {
+      const data = source.readCorner(corner, face, controlPoint, layer);
+      for (let component = 0; component < layer.dataSize; component++) {
+        if (!Number.isFinite(data[component])) throw new Error('An FBX polygon has an invalid corner attribute.');
+        values[corner * layer.dataSize + component] = data[component];
+      }
+    }
+    if (encoded < 0) {
+      if (corner - faceStart < 2) throw new Error('An FBX polygon has fewer than three corners.');
+      const material = source.material ? source.readCorner(corner, face, controlPoint, source.material)[0] : 0;
+      if (!Number.isInteger(material)) throw new Error('An FBX polygon has an invalid material index.');
+      faceMaterials.push(Math.max(0, material));
+      faceStart = corner + 1;
+    }
+  }
+  if (!faceMaterials.length || faceStart !== source.polygons.length) throw new Error('Invalid FBX polygon boundaries.');
+  geometry.userData.assetFixerFbxFaceMaterials = faceMaterials;
+
+  const normals = geometry.getAttribute('normal');
+  normals?.applyNormalMatrix(new Matrix3().getNormalMatrix(source.preTransform));
+  const colors = geometry.getAttribute('color');
+  if (colors) {
+    // FBXLoader decodes vertex RGB into the Three.js working color space.
+    const color = new Color();
+    for (let corner = 0; corner < colors.count; corner++) {
+      color.fromBufferAttribute(colors, corner).getRGB(color, SRGBColorSpace);
+      colors.setXYZ(corner, color.r, color.g, color.b);
+    }
+  }
+
+  if (source.skin?.length !== mesh.skin?.clusters.length) throw new Error('FBX skin does not match its source clusters.');
+  for (const cluster of mesh.skin?.clusters ?? []) {
+    // The importer keeps bone order aligned with the FBX clusters. Restore their
+    // original weights and indices, including vertices absent from the preview.
+    const original = source.skin?.[cluster.boneIdx];
+    if (!original || original.indices.length !== original.weights.length) throw new Error('An FBX cluster has invalid weights.');
+    for (let i = 0; i < original.indices.length; i++) {
+      const index = original.indices[i];
+      const weight = original.weights[i];
+      if (!Number.isInteger(index) || index < 0 || index >= positions.count || !Number.isFinite(weight) || weight < 0) {
+        throw new Error('An FBX cluster refers to an invalid weight or control point.');
+      }
+    }
+    cluster.indices = original.indices;
+    cluster.weights = original.weights;
+  }
+  mesh.geometry = geometry;
+}

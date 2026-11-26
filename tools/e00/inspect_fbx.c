@@ -2,6 +2,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "ufbx.h"
 
 static ufbx_scene *load(const char *path)
@@ -36,11 +37,40 @@ static void stats(const ufbx_scene *scene)
         }
     }
     const ufbx_coordinate_axes axes = scene->settings.axes;
-    printf("{\"controlPoints\":%zu,\"triangles\":%zu,\"bones\":%zu,\"maxInfluences\":%u,"
+    printf("{\"controlPoints\":%zu,\"polygons\":%zu,\"corners\":%zu,\"triangles\":%zu,\"bones\":%zu,\"maxInfluences\":%u,"
            "\"textures\":%zu,\"animationStacks\":%zu,\"axes\":[%d,%d,%d],\"metersPerUnit\":%.9g}",
-           mesh->num_vertices, mesh->num_triangles, bones, max_influences,
+           mesh->num_vertices, mesh->num_faces, mesh->num_indices, mesh->num_triangles, bones, max_influences,
            scene->textures.count, scene->anim_stacks.count, (int)axes.right, (int)axes.up,
            (int)axes.front, scene->settings.unit_meters);
+}
+
+static bool same_connectivity(const ufbx_mesh *a, const ufbx_mesh *b)
+{
+    if (a->num_vertices != b->num_vertices || a->num_faces != b->num_faces || a->num_indices != b->num_indices) return false;
+    for (size_t i = 0; i < a->num_faces; i++) {
+        const ufbx_face left = a->faces.data[i], right = b->faces.data[i];
+        if (left.index_begin != right.index_begin || left.num_indices != right.num_indices) return false;
+    }
+    return memcmp(a->vertex_indices.data, b->vertex_indices.data, a->num_indices * sizeof(uint32_t)) == 0;
+}
+
+static bool same_skin_weights(const ufbx_mesh *a, const ufbx_mesh *b)
+{
+    if (a->skin_deformers.count != b->skin_deformers.count) return false;
+    for (size_t i = 0; i < a->skin_deformers.count; i++) {
+        const ufbx_skin_cluster_list left = a->skin_deformers.data[i]->clusters;
+        const ufbx_skin_cluster_list right = b->skin_deformers.data[i]->clusters;
+        if (left.count != right.count) return false;
+        for (size_t j = 0; j < left.count; j++) {
+            const ufbx_skin_cluster *source = left.data[j], *target = right.data[j];
+            if (!source->bone_node || !target->bone_node || strcmp(source->bone_node->name.data, target->bone_node->name.data) != 0 ||
+                source->num_weights != target->num_weights) return false;
+            for (size_t k = 0; k < source->num_weights; k++) {
+                if (source->vertices.data[k] != target->vertices.data[k] || source->weights.data[k] != target->weights.data[k]) return false;
+            }
+        }
+    }
+    return true;
 }
 
 static double length3(ufbx_vec3 v)
@@ -70,15 +100,19 @@ int main(int argc, char **argv)
     stats(exported);
 
     const ufbx_mesh *a = original->meshes.data[0], *b = exported->meshes.data[0];
-    if (a->num_indices == b->num_indices) {
+    const bool topology = same_connectivity(a, b);
+    const bool weights = same_skin_weights(a, b);
+    printf(",\"samePolygonConnectivity\":%s,\"sameSourceSkinWeights\":%s", topology ? "true" : "false", weights ? "true" : "false");
+    if (topology) {
         double position = 0.0, uv = 0.0, normal = 0.0;
         const bool has_uv = a->vertex_uv.exists && b->vertex_uv.exists;
         const bool has_normal = a->vertex_normal.exists && b->vertex_normal.exists;
-        for (size_t i = 0; i < a->num_indices; i++) {
-            const ufbx_vec3 p = ufbx_get_vertex_vec3(&a->vertex_position, i);
-            const ufbx_vec3 q = ufbx_get_vertex_vec3(&b->vertex_position, i);
+        for (size_t i = 0; i < a->num_vertices; i++) {
+            const ufbx_vec3 p = a->vertices.data[i], q = b->vertices.data[i];
             ufbx_vec3 delta = { .x = p.x - q.x, .y = p.y - q.y, .z = p.z - q.z };
             position = fmax(position, length3(delta));
+        }
+        for (size_t i = 0; i < a->num_indices; i++) {
             if (has_uv) {
                 const ufbx_vec2 s = ufbx_get_vertex_vec2(&a->vertex_uv, i);
                 const ufbx_vec2 t = ufbx_get_vertex_vec2(&b->vertex_uv, i);
@@ -89,12 +123,12 @@ int main(int argc, char **argv)
                                                    ufbx_get_vertex_vec3(&b->vertex_normal, i)));
             }
         }
-        printf(",\"maxPositionDeltaInCornerOrder\":%.9g", position);
+        printf(",\"maxPositionDeltaByControlPoint\":%.9g", position);
         if (has_uv) printf(",\"maxUvDeltaInCornerOrder\":%.9g", uv);
         if (has_normal) printf(",\"maxNormalAngleInCornerOrder\":%.9g", normal);
     }
     puts("}");
     ufbx_free_scene(exported);
     ufbx_free_scene(original);
-    return 0;
+    return topology && weights ? 0 : 1;
 }

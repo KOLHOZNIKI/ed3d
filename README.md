@@ -19,7 +19,7 @@ Open the localhost URL printed by Vite. Choose a Tripo ZIP or select a binary FB
 | `npm run build` | Check types and generate the static build in `dist/`. |
 | `npm run preview` | Serve the production build locally after building it. |
 
-Install dependencies with `npm ci` so the build uses the versions recorded in `package-lock.json`.
+`npm ci` uses the versions recorded in `package-lock.json` and applies the FBX patches in `patches/`.
 
 ## Dependencies
 
@@ -31,7 +31,8 @@ Install dependencies with `npm ci` so the build uses the versions recorded in `p
 | `vite` | MIT | Local development server and static bundling. |
 | `@comfyorg/fbx-exporter-three` | MIT | Candidate binary FBX writer for E00. |
 | `fflate` | MIT | Local ZIP reading and writing. |
+| `patch-package` | MIT | Apply the pinned loader and writer patches during installation. |
 
 ## E00 verification
 
-The [FBX and ZIP report](Docs/E00_FBX_Round_Trip.md) records the Unity and ufbx results, known topology loss, and commands to repeat the checks. The [technical specification](Docs/AssetFixer_Technical_Specification_v1.0.md#sec-21) covers the rest of E00.
+The [FBX and ZIP report](Docs/E00_FBX_Round_Trip.md) records the Unity and ufbx results, source polygon preservation, and commands to repeat the checks. The [technical specification](Docs/AssetFixer_Technical_Specification_v1.0.md#sec-21) covers the rest of E00.

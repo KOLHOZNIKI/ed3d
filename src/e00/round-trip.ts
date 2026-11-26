@@ -2,6 +2,7 @@ import { FBXExporter } from '@comfyorg/fbx-exporter-three';
 import { LoadingManager, Mesh, SkinnedMesh, type Group, type Texture } from 'three';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { validateFbxAxes } from './fbx-profile';
+import { useSourceTopology } from './fbx-topology';
 import { inputLimit, pack, unpack, type Files } from './zip';
 
 const imagePattern = /\.(png|jpe?g)$/i;
@@ -14,7 +15,7 @@ const textureSemantics: Record<string, string> = {
 };
 
 type TextureEntry = { texture: Texture; fileName: string; slotName: string };
-type TexturePlan = { textures?: { textures: Map<Texture, TextureEntry> } };
+type ExportPlan = { meshes: Parameters<typeof useSourceTopology>[0][]; textures?: { textures: Map<Texture, TextureEntry> } };
 
 export interface ImportedAsset {
   name: string;
@@ -105,7 +106,8 @@ export async function exportAsset(asset: ImportedAsset): Promise<{ name: string;
   const linked: { semantic: string; file: string; source: string | null }[] = [];
   const assigned = new Set<string>();
   const pending: Promise<void>[] = [];
-  const fbx = new FBXExporter().register((plan: TexturePlan) => {
+  const fbx = new FBXExporter().register((plan: ExportPlan) => {
+    for (const mesh of plan.meshes) useSourceTopology(mesh);
     for (const entry of plan.textures?.textures.values() ?? []) {
       const image = entry.texture.image;
       if (!(image instanceof HTMLImageElement) || !image.naturalWidth) throw new Error('An FBX texture could not be decoded.');
@@ -140,7 +142,7 @@ export async function exportAsset(asset: ImportedAsset): Promise<{ name: string;
     stage: 'E00', model, unitsInCentimeters: asset.unitScale, meshes: asset.stats,
     textures: linked, unassignedTextures: unassigned,
     warnings: [
-      'Prototype export. FBX material properties, rig transforms and render-vertex connectivity may change.',
+      'Prototype export. FBX material properties and rig representation may change.',
       'Unassigned textures are carried as files and require manual assignment in Unity.',
     ],
   }, null, 2) + '\n'));

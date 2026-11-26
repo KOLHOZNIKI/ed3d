@@ -8,17 +8,20 @@ Chrome opened each fixture, downloaded its FBX ZIP, and reopened the ZIP with th
 
 | Fixture | Unity 2022.3.62f2 and 6000.3.9f1 | Independent read with ufbx v0.23.0 |
 | --- | --- | --- |
-| Static ceramic plate | 9,138 triangles, identical sampled base positions and bounds, one Base Color map linked. | Axes and units matched. Control points increased from 4,577 to 27,414. |
-| Skinned Tripo character | 17,623 triangles, 67 bones and bind matrices, identical sampled base positions, valid Humanoid Avatar before and after export. Both Base Color and Normal were linked. Maximum weight delta was `3.73e-9`. Maximum world-space delta was `4.95e-7 m` at rest and `5.57e-7 m` across three rotations of `Left_LowerArm`. The source contains no clips. | Axes and units matched, and the maximum influence count remained four. Control points increased from 8,829 to 52,869. |
-| Synthetic skinned ribbon | Two bones and one one-second clip. No measured deformation difference at 21 samples, including the keyed extrema at 0.25 s and 0.75 s. | Axes and units matched. One animation stack. Control points increased from six to twelve. |
+| Static ceramic plate | 9,138 triangles, identical sampled base positions and bounds, one Base Color map linked. | 4,577 control points, 5,134 polygons and 19,406 corners. Exact polygon connectivity, positions and corner UVs. |
+| Skinned Tripo character | 17,623 triangles, 67 bones and bind matrices, identical sampled base positions and weights, valid Humanoid Avatar before and after export. Both Base Color and Normal were linked. Maximum world-space delta was `4.95e-7 m` at rest and `5.57e-7 m` across three rotations of `Left_LowerArm`. The source contains no clips. | 8,829 control points, 9,287 polygons and 36,197 corners. Exact polygon connectivity, positions, corner UVs and original skin indices and weights. |
+| Synthetic skinned ribbon | Two bones and one one-second clip. No measured deformation difference at 21 samples, including the keyed extrema at 0.25 s and 0.75 s. | Six control points and four polygons with exact connectivity. One animation stack. |
 
-The exported ZIPs retain all source JPEG bytes. The character's Roughness and Metallic maps are included in `unassigned/` and require manual assignment. Unity's comparison used Generic rigs, imported normals, calculated MikkTSpace tangents, four skin influences, file scale, and disabled mesh compression, animation compression, mesh optimization, and axis baking. Humanoid Avatar validity was checked separately on the real character. The position probe matches vertices by their coordinates in Unity world space. UV and corner correspondence remain unverified on the real assets.
+The ufbx check compares polygon boundaries and the control point index at every corner. Axes and units matched for all three fixtures. The maximum corner normal difference on either Tripo fixture was about `1.21e-6°`. The exported ZIPs retain all source JPEG bytes. The character's Roughness and Metallic maps are included in `unassigned/` and require manual assignment.
+
+Unity's comparison used Generic rigs, imported normals, calculated MikkTSpace tangents, four skin influences, file scale, and disabled mesh compression, animation compression, mesh optimization, and axis baking. Humanoid Avatar validity was checked separately on the real character. The Unity position probe matches vertices by their coordinates in world space.
 
 ## Compatibility decisions
 
 - Both Tripo fixtures declare +X right, +Y up, +Z front, and 100 centimeters per source unit. The Comfy exporter emits these axis signs with `axisForward: '-Z'`. The prototype copies the source `UnitScaleFactor` and keeps `bakeSpaceTransform` disabled. Other axis conventions require separate validation.
-- The current Three.js path expands the source FBX control points into independent polygon corners on export. This **breaks source connectivity** even though Unity imports and deforms the fixtures. Retaining control-point provenance through import, geometry editing, and export remains an E00 gate.
-- AT-01 and AT-02 have initial fixture results. Full acceptance still requires a real animated FBX, a check after an edit, topology and UV seam correspondence, and visual comparison. The synthetic FBX is generated with the same candidate writer and tests animation preservation through reimport and another export. The GLB and geometry prototypes are tracked in the specification.
+- The first export prototype wrote one control point per render triangle corner. The adapter now reads the source control points, polygon boundaries, corner attributes and skin clusters from the patched Three.js loader. It passes polygon indices and per-corner layers to the patched Comfy writer while the preview continues to use triangles. `npm ci` applies both patches at their pinned dependency versions.
+- The source polygons and skin are currently read-only export inputs. The geometry editing stage needs to feed the writer from its working topology. The prototype reports an export error for morph targets and meshes without source polygons.
+- AT-01 and AT-02 have initial fixture results. Full acceptance still requires a real animated FBX, a check after an edit and visual comparison. The synthetic FBX is generated with the same candidate writer and tests animation preservation through reimport and another export. The GLB and geometry prototypes are tracked in the specification.
 
 ## Fixtures
 
@@ -57,7 +60,7 @@ $unity.WaitForExit()
 Get-Content (Join-Path $project 'e00-report.json')
 ```
 
-Use `cl.exe` from an x64 Visual Studio Developer PowerShell to compile the independent reader. Run it against each pair in the generated project's `Assets/Fixtures` directory. [ufbx v0.23.0 source and license](https://github.com/ufbx/ufbx/tree/v0.23.0)
+Use `cl.exe` from an x64 Visual Studio Developer PowerShell to compile the independent reader. Run it against each pair in the generated project's `Assets/Fixtures` directory. It returns a nonzero exit code when polygon connectivity or source skin weights differ. [ufbx v0.23.0 source and license](https://github.com/ufbx/ufbx/tree/v0.23.0)
 
 ```powershell
 git clone --branch v0.23.0 --depth 1 https://github.com/ufbx/ufbx.git test-results/e00/ufbx
