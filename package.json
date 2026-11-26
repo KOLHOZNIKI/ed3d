@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@comfyorg/fbx-exporter-three": "1.0.2",
+    "fast-png": "8.0.0",
     "fflate": "0.8.3",
     "three": "0.187.0",
     "xatlas-wasm": "0.1.3"

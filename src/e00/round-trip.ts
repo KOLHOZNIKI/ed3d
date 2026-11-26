@@ -1,5 +1,5 @@
 import { FBXExporter } from '@comfyorg/fbx-exporter-three';
-import { LoadingManager, Mesh, type Group, type Texture } from 'three';
+import { ClampToEdgeWrapping, LoadingManager, Mesh, type Group, type Texture } from 'three';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { validateFbxAxes } from './fbx-profile';
 import { offsetControlPointY, useSourceTopology } from './fbx-topology';
@@ -9,6 +9,7 @@ import type { TexturePaint } from './paint';
 import type { RepairPatch } from './repair';
 import type { UvAtlasEdit } from './uv-atlas';
 import { inputLimit, pack, unpack, type Files } from './zip';
+import { readAlphaProfile, type AlphaProfile } from './alpha-profile';
 
 const imagePattern = /\.(png|jpe?g)$/i;
 const emptyImage = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
@@ -30,6 +31,7 @@ export interface ImportedAsset {
   stats: ReturnType<typeof sceneStats>;
   images: Files;
   imagePathsByUrl: Map<string, string>;
+  alphaProfile?: AlphaProfile;
   positionEdit?: Readonly<{ geometry: Mesh['geometry']; positions: Float64Array; controlPoint: number; offsetY: number }>;
   repairPatch?: RepairPatch;
   uvAtlas?: UvAtlasEdit;
@@ -94,7 +96,8 @@ export async function importAsset(input: readonly File[]): Promise<ImportedAsset
       throw new Error('FBX does not declare a valid unit scale.');
     }
     const stats = sceneStats(scene, 'FBX');
-    return { format: 'fbx', name: basename(modelPath).slice(0, -4), scene, unitScale, stats, images, imagePathsByUrl };
+    const alphaProfile = readAlphaProfile(files.get('manifest.json'), modelPath, scene);
+    return { format: 'fbx', name: basename(modelPath).slice(0, -4), scene, unitScale, stats, images, imagePathsByUrl, alphaProfile };
   } finally {
     for (const url of [...urls.values(), ...embedded]) URL.revokeObjectURL(url);
   }
@@ -135,6 +138,14 @@ export async function exportAsset(asset: ImportedAsset): Promise<{ name: string;
         const semantic = textureSemantics[entry.slotName];
         const file = `${name}.fbm/${semantic}.png`;
         entry.fileName = file;
+        // The atlas already contains the source sampling transform.
+        entry.texture = entry.texture.clone();
+        entry.texture.offset.set(0, 0);
+        entry.texture.repeat.set(1, 1);
+        entry.texture.center.set(0, 0);
+        entry.texture.rotation = 0;
+        entry.texture.matrix.identity();
+        if (asset.alphaProfile) entry.texture.wrapS = entry.texture.wrapT = ClampToEdgeWrapping;
         files.set(file, entry.slotName === 'map' && paint ? paint.png : baked.png);
         linked.push({ semantic, file, source: baked.source, rebaked: true });
         assigned.add(baked.source);
@@ -184,6 +195,7 @@ export async function exportAsset(asset: ImportedAsset): Promise<{ name: string;
   }
   files.set('manifest.json', new TextEncoder().encode(JSON.stringify({
     stage: 'E00', model, unitsInCentimeters: asset.unitScale, meshes: asset.stats,
+    assetFixerMaterial: asset.alphaProfile && { ...asset.alphaProfile, uvTransform: bake ? undefined : asset.alphaProfile.uvTransform },
     positionEdit: edit && { controlPoint: edit.controlPoint, offsetY: edit.offsetY },
     repair: repair && { ...repair.metadata, sourceCornerMap: cornerMap },
     uvAtlas: atlas && { channel: bake ? 'uv0' : atlas.channel, sourceCornerMap: cornerMap, ...atlas.metrics },
@@ -197,6 +209,7 @@ export async function exportAsset(asset: ImportedAsset): Promise<{ name: string;
     warnings: [
       'Prototype export. FBX material properties and rig representation may change.',
       'Unassigned textures are carried as files and require manual assignment in Unity.',
+      ...(asset.alphaProfile ? ['Use assetFixerMaterial in this manifest to configure the Unity material alpha mode and cutoff.'] : []),
       ...(bake ? ['Baked textures use the atlas in UV0 for Unity. The original UV layout is retained in UV1.']
         : atlas ? ['Atlas export writes triangles with UV1. Existing textures continue to use UV0.'] : []),
     ],

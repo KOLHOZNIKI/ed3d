@@ -46,6 +46,7 @@ After rebaking a static mesh with one base color map, turn on **3D brush (visibl
 | `vite` | MIT | Local development server and static bundling. |
 | `@comfyorg/fbx-exporter-three` | MIT | Candidate binary FBX writer for E00. |
 | `fflate` | MIT | Local ZIP reading and writing. |
+| `fast-png` | MIT | Preserve straight RGBA pixels during the alpha bake. |
 | `xatlas-wasm` | MIT | Generate and pack UV charts in a browser worker. |
 | `patch-package` | MIT | Apply the pinned loader and writer patches during installation. |
 

@@ -1,5 +1,7 @@
 # E00 texture rebake
 
+The later [UV transform and alpha probe](E00_UV_Transforms_Alpha.md) extends the same export path to one transformed RGBA8 Base Color with mask or blend alpha.
+
 **Generate UV atlas** builds a candidate UV1 layout. **Rebake textures** transfers maps from the original import to that layout in a local browser worker. **Discard texture bake** restores the atlas with the source textures on UV0. The viewport shows the original import during this probe. In the baked FBX ZIP, the atlas becomes the first UV set so Unity materials and MikkTSpace tangent generation use it by default. The original UV coordinates remain in the second set.
 
 The worker rasterizes each atlas triangle and samples the corresponding source triangle by barycentric interpolation. Base color is bilinearly sampled in linear light and encoded as sRGB PNG. Roughness and Metallic are processed as linear data. The normal pass interpolates both MikkTSpace frames, transforms the sampled normal through their shared surface space, and normalizes the result before writing the texel. It uses both tangent signs to handle mirrored UVs. [Three.js MikkTSpace implementation](https://github.com/mrdoob/three.js/blob/r187/examples/jsm/libs/mikktspace.module.js) and [Unity MikkTSpace importer](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/ModelImporterTangents.CalculateMikk.html)

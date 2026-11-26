@@ -14,7 +14,8 @@ export function paintableMesh(asset: ImportedAsset) {
   const mesh = asset.scene.getObjectByProperty('isMesh', true);
   const material = mesh instanceof Mesh ? mesh.material : null;
   if (asset.textureBake?.maps.length === 1 && asset.uvAtlas && mesh instanceof Mesh && !(mesh instanceof SkinnedMesh)
-      && (material instanceof MeshPhongMaterial || material instanceof MeshLambertMaterial) && material.side === FrontSide) return mesh;
+      && (material instanceof MeshPhongMaterial || material instanceof MeshLambertMaterial)
+      && !material.transparent && material.alphaTest === 0 && material.side === FrontSide) return mesh;
 }
 
 export async function paintStroke(asset: ImportedAsset, camera: Camera, screenWidth: number, screenHeight: number,

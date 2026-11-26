@@ -25,7 +25,7 @@ export async function unpack(bytes: Uint8Array): Promise<Files> {
     if (paths.size > 256 || !Number.isSafeInteger(originalSize) || originalSize < 0 || originalSize > entryLimit || total > totalLimit) {
       throw new Error('ZIP exceeds the file count or expanded size limit.');
     }
-    if (!normalized.endsWith('/') && /\.(fbx|png|jpe?g)$/i.test(path)) {
+    if (!normalized.endsWith('/') && (/\.(fbx|png|jpe?g)$/i.test(path) || (path === 'manifest.json' && originalSize <= 64 * 1024))) {
       if ((compression === 0 && size !== originalSize) || size > bytes.byteLength) throw new Error(`Invalid ZIP entry size: ${name}`);
       accepted.set(name, originalSize);
     }

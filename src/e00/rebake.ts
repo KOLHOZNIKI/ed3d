@@ -1,4 +1,5 @@
-import { Mesh, MeshPhongMaterial, MeshLambertMaterial, RepeatWrapping, type Texture } from 'three';
+import { ClampToEdgeWrapping, Mesh, MeshPhongMaterial, MeshLambertMaterial, MirroredRepeatWrapping, RepeatWrapping, type Texture, type Wrapping } from 'three';
+import { decode } from 'fast-png';
 import type { ImportedAsset } from './round-trip';
 import type { BakeInput, BakeMap, BakeOutput } from './rebake-worker';
 import { bakeScale, chartPadding } from './atlas-raster';
@@ -21,8 +22,8 @@ export async function rebakeAsset(asset: ImportedAsset): Promise<ImportedAsset> 
   }
   const material = mesh.material;
   if (!(material instanceof MeshPhongMaterial || material instanceof MeshLambertMaterial) || !material.map ||
-      material.transparent || material.alphaTest > 0) {
-    throw new Error('The E00 bake requires one opaque textured FBX material.');
+      ((material.transparent || material.alphaTest > 0) && !asset.alphaProfile)) {
+    throw new Error('The E00 bake requires one textured FBX material and an explicit profile for alpha.');
   }
   const normal = material instanceof MeshPhongMaterial ? material.normalMap : null;
   for (const [slot, value] of Object.entries(material)) {
@@ -60,12 +61,37 @@ export async function rebakeAsset(asset: ImportedAsset): Promise<ImportedAsset> 
 async function readLinkedMap(asset: ImportedAsset, slot: string, texture: Texture): Promise<BakeMap> {
   const image = texture.image;
   const source = image instanceof HTMLImageElement && asset.imagePathsByUrl.get(image.src);
-  if (!source || texture.channel !== 0 || !texture.flipY || texture.repeat.x !== 1 || texture.repeat.y !== 1 ||
-      texture.offset.x !== 0 || texture.offset.y !== 0 || texture.rotation !== 0 ||
-      texture.wrapS !== RepeatWrapping || texture.wrapT !== RepeatWrapping) {
-    throw new Error('The E00 bake requires a local UV0 texture with default mapping and repeat wrap.');
+  if (!source || texture.channel !== 0 || !texture.flipY) {
+    throw new Error('The E00 bake requires a local UV0 texture with the FBX image orientation.');
   }
-  return { slot, source, mode: slot === 'normalMap' ? 'normal' : 'srgb', ...await readPixels(asset.images.get(source)!) };
+  if (texture.matrixAutoUpdate) texture.updateMatrix();
+  const m = texture.matrix.elements;
+  const uvTransform = [m[0], m[3], m[6], m[1], m[4], m[7]] as const;
+  if (!uvTransform.every(Number.isFinite)) throw new Error('The source UV transform contains non-finite values.');
+  if (slot === 'normalMap' && uvTransform.some((value, i) => value !== Number(i === 0 || i === 4))) {
+    throw new Error('The E00 bake does not yet support a normal map with its own UV transform.');
+  }
+  const bytes = asset.images.get(source)!;
+  const preserveAlpha = slot === 'map' && !!asset.alphaProfile;
+  const imageData = preserveAlpha ? readRgbaPng(bytes) : await readPixels(bytes);
+  return { slot, source, mode: slot === 'normalMap' ? 'normal' : 'srgb', uvTransform, preserveAlpha,
+    wrapS: samplerWrap(texture.wrapS), wrapT: samplerWrap(texture.wrapT), ...imageData };
+}
+
+function samplerWrap(wrap: Wrapping): NonNullable<BakeMap['wrapS']> {
+  if (wrap === RepeatWrapping) return 'repeat';
+  if (wrap === MirroredRepeatWrapping) return 'mirror';
+  if (wrap === ClampToEdgeWrapping) return 'clamp';
+  throw new Error('Unsupported source texture wrapping.');
+}
+
+function readRgbaPng(bytes: Uint8Array<ArrayBuffer>) {
+  const image = decode(bytes);
+  if (image.depth !== 8 || image.channels !== 4 || image.palette) {
+    throw new Error('The E00 alpha profile requires an 8-bit RGBA PNG Base Color.');
+  }
+  // Canvas 2D loses RGB at zero alpha through premultiplication.
+  return { width: image.width, height: image.height, pixels: new Uint8ClampedArray(image.data) };
 }
 
 async function readPixels(bytes: Uint8Array<ArrayBuffer>) {

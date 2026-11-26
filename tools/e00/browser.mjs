@@ -4,10 +4,11 @@ import { basename, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { strToU8, unzipSync, zipSync } from 'fflate';
 import { createServer, preview } from 'vite';
+import { decode } from 'fast-png';
 
-const { values: { edited, glb, unwrap, rebake, paint, repair }, positionals } = parseArgs({
+const { values: { edited, glb, unwrap, rebake, paint, repair, alpha }, positionals } = parseArgs({
   options: { edited: { type: 'boolean' }, glb: { type: 'string' }, unwrap: { type: 'boolean' }, rebake: { type: 'boolean' },
-    paint: { type: 'boolean' }, repair: { type: 'boolean' } }, allowPositionals: true,
+    paint: { type: 'boolean' }, repair: { type: 'boolean' }, alpha: { type: 'boolean' } }, allowPositionals: true,
 });
 const [tripoPath, chromePath, animatedSource, realAnimatedSource] = positionals;
 if (!tripoPath) throw new Error('Supply the path to the Tripo sample directory.');
@@ -238,6 +239,43 @@ try {
         const expected = new RegExp(`^${name}.*_e00_${kind} · (.*) triangles · ${bones} bones · ${clips} clips`);
         assert.match(reimported, expected);
         assert.equal(Number(expected.exec(reimported)[1].replace(/\D/g, '')), triangles);
+      }
+    }
+
+    if (alpha) {
+      for (const alphaMode of ['mask', 'blend']) {
+        const name = `alpha_transform_${alphaMode}`;
+        await input.setInputFiles(resolve('test-results/e00/alpha-fixture', `${name}.zip`));
+        await page.waitForFunction(() => !document.querySelector('#sources').disabled);
+        assert.match(await status.textContent(), new RegExp(`^${name} · 4 triangles · 0 bones`));
+        await page.locator('#unwrap').click();
+        await page.waitForFunction(() => !document.querySelector('#unwrap').disabled, null, { timeout: 120000 });
+        assert.match(await status.textContent(), /Generated [2-9]\d* charts/);
+        await page.getByRole('button', { name: 'Rebake textures' }).click();
+        await page.waitForFunction(() => !document.querySelector('#rebake').disabled, null, { timeout: 120000 });
+        assert.match(await status.textContent(), /Rebaked 1 maps from UV0 to UV1/);
+        assert.ok(await page.locator('#paint').isDisabled());
+        const [download] = await Promise.all([page.waitForEvent('download'), exportButton.click()]);
+        assert.equal(download.suggestedFilename(), `${name}_e00_baked.zip`);
+        const exported = join(output, download.suggestedFilename());
+        await download.saveAs(exported);
+        const files = unzipSync(await readFile(exported));
+        const manifest = JSON.parse(new TextDecoder().decode(files['manifest.json']));
+        assert.deepEqual(manifest.assetFixerMaterial, alphaMode === 'mask' ? { alphaMode, alphaCutoff: 0.5 } : { alphaMode });
+        const image = decode(files[manifest.textures[0].file]);
+        assert.equal(image.channels, 4);
+        const observed = new Set();
+        let hiddenRgb = 0;
+        for (let i = 0; i < image.data.length; i += 4) {
+          observed.add(image.data[i + 3]);
+          if (image.data[i + 3] === 0 && (image.data[i] || image.data[i + 1] || image.data[i + 2])) hiddenRgb++;
+        }
+        for (const value of [0, 64, 140, 255]) assert.ok(observed.has(value));
+        assert.ok(hiddenRgb > 0);
+        await input.setInputFiles(exported);
+        await page.waitForFunction(() => !document.querySelector('#sources').disabled);
+        assert.match(await status.textContent(), new RegExp(`^${name}_e00_baked · 4 triangles · 0 bones`));
+        console.log(name, { charts: manifest.uvAtlas.charts, width: image.width, height: image.height, hiddenRgb, alphaLevels: observed.size });
       }
     }
 

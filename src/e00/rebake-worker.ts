@@ -1,6 +1,8 @@
 import { generateTangents } from 'three/addons/libs/mikktspace.module.js';
 import { Vector3 } from 'three';
+import { encode } from 'fast-png';
 import type { TextureBake } from './rebake';
+import type { UvTransform } from './alpha-profile';
 import { paddingSources, rasterize } from './atlas-raster';
 
 export interface BakeMap {
@@ -10,6 +12,10 @@ export interface BakeMap {
   width: number;
   height: number;
   pixels: Uint8ClampedArray<ArrayBuffer>;
+  uvTransform?: UvTransform;
+  wrapS?: 'repeat' | 'clamp' | 'mirror';
+  wrapT?: 'repeat' | 'clamp' | 'mirror';
+  preserveAlpha?: boolean;
 }
 
 export interface BakeInput {
@@ -65,7 +71,7 @@ async function bake(input: BakeInput): Promise<BakeOutput> {
     const pixels = image.data;
     for (let pixel = 0; pixel < faces.length; pixel++) {
       const face = faces[pixel];
-      pixels[pixel * 4 + 3] = 255;
+      pixels[pixel * 4 + 3] = map.preserveAlpha ? 0 : 255;
       if (face <= 0) continue;
       const i = (face - 1) * 3;
       const b = wb[pixel], c = wc[pixel], a = 1 - b - c;
@@ -99,18 +105,27 @@ async function bake(input: BakeInput): Promise<BakeOutput> {
       const source = (-face - 1) * 4;
       pixels.copyWithin(pixel * 4, source, source + 4);
     }
-    context.putImageData(image, 0, 0);
-    const png = new Uint8Array(await (await canvas.convertToBlob({ type: 'image/png' })).arrayBuffer());
+    let png: Uint8Array<ArrayBuffer>;
+    if (map.preserveAlpha) {
+      png = new Uint8Array(encode({ width, height, data: new Uint8Array(pixels.buffer), channels: 4 }));
+    } else {
+      context.putImageData(image, 0, 0);
+      png = new Uint8Array(await (await canvas.convertToBlob({ type: 'image/png' })).arrayBuffer());
+    }
     maps.push({ slot: map.slot, source: map.source, png });
   }
   return { width, height, padding, covered, padded, boundaryOnlyTriangles, maps };
 }
 
-function sample({ width, height, pixels, mode }: BakeMap, u: number, v: number, out: number[]) {
-  const x = (u - Math.floor(u)) * width - 0.5, y = (-v - Math.floor(-v)) * height - 0.5;
+function sample({ width, height, pixels, mode, uvTransform, wrapS, wrapT }: BakeMap, u: number, v: number, out: number[]) {
+  if (uvTransform) {
+    const [a, b, c, d, e, f] = uvTransform;
+    [u, v] = [a * u + b * v + c, d * u + e * v + f];
+  }
+  const x = u * width - 0.5, y = (1 - v) * height - 0.5;
   const ix = Math.floor(x), iy = Math.floor(y);
-  const x0 = (ix + width) % width, x1 = (x0 + 1) % width;
-  const y0 = (iy + height) % height, y1 = (y0 + 1) % height;
+  const x0 = wrapIndex(ix, width, wrapS), x1 = wrapIndex(ix + 1, width, wrapS);
+  const y0 = wrapIndex(iy, height, wrapT), y1 = wrapIndex(iy + 1, height, wrapT);
   const fx = x - ix, fy = y - iy;
   const a = 4 * (y0 * width + x0), b = 4 * (y0 * width + x1), c = 4 * (y1 * width + x0), d = 4 * (y1 * width + x1);
   for (let k = 0; k < 4; k++) {
@@ -123,4 +138,13 @@ function sample({ width, height, pixels, mode }: BakeMap, u: number, v: number, 
     const value = (1 - fy) * ((1 - fx) * s0 + fx * s1) + fy * ((1 - fx) * s2 + fx * s3);
     out[k] = useSrgb ? encodeSrgb(value) : value;
   }
+}
+
+function wrapIndex(index: number, size: number, wrap: BakeMap['wrapS']): number {
+  if (wrap === 'clamp') return Math.min(size - 1, Math.max(0, index));
+  if (wrap === 'mirror') {
+    const i = index - Math.floor(index / (2 * size)) * (2 * size);
+    return i < size ? i : 2 * size - 1 - i;
+  }
+  return index - Math.floor(index / size) * size;
 }

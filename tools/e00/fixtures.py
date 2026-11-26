@@ -36,6 +36,7 @@ def main():
     parser.add_argument("--rebake", action="store_true")
     parser.add_argument("--paint", action="store_true")
     parser.add_argument("--repair", action="store_true")
+    parser.add_argument("--alpha", action="store_true")
     args = parser.parse_args()
 
     results = Path("test-results/e00")
@@ -47,6 +48,7 @@ def main():
         + ("-bake" if args.rebake else "")
         + ("-paint" if args.paint else "")
         + ("-repair" if args.repair else "")
+        + ("-alpha" if args.alpha else "")
     )
     cases = [
         ("static", args.tripo_dir / "ceramic plate 3d model.zip", "ceramic_plate_3d_model_e00.zip"),
@@ -57,10 +59,23 @@ def main():
         cases.append(("animated", args.animation, "animated_fixture_e00.zip"))
     if args.real_animation:
         cases.append(("real-animated", args.real_animation, f"{args.real_animation.stem}_e00.zip"))
+    if args.alpha:
+        cases = [
+            (mode, results / "alpha-fixture" / f"alpha_transform_{mode}.zip", f"alpha_transform_{mode}_e00_baked.zip")
+            for mode in ("mask", "blend")
+        ]
     edits = {}
     if args.edited:
         edits = json.loads(Path(__file__).with_name("position-edits.json").read_text(encoding="utf-8"))
     for name, source, exported in cases:
+        if args.alpha:
+            case = project / "Assets" / "Fixtures" / name
+            for bundle, location in ((source, case / "original"), (results / "exports" / exported, case / "exported")):
+                copy_bundle(bundle, location)
+                with ZipFile(bundle) as archive:
+                    (location / "manifest.json").write_bytes(archive.read("manifest.json"))
+            copy_corner_map(results / "exports" / exported, case)
+            continue
         if args.repair:
             if name != "static":
                 continue
@@ -117,6 +132,9 @@ def main():
         copy2(Path(__file__).with_name("PaintProbe.cs"), editors)
     if args.repair:
         copy2(Path(__file__).with_name("RepairProbe.cs"), editors)
+    if args.alpha:
+        copy2(Path(__file__).with_name("AlphaBakeProbe.cs"), editors)
+        copy2(Path(__file__).parent.parent / "unity" / "AssetFixerAlphaMaterialImporter.cs", editors)
     settings = project / "ProjectSettings"
     settings.mkdir(exist_ok=True)
     (settings / "ProjectVersion.txt").write_text(f"m_EditorVersion: {args.unity_version}\n", encoding="utf-8")
