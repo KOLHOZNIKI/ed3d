@@ -40,7 +40,7 @@ public static class FbxProbe
         public bool compatible;
         public AssetInfo original, exported;
         public float tolerance, baseError, maxWeightError, restError, maxPoseError, originalMotion;
-        public float maxClipError, originalClipMotion;
+        public float maxClipError, maxClipDurationError, originalClipMotion;
         public int clipSamples;
         public string testedBone;
         public bool originalHumanoidAvatar, exportedHumanoidAvatar;
@@ -204,43 +204,47 @@ public static class FbxProbe
 
         result.maxWeightError = WeightDelta(before, after, matches);
         if (edit != null) before.ApplyPoseProbeMove(moved, worldOffset);
-        result.restError = Delta(before.PosedPoints(), after.PosedPoints(), matches);
-        var joint = before.skin.bones.FirstOrDefault(bone => bone.name == "Left_LowerArm" || bone.name == "Hinge");
-        if (joint == null) throw new InvalidOperationException($"No designated probe joint for {fixture}.");
-        var target = after.skin.bones.FirstOrDefault(bone => bone.name == joint.name);
-        if (target == null) { result.compatible = false; return result; }
-        result.testedBone = joint.name;
         var rest = before.PosedPoints();
-        var originalRotation = joint.localRotation;
-        var exportedRotation = target.localRotation;
+        result.restError = Delta(rest, after.PosedPoints(), matches);
+        result.compatible &= result.maxWeightError <= 1e-5f && result.restError <= tolerance;
+        var joint = before.skin.bones.FirstOrDefault(bone => bone.name == "Left_LowerArm" || bone.name == "Hinge");
         var identity = Enumerable.Range(0, rest.Length).ToArray();
-        foreach (float angle in new[] { -35f, 20f, 55f }) {
-            var rotation = Quaternion.AngleAxis(angle, Vector3.forward);
-            joint.localRotation = originalRotation * rotation;
-            target.localRotation = exportedRotation * rotation;
-            var originalPose = before.PosedPoints();
-            result.maxPoseError = Mathf.Max(result.maxPoseError, Delta(originalPose, after.PosedPoints(), matches));
-            result.originalMotion = Mathf.Max(result.originalMotion, Delta(rest, originalPose, identity));
+        if (joint != null) {
+            var target = after.skin.bones.FirstOrDefault(bone => bone.name == joint.name);
+            if (target == null) { result.compatible = false; return result; }
+            result.testedBone = joint.name;
+            var originalRotation = joint.localRotation;
+            var exportedRotation = target.localRotation;
+            foreach (float angle in new[] { -35f, 20f, 55f }) {
+                var rotation = Quaternion.AngleAxis(angle, Vector3.forward);
+                joint.localRotation = originalRotation * rotation;
+                target.localRotation = exportedRotation * rotation;
+                var originalPose = before.PosedPoints();
+                result.maxPoseError = Mathf.Max(result.maxPoseError, Delta(originalPose, after.PosedPoints(), matches));
+                result.originalMotion = Mathf.Max(result.originalMotion, Delta(rest, originalPose, identity));
+            }
+            joint.localRotation = originalRotation;
+            target.localRotation = exportedRotation;
+            result.compatible &= result.maxPoseError <= tolerance && result.originalMotion > tolerance;
         }
-        joint.localRotation = originalRotation;
-        target.localRotation = exportedRotation;
-        result.compatible &= result.maxWeightError <= 1e-5f && result.restError <= tolerance && result.maxPoseError <= tolerance
-            && result.originalMotion > tolerance;
 
         for (int clip = 0; clip < Math.Min(before.clips.Length, after.clips.Length); clip++) {
             var sourceClip = before.clips[clip];
             var outputClip = after.clips[clip];
-            result.compatible &= Mathf.Abs(sourceClip.length - outputClip.length) <= 1e-5f;
+            result.maxClipDurationError = Mathf.Max(result.maxClipDurationError, Mathf.Abs(sourceClip.length - outputClip.length));
+            Vector3[] firstPose = null;
             for (int sample = 0; sample <= 20; sample++) {
                 sourceClip.SampleAnimation(before.root, sourceClip.length * sample / 20f);
                 outputClip.SampleAnimation(after.root, outputClip.length * sample / 20f);
                 var pose = before.PosedPoints();
+                if (sample == 0) firstPose = pose;
                 result.maxClipError = Mathf.Max(result.maxClipError, Delta(pose, after.PosedPoints(), matches));
-                result.originalClipMotion = Mathf.Max(result.originalClipMotion, Delta(rest, pose, identity));
+                result.originalClipMotion = Mathf.Max(result.originalClipMotion, Delta(firstPose, pose, identity));
                 result.clipSamples++;
             }
         }
-        result.compatible &= result.maxClipError <= tolerance && (result.clipSamples == 0 || result.originalClipMotion > tolerance);
+        result.compatible &= result.maxClipDurationError <= 1e-5f && result.maxClipError <= tolerance
+            && (joint != null || result.clipSamples > 0) && (result.clipSamples == 0 || result.originalClipMotion > tolerance);
         return result;
     }
 

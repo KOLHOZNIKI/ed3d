@@ -1,5 +1,5 @@
 diff --git a/node_modules/three/examples/jsm/loaders/FBXLoader.js b/node_modules/three/examples/jsm/loaders/FBXLoader.js
-index fc155a4..421f04c 100644
+index fc155a4..6d4db2e 100644
 --- a/node_modules/three/examples/jsm/loaders/FBXLoader.js
 +++ b/node_modules/three/examples/jsm/loaders/FBXLoader.js
 @@ -1805,6 +1805,19 @@ class GeometryParser {
@@ -22,3 +22,19 @@ index fc155a4..421f04c 100644
  		const buffers = this.genBuffers( geoInfo );
  
  		const positionAttribute = new Float32BufferAttribute( buffers.vertex, 3 );
+@@ -2968,7 +2981,14 @@ class AnimationParser {
+ 
+ 		}
+ 
+-		return new AnimationClip( rawClip.name, - 1, tracks );
++		const clip = new AnimationClip( rawClip.name, - 1, tracks );
++		if ( this.trimAnimationClips !== true && rawClip.localStop > rawClip.localStart ) {
++
++			// Keep the authored take range, which can extend beyond its last key.
++			clip.assetFixerFbxRange = { start: rawClip.localStart, stop: rawClip.localStop };
++
++		}
++		return clip;
+ 
+ 	}
+ 

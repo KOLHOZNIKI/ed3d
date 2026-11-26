@@ -86,6 +86,90 @@ static double normal_angle(ufbx_vec3 a, ufbx_vec3 b)
     return acos(fmax(-1.0, fmin(1.0, cosine))) * (180.0 / acos(-1.0));
 }
 
+static double point_distance(ufbx_vec3 a, ufbx_vec3 b)
+{
+    return length3((ufbx_vec3){ .x = a.x - b.x, .y = a.y - b.y, .z = a.z - b.z });
+}
+
+static ufbx_scene *evaluate(const ufbx_scene *scene, const ufbx_anim_stack *stack, double time)
+{
+    ufbx_error error;
+    const ufbx_evaluate_opts opts = { .evaluate_skinning = true };
+    ufbx_scene *pose = ufbx_evaluate_scene(scene, stack->anim, time, &opts, &error);
+    if (!pose) {
+        char description[1024];
+        ufbx_format_error(description, sizeof(description), &error);
+        fprintf(stderr, "%s\n", description);
+        exit(1);
+    }
+    return pose;
+}
+
+static ufbx_vec3 posed_point(const ufbx_scene *scene, size_t index)
+{
+    const ufbx_mesh *mesh = scene->meshes.data[0];
+    ufbx_vec3 point = mesh->skinned_position.values.data[index];
+    if (mesh->skinned_is_local) point = ufbx_transform_position(&mesh->instances.data[0]->geometry_to_world, point);
+    const double meters = scene->settings.unit_meters;
+    return (ufbx_vec3){ .x = point.x * meters, .y = point.y * meters, .z = point.z * meters };
+}
+
+static bool compare_clips(const ufbx_scene *original, const ufbx_scene *exported)
+{
+    if (original->anim_stacks.count == 0) return exported->anim_stacks.count == 0;
+    const ufbx_mesh *mesh = original->meshes.data[0];
+    const ufbx_mesh *target_mesh = exported->meshes.data[0];
+    if (mesh->instances.count != 1 || target_mesh->instances.count != 1) return false;
+
+    const ufbx_matrix *matrix = &mesh->instances.data[0]->geometry_to_world;
+    ufbx_vec3 min = ufbx_transform_position(matrix, mesh->vertices.data[0]), max = min;
+    for (size_t i = 1; i < mesh->num_vertices; i++) {
+        const ufbx_vec3 point = ufbx_transform_position(matrix, mesh->vertices.data[i]);
+        min = (ufbx_vec3){ .x = fmin(min.x, point.x), .y = fmin(min.y, point.y), .z = fmin(min.z, point.z) };
+        max = (ufbx_vec3){ .x = fmax(max.x, point.x), .y = fmax(max.y, point.y), .z = fmax(max.z, point.z) };
+    }
+    const double tolerance = fmax(1e-6, 1e-4 * original->settings.unit_meters * point_distance(min, max));
+    bool names_match = original->anim_stacks.count == exported->anim_stacks.count;
+    double max_start_error = 0, max_duration_error = 0, max_error = 0, source_deformation = 0;
+    size_t samples = 0;
+    for (size_t i = 0; i < original->anim_stacks.count; i++) {
+        const ufbx_anim_stack *a = original->anim_stacks.data[i], *b = NULL;
+        for (size_t j = 0; j < exported->anim_stacks.count; j++) {
+            const ufbx_anim_stack *candidate = exported->anim_stacks.data[j];
+            if (strcmp(a->name.data, candidate->name.data) == 0) {
+                if (b) names_match = false;
+                b = candidate;
+            }
+        }
+        if (!b) { names_match = false; continue; }
+        const double duration = a->time_end - a->time_begin, target_duration = b->time_end - b->time_begin;
+        max_start_error = fmax(max_start_error, fabs(a->time_begin - b->time_begin));
+        max_duration_error = fmax(max_duration_error, fabs(duration - target_duration));
+        ufbx_scene *first = evaluate(original, a, a->time_begin);
+        for (int sample = 0; sample <= 20; sample++) {
+            const double fraction = sample / 20.0;
+            ufbx_scene *left = evaluate(original, a, a->time_begin + duration * fraction);
+            ufbx_scene *right = evaluate(exported, b, b->time_begin + target_duration * fraction);
+            const ufbx_vec3 anchor = posed_point(left, 0), first_anchor = posed_point(first, 0);
+            for (size_t vertex = 0; vertex < mesh->num_vertices; vertex++) {
+                const ufbx_vec3 point = posed_point(left, vertex);
+                max_error = fmax(max_error, point_distance(point, posed_point(right, vertex)));
+                source_deformation = fmax(source_deformation, fabs(point_distance(point, anchor) -
+                    point_distance(posed_point(first, vertex), first_anchor)));
+            }
+            samples++;
+            ufbx_free_scene(right);
+            ufbx_free_scene(left);
+        }
+        ufbx_free_scene(first);
+    }
+    printf(",\"animation\":{\"sameNames\":%s,\"samples\":%zu,\"maxStartErrorSeconds\":%.9g,"
+           "\"maxDurationErrorSeconds\":%.9g,\"maxDeformationErrorMeters\":%.9g,"
+           "\"sourceShapeChangeMeters\":%.9g,\"deformationToleranceMeters\":%.9g}",
+           names_match ? "true" : "false", samples, max_start_error, max_duration_error, max_error, source_deformation, tolerance);
+    return names_match && max_start_error <= 1e-5 && max_duration_error <= 1e-5 && max_error <= tolerance && source_deformation > tolerance;
+}
+
 int main(int argc, char **argv)
 {
     if (argc != 3 && argc != 5) {
@@ -160,8 +244,9 @@ int main(int argc, char **argv)
                    edit_matches ? "true" : "false");
         }
     }
+    const bool animation = topology && compare_clips(original, exported);
     puts("}");
     ufbx_free_scene(exported);
     ufbx_free_scene(original);
-    return topology && weights && edit_matches ? 0 : 1;
+    return topology && weights && edit_matches && animation ? 0 : 1;
 }

@@ -1,5 +1,5 @@
 diff --git a/node_modules/@comfyorg/fbx-exporter-three/dist/builders/objects/geometry.js b/node_modules/@comfyorg/fbx-exporter-three/dist/builders/objects/geometry.js
-index 9a2c23e..facbc7b 100644
+index 9a2c23e..da208cf 100644
 --- a/node_modules/@comfyorg/fbx-exporter-three/dist/builders/objects/geometry.js
 +++ b/node_modules/@comfyorg/fbx-exporter-three/dist/builders/objects/geometry.js
 @@ -160,10 +160,12 @@ export function writeGeometry(ctx) {
@@ -62,3 +62,28 @@ index 9a2c23e..facbc7b 100644
      }
      elemDataSingleString(layer, 'MappingInformationType', 'ByPolygon');
      elemDataSingleString(layer, 'ReferenceInformationType', 'IndexToDirect');
+diff --git a/node_modules/@comfyorg/fbx-exporter-three/dist/data/animationCollector.js b/node_modules/@comfyorg/fbx-exporter-three/dist/data/animationCollector.js
+index c2953bb..1fb15ee 100644
+--- a/node_modules/@comfyorg/fbx-exporter-three/dist/data/animationCollector.js
++++ b/node_modules/@comfyorg/fbx-exporter-three/dist/data/animationCollector.js
+@@ -16,8 +16,7 @@ const _quat = new Quaternion();
+ function secondsToKTime(seconds) {
+     if (!Number.isFinite(seconds))
+         return 0n;
+-    const micros = BigInt(Math.round(seconds * 1_000_000));
+-    return (micros * FBX_KTIME) / 1000000n;
++    return BigInt(Math.round(seconds * Number(FBX_KTIME)));
+ }
+ const KINDS = {
+     position: { attrName: 'T', fbxProp: 'Lcl Translation', axes: ['X', 'Y', 'Z'] },
+@@ -159,8 +158,8 @@ function buildStackPlan({ clip, root, nodeMap, uids, templates, meshes }) {
+         stackKey, stackUid,
+         layerKey, layerUid,
+         name: clip.name || 'AnimStack',
+-        start: 0n,
+-        stop: secondsToKTime(durationSec),
++        start: secondsToKTime(clip.assetFixerFbxRange?.start ?? 0),
++        stop: secondsToKTime(clip.assetFixerFbxRange?.stop ?? durationSec),
+         curveNodes,
+     };
+ }

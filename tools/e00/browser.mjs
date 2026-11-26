@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { mkdir, readFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { strToU8, unzipSync, zipSync } from 'fflate';
 import { createServer, preview } from 'vite';
 
 const args = process.argv.slice(2);
 const edited = args.includes('--edited');
-const [tripoPath, chromePath, animatedSource] = args.filter(arg => arg !== '--edited');
+const [tripoPath, chromePath, animatedSource, realAnimatedSource] = args.filter(arg => arg !== '--edited');
 if (!tripoPath) throw new Error('Supply the path to the Tripo sample directory.');
 const { chromium } = await import('../../test-results/e00-browser/node_modules/playwright-core/index.mjs');
 const output = resolve('test-results/e00/exports');
@@ -37,6 +37,7 @@ try {
       [join(tripoPath, 'ceramic plate 3d model.zip'), 'ceramic_plate_3d_model', 9138, 0, 0],
       [join(tripoPath, 'tripo_convert_8b04a473-804b-41a0-ab47-e84ae233629b.zip'), 'tripo_convert_8b04a473', 17623, 67, 0],
       ...(animatedSource ? [[animatedSource, 'animated_fixture', 4, 2, 1]] : []),
+      ...(realAnimatedSource ? [[realAnimatedSource, basename(realAnimatedSource, '.fbx'), 1604, 45, 1]] : []),
     ];
     for (const [path, name, triangles, bones, clips] of cases) {
       const expected = new RegExp(`^${name}.* · (.*) triangles · ${bones} bones · ${clips} clips`);
