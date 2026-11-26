@@ -51,6 +51,4 @@ After rebaking a static mesh with one base color map, turn on **3D brush (visibl
 
 ## E00 verification
 
-The [FBX and ZIP report](Docs/E00_FBX_Round_Trip.md) records the Unity and ufbx results. The [GLB report](Docs/E00_GLB_Round_Trip.md) covers the Tripo character, exact texture and weight checks, and Khronos validation. The [xatlas report](Docs/E00_XAtlas.md) covers UV1 generation and vertex attributes at seams. The [texture rebake report](Docs/E00_Texture_Rebake.md) covers the texture transfer and Unity render comparisons. The [technical specification](Docs/AssetFixer_Technical_Specification_v1.0.md#sec-21) covers the rest of E00.
-
-The [3D brush report](Docs/E00_3D_Brush.md) covers the exported stroke across two new UV seams on the plate. The [Smooth and Grid Fill report](Docs/E00_Smooth_Grid.md) covers the local geometry repair and FBX round-trip.
+The [E00 verification report](Docs/E00_Report.md) consolidates the results, backend decisions, fixture provenance, and E01 readiness checklist. It links the individual test recipes and reference exports.

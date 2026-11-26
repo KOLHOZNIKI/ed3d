@@ -1,0 +1,95 @@
+# AssetFixer E00 verification and E01 readiness
+
+**Status on 2026-11-27. E00 has working exports and selected backends for the verified profiles. The specification gate remains open.** Four of the seven questions in [§21.4](AssetFixer_Technical_Specification_v1.0.md#sec-21) have fixture-level answers. Direct bake with texture transforms and alpha, controlled normal rebake, typical-asset memory, and the test corpus still need work before E00 sign-off.
+
+## Verified results
+
+| Check | Fixture and observed result | Evidence |
+| --- | --- | --- |
+| Static FBX ZIP | Tripo plate. 4,577 control points, 5,134 polygons, and 9,138 triangles. ufbx matched positions, polygon connectivity and corner UVs. Both Unity versions matched base geometry and linked Base Color. | [FBX round-trip](E00_FBX_Round_Trip.md#results) |
+| Skinned FBX ZIP | Tripo character. 8,829 control points, 17,623 triangles, and 67 bones. ufbx matched original skin cluster indices and weights exactly. Unity retained the Humanoid Avatar and linked Base Color and Normal. Maximum world-space difference across three forearm rotations was `5.57e-7 m`. The Tripo source has no clips. | [FBX round-trip](E00_FBX_Round_Trip.md#results) |
+| Actual local geometry edit | One control point on a UV seam moved by 1 mm on each Tripo FBX. The plate's four Unity vertex copies and the character's two copies moved together. Polygon connectivity, corner UVs and original skin weights survived. The maximum Unity base-position difference from the expected character edit was `4.66e-8 m`. | [Position edit](E00_FBX_Round_Trip.md#position-edit-round-trip) |
+| FBX animation | The synthetic two-bone ribbon matched at 21 Unity samples, including the keyed extrema. A separate authored Maya/Kenney FBX retained one clip, 45 bones, and exact skin weights. ufbx retained the authored range of `0–20/24 s` and measured a maximum deformation difference of `1.02e-6 m`. Unity imported the same `16/24 s` keyed interval from both files and measured `1.72e-4 m` maximum difference over 21 samples, within the fixture tolerance of `5.33e-4 m`. | [Authored FBX animation](E00_FBX_Round_Trip.md#authored-animation-round-trip) |
+| Self-contained GLB | The Tripo character retained geometry, triangle indices, UV0, exact embedded JPEG and PNG bytes, 67 joint names/hierarchy and exact joint and weight arrays. The adapter corrected rounding in 22 inverse bind matrix rows. Independent skin evaluation measured at most `1.01e-7 m` difference. The Khronos validator went from 22 errors to zero and reported three existing warnings on each file. | [GLB round-trip](E00_GLB_Round_Trip.md) |
+| xatlas | Both Tripo FBX fixtures retained source control points, corner attributes and skin through seam splits. Each exported corner maps back to its source corner. Unity matched character weights exactly. Seven imported character normals had vector differences above `1e-5`, with maximum angle about `0.04°`. ufbx measured `1.21e-6°` maximum corner angle for both FBX files. | [xatlas](E00_XAtlas.md) |
+| Direct texture rebake | Plate Base Color at 2396 × 2396. Character Base Color, Normal, Roughness and Metallic at 2828 × 2842. The final repack had 49 and 511 charts respectively. The FBX links Base Color and Normal where present and packages the two scalar character maps for manual assignment. Six views in both Unity versions showed no new dark seam lines after dilation. Mean lit seam error was `0.09/255` and `0.54/255` respectively. The character's highest seam pixel error was `46/255`. Local resampling differences remain at high-contrast transitions. | [Texture rebake](E00_Texture_Rebake.md) |
+| 3D brush | The exported plate retained one stroke across two new UV seams. Both Unity versions measured zero gaps at 323 samples around the crossings and at 1,168 centerline samples. All 310,242 visible underside pixels matched. Two pixels away from the crossings blended brush and base color under filtering. Undo restored the previous PNG byte for byte. | [3D brush](E00_3D_Brush.md) |
+| Smooth and Grid Fill | Same eight-edge cavity across an original plate UV seam. Smooth rebuilt eight triangles and moved the center by 1.865 mm. Grid rebuilt four quads and moved the center by 1.569 mm. Both Unity versions retained all eight boundary joins, both center UV variants, and the 9,130 outside triangles exactly. ufbx independently reconstructed each expected patch and matched the positions and corner UVs. | [Smooth and Grid Fill](E00_Smooth_Grid.md) |
+| Build and controlled failures | Release and Debug builds passed the type check. The Windows launcher served the selected build from a different working directory. The Release script installed dependencies in a clean copy. Browser probes verified missing texture, ZIP path traversal and unsupported Z-up diagnostics. The local workflows made no external requests. | [Build and launch](../README.md#local-development), [FBX input checks](E00_FBX_Round_Trip.md#results) |
+
+Unity evidence uses 2022.3.62f2 and 6000.3.9f1. Baseline FBX imports used Generic rigs, imported normals, calculated MikkTSpace tangents, four skin influences, file scale, and mesh and animation compression disabled. Humanoid validity was checked separately. Bake and brush render comparisons used fixed cameras, uncompressed maps and mipmaps. GLB evidence comes from Chrome, an independent Python reader and the Khronos validator.
+
+## Backend decisions and supported profile
+
+Versions are pinned in [package.json](../package.json) and [package-lock.json](../package-lock.json). Update either patched dependency together with its round-trip checks.
+
+| Area | Decision and rationale | Verified limits and consequences |
+| --- | --- | --- |
+| Runtime and build | Use strict TypeScript 7.0.2, Vite 8.4.0, and Three.js 0.187.0 with WebGL2. Workers perform xatlas, bake and brush jobs locally. | The current application is the E00 prototype on Windows. Performance, long-session behavior, resource budgeting and context recovery remain open. |
+| FBX read and topology | Keep the pinned Three.js FBXLoader with a patch that records raw control points, polygon boundaries, per-corner attributes, raw skin clusters, authored clip limits and the render-corner map. Use that provenance to build stable document IDs in E01. | The verified path uses binary FBX with +X right, +Y up and +Z front. The two Tripo assets use 100 cm per source unit. The working document still needs its own topological IDs and resource ownership. The coincident-but-disconnected case needs its own fixture. |
+| FBX write and packaging | Use patched `@comfyorg/fbx-exporter-three@1.0.2` for source polygon/control-point indexing, raw cluster preservation and authored take timing. Apply patches with `patch-package@8.0.1`. Use `fflate@0.8.3` for local ZIPs with FBX, PNG/JPEG maps and a manifest. Retain `ufbx@0.23.0` as the independent reader. | Verified skin has at most four influences and the authored animation has one layer and one clip. FBX export with morph targets is blocked. Other axes, complex rigs, animation layers, richer material graphs and embedded texture variations are outside the verified profile. External maps the adapter cannot bind are inventoried in the ZIP. ZIP policy limits are 160 MiB input, 128 MiB per expanded entry, 256 MiB total expanded size and 256 entries. |
+| GLB read and write | Use the pinned Three.js GLTFLoader/Exporter, exact-weight loading and embedded image pass-through. Verify with the independent Python reader and `gltf-validator@2.0.0-dev.3.10`. | Verified on one unedited, self-contained GLB scene with one indexed triangle primitive per mesh, embedded JPEG/PNG and at most four influences. Compressed extensions such as Draco, Meshopt and KTX2/BasisU are rejected by the current extension profile. Textured GLB editing, authored GLB animation, morphs and Unity GLB import have no E00 fixture result. |
+| Automatic UV | Use the thin `xatlas-wasm@0.1.3` adapter over source control-point triangles. Preserve `xref` and the source corner map and reconstruct the render attributes with application code. This keeps source correspondence explicit across chart splits. | The tested operation accepts one unedited FBX mesh with one UV set. It exports triangles when chart edges cross original polygon diagonals. Multi-mesh atlases, morphs, GLB unwrap and unwrap after a geometry edit are outside this probe. Packing conflicts were detected at the final bake raster's texel centers and repacked. |
+| Direct bake and normals | Use a CPU raster worker with barycentric sampling, sRGB handling for Base Color, linear handling for scalar maps and nearest-seed padding. Convert tangential normals through source and target MikkTSpace frames with handedness. Promote the atlas from UV1 to the primary UV set for the baked Unity FBX and keep the original set second. | One opaque material on one mesh, default repeating UV0 mapping and local PNG/JPEG maps. Transformed UVs and alpha remain open. The method is a same-surface transfer and has no spatial projection backend. The real character result is a comparison of RGB-encoded world normals. |
+| 3D brush | Keep the visible-projection prototype over the baked atlas. It writes a Base Color PNG snapshot and verifies reversibility. | Static opaque single-material mesh, fixed 24-viewport-pixel brush, update at pointer release. Topology-constrained footprints, skinned paint and the shared 2D/3D history are later work. |
+| Smooth and Grid | Keep constrained Laplacian fairing for the single interior vertex of an eight-triangle fan and a 2 × 2 Coons grid for the four-sided fixture. The checked boundary and per-corner mapping travel with the edit. | This is the tested four-quad replacement case. General hole detection, other loops or densities, protected openings, new-hole UV generation and Bridge are later geometry work. |
+
+The source topology, original resource bytes and working revisions are separate concerns for E01. The E00 Three.js scene and render buffers are adapters. The archived prototypes and probes remain regression entry points.
+
+## Requirement coverage
+
+These are bounded E00 outcomes. Full V1 acceptance still follows [§22.5](AssetFixer_Technical_Specification_v1.0.md#sec-22).
+
+| Requirement or test | E00 status |
+| --- | --- |
+| USR-01, USR-02 and AT-01 | Local browser workflow and the listed FBX/GLB round-trips verified. |
+| USR-06, USR-17 and CORE-01–03, CORE-06–08 | Source IDs, corner provenance, preservation after a local move and original-byte retention verified on the listed paths. A dedicated working document and disconnected-coincident fixture are open. |
+| AT-02 | Fixture pass for the ribbon and one authored single-layer clip. The ribbon includes extrema. The authored clip evidence uses 21 samples and covers that clip only. |
+| USR-08, UV-17 and AT-11 | Verified on the two Tripo FBX fixtures, including skin and the original UVs. Morph unwrap is blocked by the prototype. A dedicated adverse skin/morph fixture remains open. |
+| USR-07, BAKE-01, BAKE-06, AT-12 and AT-13 | Same-surface opaque transfer and collision detection at the bake resolution demonstrated. The controlled mirrored normal test and transformed/alpha fixtures are open. |
+| USR-03, PAINT3D-03, PAINT3D-05 and AT-07 | Static plate passes the seam and underside probe. The hidden neighboring-object and skinned cases have no positive result yet. |
+| USR-15 and AT-18 | Smooth and Grid pass the limited four-quad repair. Other fill methods and the general repair workflow are assigned to E05/E08. |
+| AT-31 | Missing-texture, unsafe ZIP-path and unsupported-axis failures tested. Full corrupt-index, non-manifold and adverse-morph corpus coverage remains open. |
+
+## E00 exit checklist
+
+| §21.4 question | Current determination | Evidence needed to close the remaining scope |
+| --- | --- | --- |
+| 1. Static and skinned FBX into Unity | Answered on the verified assets | Keep the Unity and ufbx checks as regressions. |
+| 2. Preserved topology and weights before conversion | Answered on the verified FBX assets | Add the F01/F02 controlled witnesses required by the corpus, including equal positions with distinct control-point IDs. |
+| 3. Complete correspondence after xatlas | Answered on the two Tripo fixtures | Retain the original-corner and skin invariants in regression tests. |
+| 4. Direct bake with seams, texture transforms and alpha | **Partial** | Add an F08 case with known UV transforms and Cutout/Blend alpha. Check texture sampling, alpha mode and edge padding on export/reimport. Require the §22.2 interior tolerances of `1/255` for a lossless identity transfer and `2/255` for a constant-color atlas bake. |
+| 5. Rotated/mirrored tangent-space normals | **Partial** | Add F14 with a directional normal map, known chart rotation and mirrored handedness. Compare reconstructed normals in a shared space away from resampling edges and require the §22.2 limit of 2°. |
+| 6. Minimal Smooth/Grid implementation | Answered for the tested four-sided contour | Preserve the pinned-boundary test. Broader methods belong to the E05/E08 repair stages. |
+| 7. Typical-profile memory fit | **Open** | Measure a near-target fixture at 50,000 triangles, 100 bones and four 2K maps. Record peak and post-close memory across import, unwrap, bake, paint/undo and export, with repeated cycles and documented CPU, GPU, OS and browser. Use the 1920 × 1080 DPR 1 baseline and confirm on the user's workstation under §20.2. Document safe budgets, timing and any memory accounting estimates. |
+
+[§22.1](AssetFixer_Technical_Specification_v1.0.md#sec-22) also requires a prepared corpus with source, permission, expected behavior and checksums. Close corpus preparation before claiming the E00 gate. Some of the executable scenarios use features scheduled after E00. In particular, the F18 workload data and resource expectations can be prepared now, and the saved-project recovery scenario uses E01's serializer. Any change to the corpus gate should be recorded explicitly.
+
+| Corpus state | Fixture IDs and next step |
+| --- | --- |
+| Verified | **F06** real Tripo plate and **F09** one-mesh standard skin. The real authored Kenney FBX and the generated ribbon supplement F09's clip checks. |
+| Partial or candidates | **F03** has the plate's local Smooth result and needs controlled concave/planar and non-planar holes. **F04** has a local bottle candidate and needs a prepared protected-mouth/defect fixture. **F05** has a four-sided Grid probe and needs a separate two-loop Bridge fixture. **F07** has local collection candidates and needs verified shared-atlas/component metadata. **F11** has the Tripo character as a candidate and needs recorded heavyset rig/weight expectations. **F12** has a Z-up refusal and needs an authored root/axis/scale case. **F16** has controlled input refusals and needs corrupt indices and non-manifold cases. |
+| Missing | **F01** checker cube with UV/hard-normal seams, **F02** disconnected coincident coordinates, **F08** complex material/UV/alpha bindings, **F10** shared skeleton on body and clothing, **F13** adverse skin/morph data, **F14** directional normal map on rotated/mirrored UVs, **F15** two adjacent surfaces, **F17** compressed GLB from an actual generator, and **F18** large maps and edit-history workload. |
+
+For F17, obtain a real generator file and identify its required extensions, compatible offline decoder and expected failure or round-trip behavior. The actual Tripo GLB already tested is uncompressed. Keep the documented Tripo fixtures as local regression inputs and identify a legitimate Meshy sample for the format coverage decision in §24.2. Resolve redistribution rights before checking in original or derived third-party assets.
+
+After the E00 gate, E01's acceptance is a separate scenario. Open a model into the working document, preserve the originals, save an `.assetfixer` project, restart and reopen without the original files, then export. Resource ownership, stable IDs, commands and autosave belong to that stage. The E00 geometry, skin and UV checks carry forward as adapter regressions.
+
+## Fixture provenance
+
+The Tripo inputs are user-provided local files under `D:/downloads/Tripo`. The checksums below were verified against the local originals. Tripo redistribution permission has not been established. The Kenney FBX is read from the pinned ufbx corpus checkout and is used locally. Establish its asset-level distribution terms before repackaging it. The project-owned synthetic ribbon is regenerated using [animated-fixture.mjs](../tools/e00/animated-fixture.mjs).
+
+| Input | Origin and expected content | SHA-256 |
+| --- | --- | --- |
+| `ceramic plate 3d model.zip` | Tripo static plate with Base Color | `ec8526eaab70239d8b7ac96ccdc57e7dc7f03b6929d3ca8b01b88c6236d7f4a3` |
+| `tripo_convert_8b04a473-804b-41a0-ab47-e84ae233629b.zip` | Tripo character FBX with 67 bones and no clips | `262f01fc2dc745bc991fd8a14539793bc7b6331a0dcba508aae44556c5a5119d` |
+| `tripo_convert_720eb24f-5864-47f1-8cfb-aed1d6df6c86.zip` | Tripo Z-up FBX used for the axis refusal | `b1e9d3fde54c82d561f6838d5e43f23f46c3f95a8d132ff2f11b2c97f725526d` |
+| `man character 3d model.glb` | Tripo uncompressed GLB with 67 bones and embedded Base Color and Normal | `ca424258eabe304d78b5834a7e77d463bc9acbd2443d97c8f1d60a2cfbee72ff` |
+| `maya_kenney_character_7700_binary.fbx` | ufbx v0.23.0 corpus, 45 bones and one authored clip | `b84398b1876edb4a718615985a801393fcc0548e8e65a5c3ba133f30993c3b0e` |
+| `animated_fixture.fbx` | Project-generated ribbon, two bones and one one-second clip. Hash of the local generated sample. | `b0deaa251d3cbcd901cd3ed5c65d279b8e89a43635a5898277c43e8c01b0ccfb` |
+
+## Reproduce and locate evidence
+
+Use [build-release.cmd](../build-release.cmd) and [build-debug.cmd](../build-debug.cmd) for the Windows builds and [run.cmd](../run.cmd) to serve them. Node.js 22.16.0 passed both builds for this report. The detailed reports linked above give fixture setup, test flags and Unity batch commands. Use the pinned Playwright 1.65.1 with installed Chrome, the ufbx v0.23.0 native reader for FBX, and the Python reader and pinned Khronos validator for GLB.
+
+Reference exports are under the ignored workspace path `test-results/e00/exports/`. For the plate and character FBX names, the ZIP suffixes are `_e00`, `_e00_edited`, `_e00_atlas`, and `_e00_baked`. The plate also has `_e00_painted`, `_e00_smooth`, and `_e00_grid`. The animation references are `animated_fixture_e00.zip` and `maya_kenney_character_7700_binary_e00.zip`. The GLB reference is `man character 3d model_e00.glb`. Raw reports and screenshots remain under `test-results/e00/` and its generated Unity projects. The linked recipes regenerate the artifacts on another checkout with access to the fixtures.
