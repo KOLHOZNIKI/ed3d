@@ -1,6 +1,6 @@
 # AssetFixer
 
-AssetFixer is a local browser-based editor for refining generated 3D assets before importing them into Unity. The repository currently contains the development toolchain and a Three.js scene for checking WebGL2.
+AssetFixer is a local browser-based editor for refining generated 3D assets before importing them into Unity. The E00 prototype opens and exports FBX packages in the browser.
 
 ## Local development
 
@@ -11,7 +11,7 @@ npm ci
 npm run dev
 ```
 
-Open the localhost URL printed by Vite. A colored cube and the WebGL2 status message confirm that the renderer initialized.
+Open the localhost URL printed by Vite. Choose a Tripo ZIP or select a binary FBX and its PNG or JPEG textures together. Use **Export FBX ZIP** to download the reconstructed FBX, external maps, and `manifest.json`. Extract the package into Unity's `Assets` folder to import it. The manifest identifies textures that require manual assignment.
 
 | Command | Purpose |
 | --- | --- |
@@ -29,7 +29,9 @@ Install dependencies with `npm ci` so the build uses the versions recorded in `p
 | `@types/three` | MIT | Type definitions matching the Three.js release. |
 | `typescript` | Apache-2.0 | Strict type checking. |
 | `vite` | MIT | Local development server and static bundling. |
+| `@comfyorg/fbx-exporter-three` | MIT | Candidate binary FBX writer for E00. |
+| `fflate` | MIT | Local ZIP reading and writing. |
 
-## First development stage
+## E00 verification
 
-E00 begins with one static FBX fixture and one skinned FBX fixture with an animation. Record the fixture sources and redistribution permissions. Verify import and export with Unity 2022.3 LTS and an independent FBX reader. The [technical specification](Docs/AssetFixer_Technical_Specification_v1.0.md#sec-21) lists the remaining prototypes and acceptance criteria.
+The [FBX and ZIP report](Docs/E00_FBX_Round_Trip.md) records the Unity and ufbx results, known topology loss, and commands to repeat the checks. The [technical specification](Docs/AssetFixer_Technical_Specification_v1.0.md#sec-21) covers the rest of E00.

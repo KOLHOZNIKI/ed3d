@@ -20,13 +20,27 @@
         max-width: 100%;
         height: auto;
       }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.75rem;
+      }
     </style>
   </head>
   <body>
     <main>
       <h1>AssetFixer</h1>
-      <p id="status" role="status">Checking WebGL2 support…</p>
-      <canvas id="viewport" width="640" height="480" role="img" aria-label="WebGL2 test scene" hidden></canvas>
+      <p>E00 FBX round-trip prototype</p>
+      <div class="actions">
+        <label for="sources">Open a Tripo ZIP or select one FBX with its maps</label>
+        <input type="file" id="sources" accept=".zip,.fbx,.png,.jpg,.jpeg" multiple />
+        <button id="export" type="button" disabled>Export FBX ZIP</button>
+      </div>
+      <p id="status" role="status">Select a binary FBX package to inspect it locally.</p>
+      <p>Prototype exports can change mesh connectivity. The ZIP manifest lists maps that require manual assignment in Unity.</p>
+      <canvas id="viewport" width="640" height="480" role="img" aria-label="Imported model preview" hidden></canvas>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>
