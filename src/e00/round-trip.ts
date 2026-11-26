@@ -222,9 +222,9 @@ export async function exportAsset(asset: ImportedAsset): Promise<{ name: string;
     repair: repair && { ...repair.metadata, sourceCornerMap: cornerMap },
     uvAtlas: atlas && { channel: bake ? 'uv0' : atlas.channel, sourceCornerMap: cornerMap, ...atlas.metrics },
     textureBake: bake && {
-      source: 'Original import', layout: 'uv1', exportedLayout: 'uv0', originalLayout: 'uv1',
+      source: bake.projection?.sourceName ?? 'Original import', layout: 'uv1', exportedLayout: 'uv0', originalLayout: 'uv1',
       width: bake.width, height: bake.height, padding: bake.padding, covered: bake.covered,
-      padded: bake.padded, boundaryOnlyTriangles: bake.boundaryOnlyTriangles, auxiliaryMaps,
+      padded: bake.padded, boundaryOnlyTriangles: bake.boundaryOnlyTriangles, auxiliaryMaps, projection: bake.projection,
     },
     texturePaint: paint && { semantic: 'BaseColor', channel: 'uv0', strokes: paint.strokes, lastStrokeTexels: paint.lastStrokeTexels },
     textures: linked, unassignedTextures: unassigned,

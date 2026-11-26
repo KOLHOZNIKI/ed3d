@@ -4,6 +4,7 @@ import { encode } from 'fast-png';
 import type { TextureBake } from './rebake';
 import type { UvTransform } from './alpha-profile';
 import { paddingSources, rasterize } from './atlas-raster';
+import { projectTextureCoordinates, type ProjectionInput } from './projection-rays';
 
 export interface BakeMap {
   slot: string;
@@ -27,6 +28,7 @@ export interface BakeInput {
   sourceUv: Float32Array<ArrayBuffer>;
   targetUv: Float32Array<ArrayBuffer>;
   maps: BakeMap[];
+  projection?: ProjectionInput;
 }
 
 export type BakeOutput = TextureBake;
@@ -63,6 +65,10 @@ async function bake(input: BakeInput): Promise<BakeOutput> {
   const targetTangent = hasNormals ? generateTangents(position, normals, targetUv) : null;
   const n = new Vector3(), ts = new Vector3(), tt = new Vector3(), cross = new Vector3();
   const color = [0, 0, 0, 0];
+  const projection = input.projection && projectTextureCoordinates(input.projection, position, normals, sourceUv);
+  const projectedUv: [number, number] = [0, 0];
+  const missColor = [255, 0, 255, 255];
+  let misses = 0;
   const canvas = new OffscreenCanvas(width, height);
   const context = canvas.getContext('2d')!;
   const maps: BakeOutput['maps'] = [];
@@ -75,8 +81,16 @@ async function bake(input: BakeInput): Promise<BakeOutput> {
       if (face <= 0) continue;
       const i = (face - 1) * 3;
       const b = wb[pixel], c = wc[pixel], a = 1 - b - c;
-      const u = lerpAttribute(sourceUv, 2, i, 0, a, b, c), v = lerpAttribute(sourceUv, 2, i, 1, a, b, c);
-      sample(map, u, v, color);
+      if (projection) {
+        if (!projection(face - 1, a, b, c, projectedUv)) {
+          pixels.set(missColor, pixel * 4);
+          misses++;
+          continue;
+        }
+        sample(map, projectedUv[0], projectedUv[1], color);
+      } else {
+        sample(map, lerpAttribute(sourceUv, 2, i, 0, a, b, c), lerpAttribute(sourceUv, 2, i, 1, a, b, c), color);
+      }
       if (map.mode === 'normal' && sourceTangent && targetTangent) {
         const basis = (attr: Float32Array, stride: number, out: Vector3) => out.set(
           lerpAttribute(attr, stride, i, 0, a, b, c), lerpAttribute(attr, stride, i, 1, a, b, c),
@@ -114,7 +128,9 @@ async function bake(input: BakeInput): Promise<BakeOutput> {
     }
     maps.push({ slot: map.slot, source: map.source, png });
   }
-  return { width, height, padding, covered, padded, boundaryOnlyTriangles, maps };
+  return { width, height, padding, covered, padded, boundaryOnlyTriangles, maps,
+    projection: input.projection && { sourceName: input.projection.sourceName, misses, maxDistance: input.projection.maxDistance,
+      eligibleSources: input.projection.eligibleSources } };
 }
 
 function sample({ width, height, pixels, mode, uvTransform, wrapS, wrapT }: BakeMap, u: number, v: number, out: number[]) {

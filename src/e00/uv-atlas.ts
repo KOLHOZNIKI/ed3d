@@ -1,5 +1,6 @@
 import { BufferAttribute, BufferGeometry, Mesh, type TypedArray } from 'three';
-import { sourceMesh, type FbxSourceMesh } from './fbx-topology';
+import { renderControlPoints, sourceMesh, type FbxSourceMesh } from './fbx-topology';
+import { faceComponents } from './topology-components';
 import type { ImportedAsset } from './round-trip';
 import type { AtlasInput, AtlasOutput } from './xatlas-worker';
 
@@ -7,6 +8,7 @@ export interface UvAtlasEdit {
   inputGeometry: BufferGeometry;
   geometry: BufferGeometry;
   sourceCorners: Uint32Array<ArrayBuffer>;
+  faceComponents: Uint32Array<ArrayBuffer>;
   channel: 'uv1';
   metrics: {
     width: number; height: number; charts: number; separatedFaces: number; milliseconds: number;
@@ -26,10 +28,7 @@ export async function unwrapAsset(asset: ImportedAsset): Promise<ImportedAsset> 
     throw new Error('The atlas probe requires one source UV set and a non-indexed FBX preview with source corners.');
   }
   const positions = Float32Array.from(source.positions);
-  const controlPoints = Uint32Array.from(source.renderCorners, corner => {
-    const index = source.polygons[corner];
-    return index < 0 ? -index - 1 : index;
-  });
+  const controlPoints = renderControlPoints(source);
   const faceMaterialData = new Uint32Array(controlPoints.length / 3);
   for (const group of geometry.groups) {
     faceMaterialData.fill(group.materialIndex ?? 0, group.start / 3, (group.start + group.count) / 3);
@@ -114,5 +113,5 @@ function remap(input: BufferGeometry, source: FbxSourceMesh, controlPoints: Uint
     controlPoints: vertexCounts.length, chartVertices: atlas.xrefs.length, renderVertices: sourcePreviewVertices.length,
     splitControlPoints: vertexCounts.reduce((count, vertices) => count + Number(vertices > 1), 0),
   };
-  return { inputGeometry: input, geometry, sourceCorners: source.renderCorners.slice(), channel: 'uv1', metrics };
+  return { inputGeometry: input, geometry, sourceCorners: source.renderCorners.slice(), faceComponents: faceComponents(controlPoints), channel: 'uv1', metrics };
 }

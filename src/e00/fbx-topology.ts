@@ -33,6 +33,13 @@ export function sourceMesh(geometry: BufferGeometry): FbxSourceMesh {
   return source;
 }
 
+export function renderControlPoints(source: FbxSourceMesh): Uint32Array<ArrayBuffer> {
+  return Uint32Array.from(source.renderCorners, corner => {
+    const index = source.polygons[corner];
+    return index < 0 ? ~index : index;
+  });
+}
+
 export function offsetControlPointY(geometry: BufferGeometry, controlPoint: number, offsetY: number): Float64Array {
   const source = sourceMesh(geometry);
   if (!Number.isInteger(controlPoint) || controlPoint < 0 || controlPoint >= source.positions.length / 3) {

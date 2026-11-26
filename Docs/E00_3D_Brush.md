@@ -2,7 +2,7 @@
 
 The static Tripo ceramic plate uses the 2396 × 2396 atlas from the [texture rebake probe](E00_Texture_Rebake.md). Turn on **3D brush (visible projection)** after rebaking, choose a Base Color, and drag on the surface. This mode projects a 24-viewport-pixel brush onto camera-visible triangles. It applies the stroke at pointer release. **Undo stroke** restores the previous PNG snapshot byte for byte.
 
-The worker rasterizes the stroke as a continuous polyline in screen space. For each atlas texel, it projects the corresponding point on the triangle, tests the brush mask, and checks front-facing orientation and occlusion against nearby projected triangles. Adjacent triangles on different UV islands sample the same stroke. Painted texels extend into the baked gutter up to sixteen texels. The working PNG owns the result used by the preview and the ZIP exporter. The baked layout stays in the first FBX UV channel for Unity. The original UVs remain in the second channel.
+The worker rasterizes the stroke as a continuous polyline in screen space. The first visible triangle hit by the stroke center locks the stroke to its edge-connected component in the source FBX. For each atlas texel in that component, the worker projects the corresponding point, tests the brush mask, and checks front-facing orientation and occlusion against nearby projected triangles. Adjacent triangles on different UV islands sample the same stroke. Painted texels extend into the baked gutter up to sixteen texels. The working PNG owns the result used by the preview and the ZIP exporter. The baked layout stays in the first FBX UV channel for Unity. The original UVs remain in the second channel. [F15 component isolation](E00_F15.md#brush)
 
 The browser probe uses ray intersections to discover two new UV seams under the stroke. Both seams follow shared control-point edges that were continuous in the original UVs. It verifies the undo PNG against the original bake, redraws the stroke through pointer events, exports the painted FBX ZIP and reopens it. [Three.js raycaster](https://threejs.org/docs/pages/Raycaster)
 
@@ -21,7 +21,7 @@ The turquoise stroke changed 277,303 covered atlas texels. The browser reproduce
 
 ufbx matched the painted export against the unpainted rebake. All 4,577 control-point positions, 9,138 triangles, both UV channels and the corner normals matched exactly.
 
-This prototype covers visible projection painting on a static, opaque, single-material FBX after the E00 rebake. Topology-constrained brush footprints, skinned painting, 2D paint history, and interactive brush preview are outside this probe.
+This prototype covers visible projection painting on a static, opaque, single-material FBX after the E00 rebake. Geodesic brush footprints within a connected surface, skinned painting, 2D paint history, and interactive brush preview remain later work.
 
 ## Reproduce on Windows
 

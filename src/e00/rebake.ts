@@ -1,8 +1,12 @@
-import { ClampToEdgeWrapping, Mesh, MeshPhongMaterial, MeshLambertMaterial, MirroredRepeatWrapping, RepeatWrapping, type Texture, type Wrapping } from 'three';
+import { BufferAttribute, ClampToEdgeWrapping, Matrix3, Mesh, MeshPhongMaterial, MeshLambertMaterial,
+  MirroredRepeatWrapping, RepeatWrapping, SkinnedMesh, type Texture, type Wrapping } from 'three';
 import { decode } from 'fast-png';
 import type { ImportedAsset } from './round-trip';
 import type { BakeInput, BakeMap, BakeOutput } from './rebake-worker';
 import { bakeScale, chartPadding } from './atlas-raster';
+import { renderControlPoints, sourceMesh } from './fbx-topology';
+import { faceComponents } from './topology-components';
+import type { UvAtlasEdit } from './uv-atlas';
 
 export interface TextureBake {
   maps: { slot: string; source: string; png: Uint8Array<ArrayBuffer> }[];
@@ -12,6 +16,7 @@ export interface TextureBake {
   padded: number;
   padding: number;
   boundaryOnlyTriangles: number;
+  projection?: { sourceName: string; misses: number; maxDistance: number; eligibleSources: number[][] };
 }
 
 export async function rebakeAsset(asset: ImportedAsset): Promise<ImportedAsset> {
@@ -42,6 +47,65 @@ export async function rebakeAsset(asset: ImportedAsset): Promise<ImportedAsset> 
   }
 
   const { position, normal: normals, uv } = mesh.geometry.attributes;
+  const output = await bakeInWorker({
+    ...bakeTarget(atlas), position: Float32Array.from(position.array), normals: Float32Array.from(normals.array),
+    sourceUv: Float32Array.from(uv.array), maps,
+  });
+  return { ...asset, textureBake: output };
+}
+
+export async function projectBaseColor(source: ImportedAsset, target: ImportedAsset, eligibleSources: number[][],
+  maxDistance: number): Promise<ImportedAsset> {
+  const sourceObject = source.scene.getObjectByProperty('isMesh', true);
+  const targetObject = target.scene.getObjectByProperty('isMesh', true);
+  const atlas = target.uvAtlas;
+  if (!(sourceObject instanceof Mesh) || sourceObject instanceof SkinnedMesh || source.stats.meshes !== 1 ||
+      !(targetObject instanceof Mesh) || targetObject instanceof SkinnedMesh || target.stats.meshes !== 1 ||
+      source.deformation.hasMorphTargets || source.positionEdit || source.repairPatch || source.uvAtlas ||
+      !atlas || atlas.inputGeometry !== targetObject.geometry || target.textureBake ||
+      !Number.isFinite(maxDistance) || maxDistance <= 0) {
+    throw new Error('Projection requires an unedited static FBX source, a static FBX with a fresh target atlas and a positive distance.');
+  }
+  const sourceMaterial = sourceObject.material, targetMaterial = targetObject.material;
+  if (!(sourceMaterial instanceof MeshPhongMaterial || sourceMaterial instanceof MeshLambertMaterial) || !sourceMaterial.map ||
+      !(targetMaterial instanceof MeshPhongMaterial || targetMaterial instanceof MeshLambertMaterial) || !targetMaterial.map ||
+      sourceMaterial.transparent || targetMaterial.transparent || sourceMaterial.alphaTest || targetMaterial.alphaTest ||
+      source.alphaProfile || target.alphaProfile ||
+      Object.entries(targetMaterial).some(([slot, texture]) => slot !== 'map' && texture?.isTexture)) {
+    throw new Error('The E00 projection requires opaque meshes and a Base Color-only target material.');
+  }
+  const image = targetMaterial.map.image;
+  const targetPath = image instanceof HTMLImageElement && target.imagePathsByUrl.get(image.src);
+  if (!targetPath) throw new Error('Projection requires a local target Base Color map.');
+  const sourceComponents = faceComponents(renderControlPoints(sourceMesh(sourceObject.geometry)));
+  const sourceIds = new Set(sourceComponents);
+  const targetComponents = atlas.faceComponents.slice();
+  const sourceUv = sourceObject.geometry.getAttribute('uv');
+  if (!sourceUv || sourceUv.count !== sourceComponents.length * 3 || targetComponents.length !== atlas.geometry.index!.count / 3 ||
+      eligibleSources.length !== new Set(targetComponents).size ||
+      eligibleSources.some(ids => !ids.length || ids.some(id => !sourceIds.has(id)))) {
+    throw new Error('Projection requires an explicit eligible source set for every target surface and source UVs.');
+  }
+  sourceObject.updateWorldMatrix(true, false);
+  targetObject.updateWorldMatrix(true, false);
+  const worldPositions = (mesh: Mesh) => {
+    const points = Float32Array.from(mesh.geometry.getAttribute('position').array);
+    new BufferAttribute(points, 3).applyMatrix4(mesh.matrixWorld);
+    return points;
+  };
+  const normals = Float32Array.from(targetObject.geometry.getAttribute('normal').array);
+  new BufferAttribute(normals, 3).applyNormalMatrix(new Matrix3().getNormalMatrix(targetObject.matrixWorld));
+  const map = await readLinkedMap(source, 'map', sourceMaterial.map);
+  const output = await bakeInWorker({
+    ...bakeTarget(atlas), position: worldPositions(targetObject), normals, sourceUv: Float32Array.from(sourceUv.array),
+    maps: [{ ...map, source: targetPath }],
+    projection: { sourceName: source.name, sourcePosition: worldPositions(sourceObject), sourceComponents, targetComponents,
+      eligibleSources: eligibleSources.map(ids => [...ids]), maxDistance },
+  });
+  return { ...target, textureBake: output };
+}
+
+function bakeTarget(atlas: UvAtlasEdit) {
   const target = atlas.geometry.getAttribute(atlas.channel);
   const index = atlas.geometry.index!;
   const targetUv = new Float32Array(index.count * 2);
@@ -50,12 +114,8 @@ export async function rebakeAsset(asset: ImportedAsset): Promise<ImportedAsset> 
     targetUv[i * 2] = target.getX(k);
     targetUv[i * 2 + 1] = target.getY(k);
   }
-  const output = await bakeInWorker({
-    width: atlas.metrics.width * bakeScale, height: atlas.metrics.height * bakeScale, padding: chartPadding * bakeScale,
-    position: Float32Array.from(position.array), normals: Float32Array.from(normals.array),
-    sourceUv: Float32Array.from(uv.array), targetUv, maps,
-  });
-  return { ...asset, textureBake: output };
+  return { width: atlas.metrics.width * bakeScale, height: atlas.metrics.height * bakeScale,
+    padding: chartPadding * bakeScale, targetUv };
 }
 
 async function readLinkedMap(asset: ImportedAsset, slot: string, texture: Texture): Promise<BakeMap> {
@@ -115,8 +175,10 @@ async function bakeInWorker(input: BakeInput): Promise<TextureBake> {
         else resolve(data);
       };
       worker.onerror = event => reject(new Error(event.message || 'Could not run the rebake worker.'));
+      const projection = input.projection;
       worker.postMessage(input, [input.position.buffer, input.normals.buffer, input.sourceUv.buffer, input.targetUv.buffer,
-        ...input.maps.map(map => map.pixels.buffer)]);
+        ...input.maps.map(map => map.pixels.buffer), ...(projection ? [projection.sourcePosition.buffer,
+          projection.sourceComponents.buffer, projection.targetComponents.buffer] : [])]);
     });
   } finally {
     worker.terminate();

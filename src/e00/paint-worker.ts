@@ -8,6 +8,7 @@ export interface PaintInput {
   screenHeight: number;
   clip: Float64Array<ArrayBuffer>;
   targetUv: Float32Array<ArrayBuffer>;
+  components: Uint32Array<ArrayBuffer>;
   winding: number;
   points: [number, number][];
   color: string;
@@ -77,6 +78,25 @@ function visibility({ clip, winding }: PaintInput, width: number, height: number
     const yMax = Math.min(rows - 1, Math.floor(Math.max(ay, by, cy) / tile));
     for (let y = yMin; y <= yMax; y++) for (let x = xMin; x <= xMax; x++) bins[y * cols + x].push(face);
   }
+  const contains = (face: NonNullable<typeof faces[number]>, x: number, y: number) => {
+    const dx = x - face.ax, dy = y - face.ay;
+    const b = (dx * face.dy2 - face.dx2 * dy) * face.inv;
+    const c = (face.dx1 * dy - dx * face.dy1) * face.inv;
+    return Math.min(b, c, 1 - b - c) >= -1e-8;
+  };
+  const faceAt = (x: number, y: number) => {
+    if (x < 0 || y < 0 || x >= width || y >= height) return -1;
+    let nearest = -1, bestDepth = 1;
+    for (const candidate of bins[Math.floor(y / tile) * cols + Math.floor(x / tile)]) {
+      const face = faces[candidate]!;
+      const depth = face.origin + face.slopeX * x + face.slopeY * y;
+      if (depth >= -1 && depth < bestDepth && contains(face, x, y)) {
+        bestDepth = depth;
+        nearest = candidate;
+      }
+    }
+    return nearest;
+  };
   // Evaluate occluders at the texel's exact projected point. Extending the depth
   // of a neighboring screen pixel across a triangle edge can remove seam texels.
   const obscured = (face: number, x: number, y: number, z: number) => {
@@ -88,21 +108,26 @@ function visibility({ clip, winding }: PaintInput, width: number, height: number
       // Keep sub-texel surface folds in the same brush footprint, including
       // nearby chart edges that interpolate to slightly different depths.
       if (depth < -1 || depth >= z - 2e-5) continue;
-      const dx = x - other.ax, dy = y - other.ay;
-      const b = (dx * other.dy2 - other.dx2 * dy) * other.inv;
-      const c = (other.dx1 * dy - dx * other.dy1) * other.inv;
-      if (Math.min(b, c, 1 - b - c) >= -1e-8) return true;
+      if (contains(other, x, y)) return true;
     }
     return false;
   };
-  return { faces, obscured };
+  return { faces, obscured, faceAt };
 }
 
 async function paint(input: PaintInput): Promise<StrokeResult> {
   const { width, height, targetUv, clip } = input;
   const screenWidth = input.screenWidth * 2, screenHeight = input.screenHeight * 2;
-  const mask = strokeMask(input, screenWidth, screenHeight);
   const projection = visibility(input, screenWidth, screenHeight);
+  // Keep a stroke on the first surface hit by its center, including that surface's UV seams.
+  let hit = -1;
+  for (const [x, y] of input.points) {
+    hit = projection.faceAt(x * 2, y * 2);
+    if (hit >= 0) break;
+  }
+  if (hit < 0) return { png: input.png, texels: 0 };
+  const component = input.components[hit];
+  const mask = strokeMask(input, screenWidth, screenHeight);
   const { faces, wb, wc, overlaps } = rasterize(width, height, targetUv);
   if (overlaps.size) throw new Error('Painting requires an atlas without conflicting texel coverage.');
   const image = await createImageBitmap(new Blob([input.png]), { colorSpaceConversion: 'none' });
@@ -115,7 +140,7 @@ async function paint(input: PaintInput): Promise<StrokeResult> {
   let texels = 0;
   for (let p = 0; p < faces.length; p++) {
     const face = faces[p] - 1;
-    if (face < 0 || !projection.faces[face]) continue;
+    if (face < 0 || !projection.faces[face] || input.components[face] !== component) continue;
     const i = face * 12;
     const b = wb[p], c = wc[p], a = 1 - b - c;
     const w = a * clip[i + 3] + b * clip[i + 7] + c * clip[i + 11];

@@ -39,8 +39,9 @@ export async function paintStroke(asset: ImportedAsset, camera: Camera, screenWi
     targetUv[i * 2 + 1] = uv1.getY(vertex);
   }
   const png = (asset.texturePaint?.png ?? map.png).slice();
+  const components = atlas.faceComponents.slice();
   const input: PaintInput = {
-    png, width: bake.width, height: bake.height, screenWidth, screenHeight, clip, targetUv,
+    png, width: bake.width, height: bake.height, screenWidth, screenHeight, clip, targetUv, components,
     winding: Math.sign(mesh.matrixWorld.determinant()), points, color, radius: brushRadius, padding: bake.padding,
   };
   const worker = new Worker(new URL('./paint-worker.ts', import.meta.url), { type: 'module' });
@@ -51,7 +52,7 @@ export async function paintStroke(asset: ImportedAsset, camera: Camera, screenWi
         else resolve(data);
       };
       worker.onerror = event => reject(new Error(event.message || 'Could not run the 3D brush worker.'));
-      worker.postMessage(input, [png.buffer, clip.buffer, targetUv.buffer]);
+      worker.postMessage(input, [png.buffer, clip.buffer, targetUv.buffer, components.buffer]);
     });
     if (result.texels) return { png: result.png, strokes: (asset.texturePaint?.strokes ?? 0) + 1, lastStrokeTexels: result.texels };
   } finally {
