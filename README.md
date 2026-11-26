@@ -6,6 +6,17 @@ AssetFixer is a local browser-based editor for refining generated 3D assets befo
 
 Use an LTS release of Node.js 22.12 or later with npm and a desktop browser with WebGL2. Chrome and Edge on Windows are the primary browser targets.
 
+| Windows command | Purpose |
+| --- | --- |
+| [`build-release.cmd`](build-release.cmd) | Type-check and build the minified Release bundle in `dist/`. |
+| [`build-debug.cmd`](build-debug.cmd) | Type-check and build in `dist-debug/` with readable JavaScript and source maps. |
+| [`run.cmd`](run.cmd) | Start the Release build locally and open it in the default browser. |
+| `run.cmd debug` | Start the Debug build locally and open it in the default browser. |
+
+The launcher builds the selected version if its output is missing. Rebuild after changing source files to refresh an existing output. The scripts install locked dependencies on a fresh checkout. Run `npm ci` again after changes to the lockfile or dependency patches. Press **Ctrl+C** in the launch window to stop the server.
+
+For a development server that reloads on source changes, use the npm commands below.
+
 ```sh
 npm ci
 npm run dev
