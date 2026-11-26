@@ -13,6 +13,7 @@ function element<T extends HTMLElement>(selector: string): T {
 const canvas = element<HTMLCanvasElement>('#viewport');
 const status = element('#status');
 const sources = element<HTMLInputElement>('#sources');
+const closeButton = element<HTMLButtonElement>('#close-model');
 const exportButton = element<HTMLButtonElement>('#export');
 const unwrapButton = element<HTMLButtonElement>('#unwrap');
 const rebakeButton = element<HTMLButtonElement>('#rebake');
@@ -38,6 +39,7 @@ let stroke: { pointer: number; points: [number, number][] } | undefined;
 
 function paintControls(working = false) {
   const available = !!(renderer && asset?.format === 'fbx' && paintableMesh(asset));
+  closeButton.disabled = working || !asset;
   paintButton.disabled = working || !available;
   paintColor.disabled = working || !available || !paintEnabled;
   undoStroke.disabled = working || !history.length;
@@ -100,6 +102,29 @@ async function previewTexture(snapshot: ImportedAsset, paint?: TexturePaint) {
   }
 }
 
+function releaseCurrentAsset() {
+  clearPaintPreview();
+  if (asset) {
+    releasePreview(asset.scene);
+    if (asset.format === 'fbx') asset.uvAtlas?.geometry.dispose();
+  }
+  asset = undefined;
+  camera = undefined;
+  renderer?.renderLists.dispose();
+}
+
+closeButton.addEventListener('click', () => {
+  releaseCurrentAsset();
+  renderer?.clear();
+  canvas.hidden = true;
+  exportButton.textContent = 'Export FBX ZIP';
+  unwrapButton.textContent = 'Generate UV atlas';
+  rebakeButton.textContent = 'Rebake textures';
+  exportButton.disabled = unwrapButton.disabled = rebakeButton.disabled = true;
+  paintControls();
+  status.textContent = 'Model closed.';
+});
+
 sources.addEventListener('change', async () => {
   const input = Array.from(sources.files ?? []);
   if (!input.length) return;
@@ -113,11 +138,7 @@ sources.addEventListener('change', async () => {
     const glb = input.find(file => /\.glb$/i.test(file.name));
     if (glb && input.length !== 1) throw new Error('Select one GLB file at a time.');
     const imported = glb ? await importGlb(glb) : await importAsset(input);
-    if (asset) {
-      clearPaintPreview();
-      releasePreview(asset.scene);
-      if (asset.format === 'fbx') asset.uvAtlas?.geometry.dispose();
-    }
+    releaseCurrentAsset();
     asset = imported;
     exportButton.textContent = asset.format === 'glb' ? 'Export GLB' : 'Export FBX ZIP';
     unwrapButton.textContent = 'Generate UV atlas';
@@ -317,6 +338,8 @@ function setStrokeBusy(working: boolean) {
 
 function releasePreview(model: ImportedAsset['scene']): void {
   model.removeFromParent();
+  const textures = new Set<Texture>();
+  const bitmaps = new Set<ImageBitmap>();
   model.traverse(object => {
     if (!(object instanceof Mesh)) return;
     object.geometry.dispose();
@@ -324,9 +347,14 @@ function releasePreview(model: ImportedAsset['scene']): void {
     const materials = Array.isArray(object.material) ? object.material : [object.material];
     for (const material of materials) {
       for (const property of Object.values(material)) {
-        if (property instanceof Texture) property.dispose();
+        if (property instanceof Texture) textures.add(property);
       }
       material.dispose();
     }
   });
+  for (const texture of textures) {
+    if (texture.image instanceof ImageBitmap) bitmaps.add(texture.image);
+    texture.dispose();
+  }
+  for (const bitmap of bitmaps) bitmap.close();
 }

@@ -1,8 +1,36 @@
 diff --git a/node_modules/three/examples/jsm/loaders/FBXLoader.js b/node_modules/three/examples/jsm/loaders/FBXLoader.js
-index fc155a4..53c9063 100644
+index fc155a4..f756493 100644
 --- a/node_modules/three/examples/jsm/loaders/FBXLoader.js
 +++ b/node_modules/three/examples/jsm/loaders/FBXLoader.js
-@@ -1805,7 +1805,21 @@ class GeometryParser {
+@@ -180,13 +180,22 @@ class FBXLoader extends Loader {
+ 
+ 		}
+ 
+-		// console.log( fbxTree );
++		try {
+ 
+-		const textureLoader = new TextureLoader( this.manager ).setPath( this.resourcePath || path ).setCrossOrigin( this.crossOrigin );
+-		textureLoader.setPriority( this.priority );
+-		textureLoader.setCache( this.cache );
++			const textureLoader = new TextureLoader( this.manager ).setPath( this.resourcePath || path ).setCrossOrigin( this.crossOrigin );
++			textureLoader.setPriority( this.priority );
++			textureLoader.setCache( this.cache );
+ 
+-		return new FBXTreeParser( textureLoader, this.manager, this.trimAnimationClips ).parse( fbxTree );
++			return new FBXTreeParser( textureLoader, this.manager, this.trimAnimationClips ).parse( fbxTree );
++
++		} finally {
++
++			// Parse scratch data must not retain the last model after its owner closes it.
++			fbxTree = undefined;
++			connections = undefined;
++			sceneGraph = undefined;
++
++		}
+ 
+ 	}
+ 
+@@ -1805,7 +1814,21 @@ class GeometryParser {
  		if ( geoNode.attrName ) geo.name = geoNode.attrName;
  
  		const geoInfo = this.parseGeoNode( geoNode, skeleton );
@@ -25,7 +53,7 @@ index fc155a4..53c9063 100644
  
  		const positionAttribute = new Float32BufferAttribute( buffers.vertex, 3 );
  
-@@ -1972,7 +1986,7 @@ class GeometryParser {
+@@ -1972,7 +1995,7 @@ class GeometryParser {
  
  	}
  
@@ -34,7 +62,7 @@ index fc155a4..53c9063 100644
  
  		const buffers = {
  			vertex: [],
-@@ -1982,6 +1996,7 @@ class GeometryParser {
+@@ -1982,6 +2005,7 @@ class GeometryParser {
  			materialIndex: [],
  			vertexWeights: [],
  			weightsIndices: [],
@@ -42,7 +70,7 @@ index fc155a4..53c9063 100644
  		};
  
  		let polygonIndex = 0;
-@@ -2143,7 +2158,7 @@ class GeometryParser {
+@@ -2143,7 +2167,7 @@ class GeometryParser {
  
  			if ( endOfFace ) {
  
@@ -51,7 +79,7 @@ index fc155a4..53c9063 100644
  
  				polygonIndex ++;
  				faceLength = 0;
-@@ -2212,7 +2227,7 @@ class GeometryParser {
+@@ -2212,7 +2236,7 @@ class GeometryParser {
  	}
  
  	// Generate data for a single face in a geometry. If the face is a quad then split it into 2 tris
@@ -60,7 +88,7 @@ index fc155a4..53c9063 100644
  
  		let triangles;
  
-@@ -2261,6 +2276,7 @@ class GeometryParser {
+@@ -2261,6 +2285,7 @@ class GeometryParser {
  		}
  
  		for ( const [ i0, i1, i2 ] of triangles ) {
@@ -68,7 +96,7 @@ index fc155a4..53c9063 100644
  
  			buffers.vertex.push( geoInfo.vertexPositions[ facePositionIndexes[ i0 * 3 ] ] );
  			buffers.vertex.push( geoInfo.vertexPositions[ facePositionIndexes[ i0 * 3 + 1 ] ] );
-@@ -2968,7 +2984,14 @@ class AnimationParser {
+@@ -2968,7 +2993,14 @@ class AnimationParser {
  
  		}
  
