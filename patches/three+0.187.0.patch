@@ -1,5 +1,5 @@
 diff --git a/node_modules/three/examples/jsm/loaders/FBXLoader.js b/node_modules/three/examples/jsm/loaders/FBXLoader.js
-index fc155a4..87c7c0c 100644
+index fc155a4..2d9acb1 100644
 --- a/node_modules/three/examples/jsm/loaders/FBXLoader.js
 +++ b/node_modules/three/examples/jsm/loaders/FBXLoader.js
 @@ -180,13 +180,22 @@ class FBXLoader extends Loader {
@@ -66,11 +66,21 @@ index fc155a4..87c7c0c 100644
  					}
  
  				} );
-@@ -1805,7 +1806,21 @@ class GeometryParser {
+@@ -1805,7 +1806,34 @@ class GeometryParser {
  		if ( geoNode.attrName ) geo.name = geoNode.attrName;
  
  		const geoInfo = this.parseGeoNode( geoNode, skeleton );
 -		const buffers = this.genBuffers( geoInfo );
++		let maxSkinInfluences = 0, pointsOverPreviewLimit = 0;
++		// Measure the source clusters before genBuffers reduces them to four preview slots.
++		for ( const index in geoInfo.weightTable ) {
++			let influences = 0;
++			for ( const { weight } of geoInfo.weightTable[ index ] ) {
++				if ( weight > 0 ) influences ++;
++			}
++			maxSkinInfluences = Math.max( maxSkinInfluences, influences );
++			if ( influences > 4 ) pointsOverPreviewLimit ++;
++		}
 +		// AssetFixer reads the original control points and corners for FBX export.
 +		const buffers = this.genBuffers( geoInfo, true );
 +		geo.userData.assetFixerFbxSource = {
@@ -83,13 +93,16 @@ index fc155a4..87c7c0c 100644
 +			uvs: geoInfo.uv ?? [],
 +			material: geoInfo.material,
 +			skin: skeleton?.rawBones,
++			maxSkinInfluences,
++			pointsOverPreviewLimit,
++			morphChannels: morphTargets.reduce( ( count, target ) => count + target.rawTargets.length, 0 ),
 +			hasMorphTargets: morphTargets.length > 0,
 +			readCorner: getData,
 +		};
  
  		const positionAttribute = new Float32BufferAttribute( buffers.vertex, 3 );
  
-@@ -1972,7 +1987,7 @@ class GeometryParser {
+@@ -1972,7 +2000,7 @@ class GeometryParser {
  
  	}
  
@@ -98,7 +111,7 @@ index fc155a4..87c7c0c 100644
  
  		const buffers = {
  			vertex: [],
-@@ -1982,6 +1997,7 @@ class GeometryParser {
+@@ -1982,6 +2010,7 @@ class GeometryParser {
  			materialIndex: [],
  			vertexWeights: [],
  			weightsIndices: [],
@@ -106,7 +119,16 @@ index fc155a4..87c7c0c 100644
  		};
  
  		let polygonIndex = 0;
-@@ -2143,7 +2159,7 @@ class GeometryParser {
+@@ -2047,7 +2076,7 @@ class GeometryParser {
+ 
+ 					if ( ! displayedWeightsWarning ) {
+ 
+-						console.warn( 'THREE.FBXLoader: Vertex has more than 4 skinning weights assigned to vertex. Deleting additional weights.' );
++						console.warn( 'THREE.FBXLoader: Vertex has more than 4 skinning weights. Using the four largest for preview.' );
+ 						displayedWeightsWarning = true;
+ 
+ 					}
+@@ -2143,7 +2172,7 @@ class GeometryParser {
  
  			if ( endOfFace ) {
  
@@ -115,7 +137,7 @@ index fc155a4..87c7c0c 100644
  
  				polygonIndex ++;
  				faceLength = 0;
-@@ -2212,7 +2228,7 @@ class GeometryParser {
+@@ -2212,7 +2241,7 @@ class GeometryParser {
  	}
  
  	// Generate data for a single face in a geometry. If the face is a quad then split it into 2 tris
@@ -124,7 +146,7 @@ index fc155a4..87c7c0c 100644
  
  		let triangles;
  
-@@ -2261,6 +2277,7 @@ class GeometryParser {
+@@ -2261,6 +2290,7 @@ class GeometryParser {
  		}
  
  		for ( const [ i0, i1, i2 ] of triangles ) {
@@ -132,7 +154,7 @@ index fc155a4..87c7c0c 100644
  
  			buffers.vertex.push( geoInfo.vertexPositions[ facePositionIndexes[ i0 * 3 ] ] );
  			buffers.vertex.push( geoInfo.vertexPositions[ facePositionIndexes[ i0 * 3 + 1 ] ] );
-@@ -2968,7 +2985,14 @@ class AnimationParser {
+@@ -2968,7 +2998,14 @@ class AnimationParser {
  
  		}
  

@@ -15,6 +15,9 @@ export interface FbxSourceMesh {
   uvs: FbxLayer[];
   material?: FbxLayer;
   skin?: FbxWeights[];
+  maxSkinInfluences: number;
+  pointsOverPreviewLimit: number;
+  morphChannels: number;
   hasMorphTargets: boolean;
   readCorner: (corner: number, polygon: number, controlPoint: number, layer: FbxLayer) => ArrayLike<number>;
 }

@@ -7,23 +7,29 @@ import { createServer, preview } from 'vite';
 import { decode } from 'fast-png';
 
 const { values: { edited, glb, 'glb-edited': glbEdited, unwrap, rebake, paint, repair, alpha, normal, seams,
-  'shared-skin': sharedSkin }, positionals } = parseArgs({
+  'shared-skin': sharedSkin, 'adverse-skin': adverseSkin }, positionals } = parseArgs({
   options: { edited: { type: 'boolean' }, glb: { type: 'string' }, unwrap: { type: 'boolean' }, rebake: { type: 'boolean' },
     paint: { type: 'boolean' }, repair: { type: 'boolean' }, alpha: { type: 'boolean' }, normal: { type: 'boolean' },
-    seams: { type: 'boolean' }, 'glb-edited': { type: 'boolean' }, 'shared-skin': { type: 'boolean' } }, allowPositionals: true,
+    seams: { type: 'boolean' }, 'glb-edited': { type: 'boolean' }, 'shared-skin': { type: 'boolean' },
+    'adverse-skin': { type: 'boolean' } }, allowPositionals: true,
 });
-const standalone = seams || sharedSkin;
+const localCases = [
+  ...(seams ? [[resolve('tools/e00/fixtures/topology_seams.zip'), 'topology_seams', 13, 0, 0]] : []),
+  ...(sharedSkin ? [[resolve('tools/e00/fixtures/shared_skin.fbx'), 'shared_skin', 124, 3, 1]] : []),
+  ...(adverseSkin ? [[resolve('tools/e00/fixtures/f13_wide_skin.fbx'), 'f13_wide_skin', 4, 5, 1]] : []),
+];
+const standalone = localCases.length > 0;
 const [tripoPath, chromePath, animatedSource, realAnimatedSource] = standalone ? [undefined, ...positionals] : positionals;
 if (!tripoPath && !standalone) throw new Error('Supply the path to the Tripo sample directory.');
 if (glbEdited && !glb) throw new Error('--glb-edited requires --glb with the Tripo GLB path.');
-if (standalone && ((seams && sharedSkin) || edited || glb || unwrap || rebake || paint || repair || alpha || normal || animatedSource)) {
-  throw new Error('Use either --seams or --shared-skin with an optional Chrome path as a standalone fixture check.');
+if (standalone && (localCases.length > 1 || edited || glb || unwrap || rebake || paint || repair || alpha || normal || animatedSource)) {
+  throw new Error('Use one standalone fixture option with an optional Chrome path.');
 }
 const { chromium } = await import('../../test-results/e00-browser/node_modules/playwright-core/index.mjs');
 const output = resolve('test-results/e00/exports');
 await mkdir(output, { recursive: true });
 const localServer = { host: '127.0.0.1', port: 4270 };
-const dev = edited || paint || repair || seams || glbEdited;
+const dev = edited || paint || repair || seams || glbEdited || adverseSkin;
 const server = dev
   ? await createServer({ server: localServer, optimizeDeps: { include: ['xatlas-wasm'] } })
   : await preview({ preview: localServer });
@@ -47,8 +53,7 @@ try {
     const input = page.locator('#sources');
     const status = page.getByRole('status');
     const exportButton = page.getByRole('button', { name: 'Export FBX ZIP' });
-    const cases = sharedSkin ? [[resolve('tools/e00/fixtures/shared_skin.fbx'), 'shared_skin', 124, 3, 1]]
-      : seams ? [[resolve('tools/e00/fixtures/topology_seams.zip'), 'topology_seams', 13, 0, 0]] : [
+    const cases = standalone ? localCases : [
       [join(tripoPath, 'ceramic plate 3d model.zip'), 'ceramic_plate_3d_model', 9138, 0, 0],
       [join(tripoPath, 'tripo_convert_8b04a473-804b-41a0-ab47-e84ae233629b.zip'), 'tripo_convert_8b04a473', 17623, 67, 0],
       ...(animatedSource ? [[animatedSource, 'animated_fixture', 4, 2, 1]] : []),
@@ -66,10 +71,15 @@ try {
       const [download] = await Promise.all([page.waitForEvent('download'), exportButton.click()]);
       const exported = join(output, download.suggestedFilename());
       await download.saveAs(exported);
-      if (sharedSkin) {
+      if (sharedSkin || adverseSkin) {
         const files = unzipSync(await readFile(exported));
         const manifest = JSON.parse(new TextDecoder().decode(files['manifest.json']));
-        assert.deepEqual(manifest.meshes, { meshes: 2, triangles: 124, bones: 3, clips: 1 });
+        if (sharedSkin) assert.deepEqual(manifest.meshes, { meshes: 2, triangles: 124, bones: 3, clips: 1 });
+        if (adverseSkin) {
+          assert.match(imported, /Approximate skin preview: 2 control points.*maximum 5.*All source weights are retained/);
+          assert.deepEqual(manifest.skinInfluences, { maxPerControlPoint: 5, pointsOverPreviewLimit: 2, previewLimit: 4 });
+          assert.ok(manifest.warnings.some(warning => warning.includes('Export retains all source skin weights')));
+        }
       }
       await input.setInputFiles(exported);
       await page.waitForFunction(() => !document.querySelector('#sources').disabled);
@@ -82,6 +92,7 @@ try {
     if (!standalone) {
       await checkTripoInputs({ page, input, status, exportButton, tripoPath, plate: cases[0][0] });
     }
+    if (adverseSkin) await checkAdverseSkin({ page, input, status, exportButton });
 
     if (edited || seams) {
       const expectations = seams ? './topology-seams.json' : './position-edits.json';
@@ -392,6 +403,69 @@ async function checkTripoInputs({ page, input, status, exportButton, tripoPath, 
   await input.setInputFiles({ name: 'unsupported.zip', mimeType: 'application/zip', buffer: wrongAxes });
   await page.waitForFunction(() => !document.querySelector('#sources').disabled);
   assert.match(await status.textContent(), /supports binary FBX with \+X right/);
+}
+
+async function checkAdverseSkin({ page, input, status, exportButton }) {
+  const source = resolve('tools/e00/fixtures/f13_wide_skin_morphs.fbx');
+  await input.setInputFiles(source);
+  await page.waitForFunction(() => !document.querySelector('#sources').disabled);
+  const importStatus = await status.textContent();
+  assert.match(importStatus, /^f13_wide_skin_morphs · 4 triangles · 5 bones · 1 clips/);
+  assert.match(importStatus, /Approximate skin preview: 2 control points.*maximum 5.*All source weights are retained/);
+  assert.match(importStatus, /2 morph channels detected\. FBX export is blocked for morph targets/);
+  assert.ok(await page.locator('#viewport').isVisible());
+  await page.evaluate(() => {
+    const file = document.createElement('input');
+    file.id = 'f13-source';
+    file.type = 'file';
+    file.hidden = true;
+    document.body.append(file);
+  });
+  await page.locator('#f13-source').setInputFiles(source);
+  const imported = await page.evaluate(async () => {
+    const { importAsset } = await import('/src/e00/round-trip.ts');
+    const asset = await importAsset([...document.querySelector('#f13-source').files]);
+    const { geometry } = asset.scene.getObjectByProperty('isMesh', true);
+    const source = geometry.userData.assetFixerFbxSource;
+    const controlPoints = Array.from(source.renderCorners, corner => {
+      const encoded = source.polygons[corner];
+      return encoded < 0 ? ~encoded : encoded;
+    });
+    const weights = geometry.getAttribute('skinWeight');
+    const joints = geometry.getAttribute('skinIndex');
+    const vertex = controlPoints.indexOf(2);
+    return {
+      deformation: asset.deformation, controlPoints, relativeMorphs: geometry.morphTargetsRelative,
+      sourceWeights: [2, 3].map(point => source.skin.map(cluster => cluster.weights[cluster.indices.indexOf(point)])),
+      previewWeights: [weights.getX(vertex), weights.getY(vertex), weights.getZ(vertex), weights.getW(vertex)],
+      previewJoints: [joints.getX(vertex), joints.getY(vertex), joints.getZ(vertex), joints.getW(vertex)],
+      morphs: Object.fromEntries(geometry.morphAttributes.position.map(attribute => [attribute.name,
+        controlPoints.map((_, i) => [attribute.getX(i), attribute.getY(i), attribute.getZ(i)])])),
+    };
+  });
+  const expectedWeights = [0.3125, 0.25, 0.1875, 0.15625, 0.09375];
+  assert.deepEqual(imported.sourceWeights, [expectedWeights, expectedWeights]);
+  assert.deepEqual(imported.previewJoints, [0, 1, 2, 3]);
+  assert.ok(imported.previewWeights.every(weight => weight > 0));
+  assert.ok(Math.abs(imported.previewWeights.reduce((sum, weight) => sum + weight, 0) - 1) < 1e-6);
+  assert.ok(imported.relativeMorphs);
+  assert.deepEqual(imported.morphs, {
+    Raise: imported.controlPoints.map(point => [0, 0, point === 2 ? 0.125 : point === 4 ? 0.25 : 0]),
+    Widen: imported.controlPoints.map(point => [point === 3 ? 0.0625 : point === 5 ? 0.1875 : 0, 0, 0]),
+  });
+
+  const downloads = [];
+  page.on('download', download => downloads.push(download.suggestedFilename()));
+  await exportButton.click();
+  await page.waitForFunction(() => !document.querySelector('#sources').disabled);
+  const refusal = await status.textContent();
+  assert.equal(refusal, 'FBX export blocked. The current exporter cannot preserve source morph targets.');
+  assert.deepEqual(downloads, []);
+  assert.ok(await page.locator('#viewport').isVisible());
+  const reportPath = resolve('test-results/e00/f13/browser-report.json');
+  await mkdir(resolve('test-results/e00/f13'), { recursive: true });
+  await writeFile(reportPath, JSON.stringify({ importStatus, imported, refusal, downloads }, null, 2));
+  console.log(importStatus, refusal);
 }
 
 async function checkSeamStroke(page, bakedExport, exportButton, status) {

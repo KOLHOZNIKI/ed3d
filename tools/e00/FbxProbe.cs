@@ -24,6 +24,10 @@ public sealed class E00ImportSettings : AssetPostprocessor
         importer.isReadable = true;
         importer.materialImportMode = ModelImporterMaterialImportMode.ImportStandard;
         if (assetPath.StartsWith("Assets/Fixtures/seams-", StringComparison.Ordinal)) importer.weldVertices = false;
+        if (assetPath.StartsWith("Assets/Fixtures/adverse-", StringComparison.Ordinal)) {
+            importer.skinWeights = ModelImporterSkinWeights.Custom;
+            importer.maxBonesPerVertex = 8;
+        }
     }
 }
 

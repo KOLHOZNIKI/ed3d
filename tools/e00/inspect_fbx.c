@@ -458,8 +458,65 @@ static bool compare_shared_skin(const ufbx_scene *original, const ufbx_scene *ex
     return compatible;
 }
 
+static bool inspect_adverse_source(const ufbx_scene *scene)
+{
+    const ufbx_mesh *mesh = scene->meshes.data[0];
+    if (mesh->num_vertices != 6 || mesh->num_triangles != 4 || mesh->skin_deformers.count != 1) return false;
+    const ufbx_skin_deformer *skin = mesh->skin_deformers.data[0];
+    if (scene->bones.count != 5 || skin->clusters.count != 5 || skin->max_weights_per_vertex != 5) return false;
+    const double expected[] = { 0.3125, 0.25, 0.1875, 0.15625, 0.09375 };
+    double observed[2][5] = { 0 };
+    for (size_t bone = 0; bone < 5; bone++) {
+        const ufbx_skin_cluster *cluster = skin->clusters.data[bone];
+        char name[] = "Joint1";
+        name[5] += (char)bone;
+        if (!cluster->bone_node || strcmp(cluster->bone_node->name.data, name) != 0) return false;
+        for (size_t i = 0; i < cluster->num_weights; i++) {
+            const uint32_t point = cluster->vertices.data[i];
+            if (point == 2 || point == 3) observed[point - 2][bone] = cluster->weights.data[i];
+        }
+    }
+    for (size_t point = 0; point < 2; point++) {
+        if (skin->vertices.data[point + 2].num_weights != 5 || memcmp(observed[point], expected, sizeof(expected)) != 0) return false;
+    }
+
+    const bool has_morphs = mesh->blend_deformers.count != 0;
+    if (has_morphs) {
+        if (mesh->blend_deformers.count != 1) return false;
+        const ufbx_blend_channel_list channels = mesh->blend_deformers.data[0]->channels;
+        if (channels.count != 2) return false;
+        bool raise = false, widen = false;
+        for (size_t i = 0; i < channels.count; i++) {
+            const ufbx_blend_channel *channel = channels.data[i];
+            const bool is_raise = strcmp(channel->name.data, "Raise") == 0;
+            const bool is_widen = strcmp(channel->name.data, "Widen") == 0;
+            if ((!is_raise && !is_widen) || channel->keyframes.count != 1 || !channel->target_shape) return false;
+            raise |= is_raise;
+            widen |= is_widen;
+            for (size_t point = 0; point < mesh->num_vertices; point++) {
+                const ufbx_vec3 offset = ufbx_get_blend_shape_vertex_offset(channel->target_shape, point);
+                const double x = is_widen ? (point == 3 ? 0.0625 : point == 5 ? 0.1875 : 0.0) : 0.0;
+                const double z = is_raise ? (point == 2 ? 0.125 : point == 4 ? 0.25 : 0.0) : 0.0;
+                if (offset.x != x || offset.y != 0.0 || offset.z != z) return false;
+            }
+        }
+        if (!raise || !widen) return false;
+    }
+    printf("{\"bones\":5,\"maxInfluences\":5,\"pointsWithFiveInfluences\":[2,3],"
+           "\"weightsAtBothPoints\":[%.9g,%.9g,%.9g,%.9g,%.9g],\"verifiedMorphDeltas\":%s}\n",
+           observed[0][0], observed[0][1], observed[0][2], observed[0][3], observed[0][4], has_morphs ? "[\"Raise\",\"Widen\"]" : "[]");
+    return true;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc == 3 && strcmp(argv[1], "--f13-source") == 0) {
+        ufbx_scene *scene = load(argv[2], 1);
+        const bool matches = inspect_adverse_source(scene);
+        if (!matches) fprintf(stderr, "F13 weight or morph expectations failed in %s.\n", argv[2]);
+        ufbx_free_scene(scene);
+        return matches ? 0 : 1;
+    }
     const bool shared = argc == 4 && strcmp(argv[3], "--shared-skin") == 0;
     if (argc != 3 && argc != 5 && !shared) {
         fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx [--shared-skin | control-point offset-y | --seams offset-y | --atlas source-corners.bin | --baked source-corners.bin | --smooth center | --grid center]\n");

@@ -148,6 +148,14 @@ sources.addEventListener('change', async () => {
     if (asset.format === 'glb' && asset.affineCorrections) {
       status.textContent += ` · Corrected rounding in ${asset.affineCorrections} inverse bind matrices for GLB export`;
     }
+    if (asset.format === 'fbx') {
+      const { maxSkinInfluences, pointsOverPreviewLimit, morphChannels, hasMorphTargets } = asset.deformation;
+      if (pointsOverPreviewLimit > 0) {
+        status.textContent += ` · Approximate skin preview: ${pointsOverPreviewLimit} control points exceed the four-influence limit` +
+          ` (maximum ${maxSkinInfluences}). All source weights are retained.`;
+      }
+      if (hasMorphTargets) status.textContent += ` · ${morphChannels} morph channels detected. FBX export is blocked for morph targets.`;
+    }
     if (renderer) {
       scene.add(asset.scene);
       const bounds = new Box3().setFromObject(asset.scene);

@@ -2,7 +2,7 @@ import { FBXExporter } from '@comfyorg/fbx-exporter-three';
 import { ClampToEdgeWrapping, LoadingManager, Mesh, type Group, type Texture } from 'three';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { validateFbxAxes } from './fbx-profile';
-import { offsetControlPointY, useSourceTopology } from './fbx-topology';
+import { offsetControlPointY, useSourceTopology, type FbxSourceMesh } from './fbx-topology';
 import { sceneStats } from './scene-stats';
 import type { TextureBake } from './rebake';
 import type { TexturePaint } from './paint';
@@ -29,6 +29,7 @@ export interface ImportedAsset {
   scene: Group;
   unitScale: number;
   stats: ReturnType<typeof sceneStats>;
+  deformation: ReturnType<typeof sourceDeformation>;
   images: Files;
   imagePathsByUrl: Map<string, string>;
   alphaProfile?: AlphaProfile;
@@ -96,11 +97,26 @@ export async function importAsset(input: readonly File[]): Promise<ImportedAsset
       throw new Error('FBX does not declare a valid unit scale.');
     }
     const stats = sceneStats(scene, 'FBX');
+    const deformation = sourceDeformation(scene);
     const alphaProfile = readAlphaProfile(files.get('manifest.json'), modelPath, scene);
-    return { format: 'fbx', name: basename(modelPath).slice(0, -4), scene, unitScale, stats, images, imagePathsByUrl, alphaProfile };
+    return { format: 'fbx', name: basename(modelPath).slice(0, -4), scene, unitScale, stats, deformation, images, imagePathsByUrl, alphaProfile };
   } finally {
     for (const url of [...urls.values(), ...embedded]) URL.revokeObjectURL(url);
   }
+}
+
+function sourceDeformation(scene: Group) {
+  const result = { maxSkinInfluences: 0, pointsOverPreviewLimit: 0, morphChannels: 0, hasMorphTargets: false };
+  scene.traverse(object => {
+    if (!(object instanceof Mesh)) return;
+    const source = object.geometry.userData.assetFixerFbxSource as FbxSourceMesh | undefined;
+    if (!source) return;
+    result.maxSkinInfluences = Math.max(result.maxSkinInfluences, source.maxSkinInfluences);
+    result.pointsOverPreviewLimit += source.pointsOverPreviewLimit;
+    result.morphChannels += source.morphChannels;
+    result.hasMorphTargets ||= source.hasMorphTargets;
+  });
+  return result;
 }
 
 export function moveControlPointY(asset: ImportedAsset, controlPoint: number, offsetY: number): ImportedAsset {
@@ -113,6 +129,9 @@ export function moveControlPointY(asset: ImportedAsset, controlPoint: number, of
 }
 
 export async function exportAsset(asset: ImportedAsset): Promise<{ name: string; bytes: Uint8Array<ArrayBuffer> }> {
+  if (asset.deformation.hasMorphTargets) {
+    throw new Error('FBX export blocked. The current exporter cannot preserve source morph targets.');
+  }
   const edit = asset.positionEdit;
   const atlas = asset.uvAtlas;
   const bake = asset.textureBake;
@@ -195,6 +214,9 @@ export async function exportAsset(asset: ImportedAsset): Promise<{ name: string;
   }
   files.set('manifest.json', new TextEncoder().encode(JSON.stringify({
     stage: 'E00', model, unitsInCentimeters: asset.unitScale, meshes: asset.stats,
+    skinInfluences: asset.deformation.pointsOverPreviewLimit > 0 ? {
+      maxPerControlPoint: asset.deformation.maxSkinInfluences, pointsOverPreviewLimit: asset.deformation.pointsOverPreviewLimit, previewLimit: 4,
+    } : undefined,
     assetFixerMaterial: asset.alphaProfile && { ...asset.alphaProfile, uvTransform: bake ? undefined : asset.alphaProfile.uvTransform },
     positionEdit: edit && { controlPoint: edit.controlPoint, offsetY: edit.offsetY },
     repair: repair && { ...repair.metadata, sourceCornerMap: cornerMap },
@@ -209,6 +231,8 @@ export async function exportAsset(asset: ImportedAsset): Promise<{ name: string;
     warnings: [
       'Prototype export. FBX material properties and rig representation may change.',
       'Unassigned textures are carried as files and require manual assignment in Unity.',
+      ...(asset.deformation.pointsOverPreviewLimit > 0
+        ? ['The preview is approximate above four skin influences. Export retains all source skin weights.'] : []),
       ...(asset.alphaProfile ? ['Use assetFixerMaterial in this manifest to configure the Unity material alpha mode and cutoff.'] : []),
       ...(bake ? ['Baked textures use the atlas in UV0 for Unity. The original UV layout is retained in UV1.']
         : atlas ? ['Atlas export writes triangles with UV1. Existing textures continue to use UV0.'] : []),

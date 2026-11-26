@@ -41,8 +41,9 @@ def main():
     standalone = parser.add_mutually_exclusive_group()
     standalone.add_argument("--seams", action="store_true")
     standalone.add_argument("--shared-skin", action="store_true")
+    standalone.add_argument("--adverse-skin", action="store_true")
     args = parser.parse_args()
-    if args.seams or args.shared_skin:
+    if args.seams or args.shared_skin or args.adverse_skin:
         if any((args.tripo_dir, args.animation, args.real_animation, args.edited, args.unwrap, args.rebake,
                 args.paint, args.repair, args.alpha, args.normal)):
             parser.error("Use the standalone fixture option with only the Unity version.")
@@ -62,9 +63,13 @@ def main():
         + ("-normal" if args.normal else "")
         + ("-seams" if args.seams else "")
         + ("-shared-skin" if args.shared_skin else "")
+        + ("-adverse-skin" if args.adverse_skin else "")
     )
     fixtures = Path(__file__).with_name("fixtures")
-    if args.shared_skin:
+    if args.adverse_skin:
+        cases = [("adverse-skin", fixtures / "f13_wide_skin.fbx", "f13_wide_skin_e00.zip")]
+        copy_bundle(fixtures / "f13_wide_skin_morphs.fbx", project / "Assets" / "Fixtures" / "adverse-morphs" / "original")
+    elif args.shared_skin:
         cases = [("shared-skin", fixtures / "shared_skin.fbx", "shared_skin_e00.zip")]
     elif args.seams:
         seam_fixture = fixtures / "topology_seams.zip"
@@ -161,6 +166,8 @@ def main():
         copy2(Path(__file__).with_name("topology-seams.json"), project)
     if args.shared_skin:
         copy2(Path(__file__).with_name("SharedSkinProbe.cs"), editors)
+    if args.adverse_skin:
+        copy2(Path(__file__).with_name("AdverseSkinProbe.cs"), editors)
     if args.rebake or args.paint:
         for filename in ("TextureBakeProbe.cs", "TextureBakeProbe.shader"):
             copy2(Path(__file__).with_name(filename), editors)
