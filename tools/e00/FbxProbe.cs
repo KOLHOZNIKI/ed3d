@@ -23,6 +23,7 @@ public sealed class E00ImportSettings : AssetPostprocessor
         importer.bakeAxisConversion = false;
         importer.isReadable = true;
         importer.materialImportMode = ModelImporterMaterialImportMode.ImportStandard;
+        if (assetPath.StartsWith("Assets/Fixtures/seams-", StringComparison.Ordinal)) importer.weldVertices = false;
     }
 }
 

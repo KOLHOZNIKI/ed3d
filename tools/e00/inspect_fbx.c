@@ -91,6 +91,89 @@ static double point_distance(ufbx_vec3 a, ufbx_vec3 b)
     return length3((ufbx_vec3){ .x = a.x - b.x, .y = a.y - b.y, .z = a.z - b.z });
 }
 
+static double uv_distance(ufbx_vec2 a, ufbx_vec2 b)
+{
+    return hypot(a.x - b.x, a.y - b.y);
+}
+
+enum { seam_point = 0, coincident_point = 8, seam_variant_count = 3 };
+
+static bool seam_witness(const ufbx_mesh *mesh, double *min_uv_gap, double *min_normal_angle)
+{
+    if (mesh->num_vertices != 11 || mesh->num_faces != 13 || mesh->num_indices != 39 ||
+        mesh->uv_sets.count != 1 || !mesh->vertex_uv.exists || !mesh->vertex_normal.exists) return false;
+    size_t variants[seam_variant_count], count = 0, target_corners = 0, witness_corner = 0, witness_corners = 0;
+    for (size_t f = 0; f < mesh->num_faces; f++) {
+        const ufbx_face face = mesh->faces.data[f];
+        if (face.num_indices != 3) return false;
+        const bool witness_face = mesh->vertex_indices.data[face.index_begin] >= coincident_point;
+        for (size_t i = face.index_begin; i < face.index_begin + face.num_indices; i++) {
+            const uint32_t point = mesh->vertex_indices.data[i];
+            if ((point >= coincident_point) != witness_face) return false;
+            if (point == coincident_point) {
+                witness_corner = i;
+                witness_corners++;
+            }
+            if (point != seam_point) continue;
+            target_corners++;
+            const ufbx_vec2 uv = ufbx_get_vertex_vec2(&mesh->vertex_uv, i);
+            bool known = false;
+            for (size_t k = 0; k < count; k++) known |= uv_distance(uv, ufbx_get_vertex_vec2(&mesh->vertex_uv, variants[k])) < 1e-9;
+            if (known) continue;
+            if (count == seam_variant_count) return false;
+            variants[count++] = i;
+        }
+    }
+    if (count != seam_variant_count || target_corners != 6 || witness_corners != 1) return false;
+    *min_uv_gap = *min_normal_angle = INFINITY;
+    bool shared_attributes = false;
+    for (size_t i = 0; i < count; i++) {
+        const ufbx_vec2 uv = ufbx_get_vertex_vec2(&mesh->vertex_uv, variants[i]);
+        const ufbx_vec3 n = ufbx_get_vertex_vec3(&mesh->vertex_normal, variants[i]);
+        shared_attributes |= uv_distance(uv, ufbx_get_vertex_vec2(&mesh->vertex_uv, witness_corner)) < 1e-9 &&
+            point_distance(n, ufbx_get_vertex_vec3(&mesh->vertex_normal, witness_corner)) < 1e-9;
+        for (size_t j = 0; j < i; j++) {
+            *min_uv_gap = fmin(*min_uv_gap, uv_distance(uv, ufbx_get_vertex_vec2(&mesh->vertex_uv, variants[j])));
+            *min_normal_angle = fmin(*min_normal_angle, normal_angle(n, ufbx_get_vertex_vec3(&mesh->vertex_normal, variants[j])));
+        }
+    }
+    return shared_attributes && *min_uv_gap > 0.1 && fabs(*min_normal_angle - 90.0) <= 0.1;
+}
+
+static bool compare_seams(const ufbx_mesh *a, const ufbx_mesh *b, double offset_y)
+{
+    double source_gap, source_angle, exported_gap, exported_angle;
+    if (!same_connectivity(a, b) || !seam_witness(a, &source_gap, &source_angle) ||
+        !seam_witness(b, &exported_gap, &exported_angle)) return false;
+
+    const double initial_separation = point_distance(a->vertices.data[seam_point], a->vertices.data[coincident_point]);
+    const double final_separation = point_distance(b->vertices.data[seam_point], b->vertices.data[coincident_point]);
+    const double coincident_move = point_distance(a->vertices.data[coincident_point], b->vertices.data[coincident_point]);
+    const double observed_y = b->vertices.data[seam_point].y - a->vertices.data[seam_point].y;
+    size_t changed = 0;
+    double position_error = 0.0, uv_error = 0.0, normal_error = 0.0;
+    for (size_t i = 0; i < a->num_vertices; i++) {
+        ufbx_vec3 expected = a->vertices.data[i];
+        changed += point_distance(expected, b->vertices.data[i]) > 1e-9;
+        if (i == seam_point) expected.y += offset_y;
+        position_error = fmax(position_error, point_distance(expected, b->vertices.data[i]));
+    }
+    for (size_t i = 0; i < a->num_indices; i++) {
+        uv_error = fmax(uv_error, uv_distance(ufbx_get_vertex_vec2(&a->vertex_uv, i), ufbx_get_vertex_vec2(&b->vertex_uv, i)));
+        normal_error = fmax(normal_error, normal_angle(ufbx_get_vertex_vec3(&a->vertex_normal, i),
+                                                     ufbx_get_vertex_vec3(&b->vertex_normal, i)));
+    }
+    printf(",\"seams\":{\"samePolygonConnectivity\":true,\"targetControlPoint\":%d,\"coincidentControlPoint\":%d,"
+           "\"changedControlPoints\":%zu,\"initialSeparation\":%.9g,\"finalSeparation\":%.9g,"
+           "\"observedOffsetY\":%.9g,\"coincidentPointMovement\":%.9g,\"maxPositionError\":%.9g,"
+           "\"targetUvVariants\":%d,\"minUvSeamGap\":%.9g,\"minHardNormalAngle\":%.9g,"
+           "\"maxCornerUvError\":%.9g,\"maxCornerNormalAngle\":%.9g}",
+           seam_point, coincident_point, changed, initial_separation, final_separation, observed_y, coincident_move,
+           position_error, seam_variant_count, exported_gap, exported_angle, uv_error, normal_error);
+    return initial_separation == 0.0 && changed == (offset_y != 0.0 ? 1 : 0) && coincident_move == 0.0 &&
+        position_error <= 1e-9 && uv_error <= 1e-9 && normal_error <= 0.1;
+}
+
 static bool compare_atlas(const ufbx_mesh *a, const ufbx_mesh *b, const char *map_path, bool primary_atlas)
 {
     if (a->num_vertices != b->num_vertices || a->num_triangles != b->num_triangles ||
@@ -313,14 +396,15 @@ static bool compare_clips(const ufbx_scene *original, const ufbx_scene *exported
 int main(int argc, char **argv)
 {
     if (argc != 3 && argc != 5) {
-        fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx [control-point offset-y | --atlas source-corners.bin | --baked source-corners.bin | --smooth center | --grid center]\n");
+        fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx [control-point offset-y | --seams offset-y | --atlas source-corners.bin | --baked source-corners.bin | --smooth center | --grid center]\n");
         return 2;
     }
     const bool baked = argc == 5 && strcmp(argv[3], "--baked") == 0;
     const bool atlas = baked || (argc == 5 && strcmp(argv[3], "--atlas") == 0);
     const bool smooth = argc == 5 && strcmp(argv[3], "--smooth") == 0;
     const bool repair = smooth || (argc == 5 && strcmp(argv[3], "--grid") == 0);
-    const bool edited = argc == 5 && !atlas && !repair;
+    const bool seams = argc == 5 && strcmp(argv[3], "--seams") == 0;
+    const bool edited = argc == 5 && !atlas && !repair && !seams;
     unsigned long long control_point = 0;
     double offset_y = 0.0;
     if (edited) {
@@ -340,6 +424,15 @@ int main(int argc, char **argv)
     stats(exported);
 
     const ufbx_mesh *a = original->meshes.data[0], *b = exported->meshes.data[0];
+    if (seams) {
+        char *end;
+        const double offset = strtod(argv[4], &end);
+        const bool matches = end != argv[4] && !*end && isfinite(offset) && compare_seams(a, b, offset);
+        puts("}");
+        ufbx_free_scene(exported);
+        ufbx_free_scene(original);
+        return matches ? 0 : 1;
+    }
     if (atlas) {
         const bool matches = compare_atlas(a, b, argv[4], baked);
         puts("}");

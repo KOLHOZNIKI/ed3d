@@ -27,7 +27,7 @@ def copy_bundle(source, target):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("tripo_dir", type=Path)
+    parser.add_argument("tripo_dir", type=Path, nargs="?")
     parser.add_argument("unity_version")
     parser.add_argument("--animation", type=Path)
     parser.add_argument("--real-animation", type=Path)
@@ -38,7 +38,14 @@ def main():
     parser.add_argument("--repair", action="store_true")
     parser.add_argument("--alpha", action="store_true")
     parser.add_argument("--normal", action="store_true")
+    parser.add_argument("--seams", action="store_true")
     args = parser.parse_args()
+    if args.seams:
+        if any((args.tripo_dir, args.animation, args.real_animation, args.edited, args.unwrap, args.rebake,
+                args.paint, args.repair, args.alpha, args.normal)):
+            parser.error("Use --seams with only the Unity version.")
+    elif args.tripo_dir is None:
+        parser.error("Specify the Tripo fixture directory.")
 
     results = Path("test-results/e00")
     project = results / (
@@ -51,8 +58,13 @@ def main():
         + ("-repair" if args.repair else "")
         + ("-alpha" if args.alpha else "")
         + ("-normal" if args.normal else "")
+        + ("-seams" if args.seams else "")
     )
+    seam_fixture = Path(__file__).with_name("fixtures") / "topology_seams.zip"
     cases = [
+        ("seams-baseline", seam_fixture, "topology_seams_e00.zip"),
+        ("seams-edited", seam_fixture, "topology_seams_e00_edited.zip"),
+    ] if args.seams else [
         ("static", args.tripo_dir / "ceramic plate 3d model.zip", "ceramic_plate_3d_model_e00.zip"),
         ("skinned", args.tripo_dir / "tripo_convert_8b04a473-804b-41a0-ab47-e84ae233629b.zip",
          "tripo_convert_8b04a473-804b-41a0-ab47-e84ae233629b_e00.zip"),
@@ -135,6 +147,9 @@ def main():
     editors = project / "Assets" / "Editor"
     editors.mkdir(parents=True, exist_ok=True)
     copy2(Path(__file__).with_name("FbxProbe.cs"), editors)
+    if args.seams:
+        copy2(Path(__file__).with_name("SeamTopologyProbe.cs"), editors)
+        copy2(Path(__file__).with_name("topology-seams.json"), project)
     if args.rebake or args.paint:
         for filename in ("TextureBakeProbe.cs", "TextureBakeProbe.shader"):
             copy2(Path(__file__).with_name(filename), editors)
