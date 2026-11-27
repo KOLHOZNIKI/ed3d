@@ -55,7 +55,7 @@ try {
   async function project(name) {
     const zip = unzipSync(await download('save-project', name));
     const manifest = JSON.parse(strFromU8(zip['manifest.json']));
-    assert.equal(manifest.schemaVersion, 10);
+    assert.equal(manifest.schemaVersion, 11);
     const path = manifest.working.meshEdits;
     const log = path ? strFromU8(zip[`blobs/${path}`]).trim().split('\n').map(line => JSON.parse(line)) : [];
     return { manifest, log };

@@ -1,4 +1,4 @@
-import { AmbientLight, AnimationMixer, Box3, Box3Helper, DirectionalLight, MOUSE, Mesh, MeshLambertMaterial, MeshPhongMaterial, OrthographicCamera,
+import { AmbientLight, AnimationMixer, Box3, Box3Helper, DirectionalLight, MOUSE, Mesh, MeshBasicMaterial, MeshLambertMaterial, MeshPhongMaterial, OrthographicCamera,
   PerspectiveCamera, Raycaster, Scene, SkinnedMesh, SRGBColorSpace, Texture, Vector2, Vector3, WebGLRenderer,
   type AnimationClip, type BufferGeometry, type Material, type Object3D } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -22,7 +22,10 @@ export class Viewer {
   #painting = false;
   #paintingStroke = false;
   #pose?: { clip: AnimationClip; time: number };
+  #mixers = new WeakMap<AnimationClip, AnimationMixer>();
   #manualPose?: () => () => void;
+  #previewUnlit?: Map<Material, MeshBasicMaterial>;
+  onPoseRender?: () => void;
   onCameraChange?: () => void;
   #contextLost = false;
 
@@ -70,7 +73,10 @@ export class Viewer {
     this.#inspection = undefined;
     this.#skinView = undefined;
     this.#pose = undefined;
+    this.#mixers = new WeakMap();
     this.#manualPose = undefined;
+    this.previewUnlit(false);
+    this.onPoseRender = undefined;
     if (this.#appearance) disposeAppearance(this.#appearance);
     this.#appearance = undefined;
     this.setLive();
@@ -123,18 +129,28 @@ export class Viewer {
 
   manualPose(apply?: () => () => void) { this.#manualPose = apply; }
 
+  previewUnlit(value: boolean) {
+    if (value) { this.#previewUnlit ??= new Map(); return; }
+    for (const material of this.#previewUnlit?.values() ?? []) material.dispose();
+    this.#previewUnlit = undefined;
+  }
+
   withPose<T>(use: () => T): T {
     if (this.#manualPose) {
       const restore = this.#manualPose();
       try { return use(); } finally { restore(); }
     }
-    if (!this.#pose || !this.#model) return use();
+    return this.#pose ? this.samplePose(this.#pose.clip, this.#pose.time, use) : use();
+  }
+
+  samplePose<T>(clip: AnimationClip, time: number, use: () => T): T {
+    if (!this.#model) return use();
     const root = this.#model;
-    const mixer = new AnimationMixer(root);
-    const action = mixer.clipAction(this.#pose.clip);
+    let mixer = this.#mixers.get(clip);
+    if (!mixer) { mixer = new AnimationMixer(root); this.#mixers.set(clip, mixer); }
+    const action = mixer.clipAction(clip).reset().play();
     action.paused = true;
-    action.time = this.#pose.time;
-    action.play();
+    action.time = time;
     mixer.update(0);
     root.updateMatrixWorld(true);
     try {
@@ -186,6 +202,7 @@ export class Viewer {
   render() {
     if (!this.#renderer || !this.#camera || this.#contextLost) return;
     const restore = applyViews((this.#live ?? this.#appearance)?.views ?? []);
+    const clearUnlit = this.#applyPreviewUnlit();
     const restoreSkin = this.#skinView && applyViews([this.#skinView]);
     const inspection = this.#inspection, masked: [Mesh, number][] = [];
     const geometry = inspection?.mesh.geometry;
@@ -199,13 +216,37 @@ export class Viewer {
       });
     }
     try {
-      this.withPose(() => this.#renderer!.render(this.scene, this.#camera!));
+      this.withPose(() => {
+        this.onPoseRender?.();
+        this.#renderer!.render(this.scene, this.#camera!);
+      });
     } finally {
       if (inspection && geometry) inspection.mesh.geometry = geometry;
       for (const [mesh, mask] of masked) mesh.layers.mask = mask;
       restoreSkin?.();
+      clearUnlit?.();
       restore();
     }
+  }
+
+  #applyPreviewUnlit() {
+    const cache = this.#previewUnlit;
+    if (!cache) return;
+    const views: { mesh: Mesh; material: Material | Material[] }[] = [];
+    const flat = (material: Material) => {
+      let result = cache.get(material);
+      if (!result) {
+        const source = material as Material & { color?: MeshBasicMaterial['color']; map?: Texture | null };
+        result = unlitColor(material, source.map ?? null);
+        if (source.color) result.color.copy(source.color);
+        cache.set(material, result);
+      }
+      return result;
+    };
+    this.#model?.traverse(node => {
+      if (node instanceof Mesh) views.push({ mesh: node, material: Array.isArray(node.material) ? node.material.map(flat) : flat(node.material) });
+    });
+    return applyViews(views);
   }
 }
 

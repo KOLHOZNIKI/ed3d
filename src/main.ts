@@ -26,6 +26,7 @@ import { transfer } from './uv/transfer';
 import { prepareProjection } from './uv/spatial';
 import { RigTool } from './rig/tool';
 import { WeightTool } from './weights/tool';
+import { diagnosticExports, HumanoidTool } from './humanoid/tool';
 import type { Layout } from './uv/layout';
 import { ExtractTool } from './extract/tool';
 import { buildExtraction } from './extract/build';
@@ -50,6 +51,7 @@ const uvButton = element<HTMLButtonElement>('uv-mode');
 const extractButton = element<HTMLButtonElement>('extract-mode');
 const rigButton = element<HTMLButtonElement>('rig-mode');
 const weightsButton = element<HTMLButtonElement>('weights-mode');
+const diagnosticButton = element<HTMLButtonElement>('diag-mode');
 const paintUnwrap = element<HTMLButtonElement>('paint-unwrap');
 const undo = element<HTMLButtonElement>('undo-stroke'), redo = element<HTMLButtonElement>('redo');
 const cancel = element<HTMLButtonElement>('cancel-job');
@@ -87,6 +89,7 @@ let uvEditing = false;
 let extracting = false;
 let rigging = false;
 let weighting = false;
+let diagnostic = false;
 let weightsStroke: number | undefined;
 let stroke: { pointer: number; gesture: Exclude<ReturnType<PaintTool['begin']>, string | undefined> } | undefined;
 let paintBinding = '';
@@ -242,6 +245,21 @@ const weightsTool = new WeightTool(viewer, canvas, {
   },
 });
 
+const diagnosticTool = new HumanoidTool(viewer, {
+  apply(revision, patch, label) {
+    return locked(async () => {
+      const work = current!;
+      await edit(work, revision, { ...work.document.state, ...patch }, label, 'humanoid');
+      status.textContent = `${label} applied.`;
+    });
+  },
+  freeze(frame) {
+    if (current?.adapter !== frame.adapter) return;
+    openWeights(frame);
+    status.textContent = `Weight Paint froze ${frame.name} at ${frame.time.toFixed(3)} s.`;
+  },
+});
+
 function commitUv(request: UvRequest) {
   return locked(async signal => {
     const work = current!, { object, revision, layout, channel, options } = request;
@@ -352,6 +370,7 @@ function controls() {
   if (!availablePaint) uvEditing = false;
   if (!availablePaint) extracting = false;
   if (!availablePaint || !current?.adapter.rig.available) rigging = false;
+  if (!availablePaint || !current?.adapter.rig.available) diagnostic = false;
   if (!availableWeights) weighting = false;
   sources.disabled = locked;
   close.disabled = save.disabled = saveAs.disabled = exportButton.disabled = locked || !document;
@@ -365,6 +384,7 @@ function controls() {
   extractButton.disabled = locked || !availablePaint;
   rigButton.disabled = locked || !availablePaint || !current?.adapter.rig.available;
   weightsButton.disabled = locked || !availableWeights;
+  diagnosticButton.disabled = locked || !availablePaint || !current?.adapter.rig.available;
   undo.disabled = locked || !document?.undoDepth;
   redo.disabled = locked || !document?.redoDepth;
   restore.disabled = locked;
@@ -377,6 +397,7 @@ function controls() {
   extractButton.setAttribute('aria-pressed', String(extracting));
   rigButton.setAttribute('aria-pressed', String(rigging));
   weightsButton.setAttribute('aria-pressed', String(weighting));
+  diagnosticButton.setAttribute('aria-pressed', String(diagnostic));
   canvas.style.cursor = painting && !busy ? 'crosshair' : '';
   canvas.style.touchAction = 'none';
   viewer.setPainting(painting || meshEditing || repairing || uvEditing || extracting || rigging || weighting,
@@ -402,6 +423,7 @@ function controls() {
   toggleTexture.disabled = locked || !targets.length;
   toggleTexture.setAttribute('aria-expanded', String(!editor.panel.hidden));
   editor.lock(busy || !!stroke);
+  if (!diagnostic) diagnosticTool.configure(undefined, locked);
   if (!weighting) weightsTool.configure(undefined, locked);
   painter.configure(painting, locked, current && { model: current.model, adapter: current.adapter, revision: current.document.revision,
     targets, region: target => editor.region(target) }, paintBinding);
@@ -416,6 +438,7 @@ function controls() {
   extractTool.configure(extracting && current ? { adapter: current.adapter, state: document!.state, revision: document!.revision, object: selected } : undefined, locked);
   rigTool.configure(rigging && current ? { session: current.adapter.rig, state: document!.state, revision: document!.revision } : undefined, locked);
   if (weighting && current) weightsTool.configure({ adapter: current.adapter, object: selected, state: document!.state, revision: document!.revision }, locked);
+  if (diagnostic && current) diagnosticTool.configure({ adapter: current.adapter, object: selected, state: document!.state, revision: document!.revision }, locked);
   const pendingUv = fbx && document?.state.bake?.direct ? 0 : current?.adapter.mesh.pendingUv ?? 0;
   const notes = [current?.adapter.mesh.omittedPolygonMetadata ? 'GLB exports the edited topology as indexed triangles and omits incompatible private polygon metadata.' : '',
     pendingUv ? `${pendingUv} created faces require UV review or unwrapping.` : '',
@@ -475,6 +498,7 @@ function syncTextureEditor() {
 }
 
 toggleTexture.addEventListener('click', () => {
+  diagnostic = false;
   weighting = false;
   uvEditing = false;
   extracting = false;
@@ -567,6 +591,7 @@ function canReplace() {
 }
 
 function closeWorkspace() {
+  diagnosticTool.reset();
   viewer.close();
   if (current) {
     current.adapter.dispose();
@@ -584,6 +609,7 @@ function closeWorkspace() {
   extracting = false;
   rigging = false;
   weighting = false;
+  diagnostic = false;
   weightsStroke = undefined;
   autosaveDue = undefined;
   window.clearTimeout(autosaveTimer);
@@ -705,9 +731,11 @@ historyBudget.addEventListener('change', () => {
 exportButton.addEventListener('click', () => void locked(async () => {
   const { model, adapter, document, textures } = current!;
   adapter.rig.assertExportable();
+  const published = diagnosticExports(adapter, document.state), animation = model.scene.animations;
   // Viewport visibility is a project setting. Export preserves the original visibility and complete asset.
   adapter.applyVisibility({ objects: {} });
   try {
+    if (published.length) model.scene.animations = [...animation, ...published];
     const bound = sourceAppearance(textures, document.state, model.format === 'glb' ? 'glb' : 'fbx');
     const restore = applyViews(bound.appearance.views);
     let output;
@@ -718,7 +746,8 @@ exportButton.addEventListener('click', () => void locked(async () => {
         const projected = projectedModel(model, document.state);
         if (projected.format !== 'fbx') throw new Error('Invalid FBX export state.');
         const transfers = Object.entries(document.state.uvBakes ?? {}).map(([object, transfer]) => ({ object, bake: transfer.bake }));
-        output = await exportAsset(projected, bound.fbx, undefined, transfers.length ? transfers : undefined);
+        output = await exportAsset(published.length ? { ...projected, stats: { ...projected.stats, clips: model.scene.animations.length } } : projected,
+          bound.fbx, undefined, transfers.length ? transfers : undefined);
       }
     } finally {
       restore();
@@ -727,6 +756,7 @@ exportButton.addEventListener('click', () => void locked(async () => {
     download(new Blob([output.bytes], { type: glb ? 'model/gltf-binary' : 'application/zip' }), output.name);
     status.textContent = `Exported ${output.name}.` + (glb ? '' : ' See manifest.json for material assignments and scope.');
   } finally {
+    model.scene.animations = animation;
     adapter.applyVisibility(document.state);
   }
 }, 'Preparing export…'));
@@ -954,6 +984,7 @@ window.addEventListener('keydown', event => {
 });
 
 paintButton.addEventListener('click', () => {
+  diagnostic = false;
   weighting = false;
   rigging = false;
   uvEditing = false;
@@ -966,6 +997,7 @@ paintButton.addEventListener('click', () => {
 });
 
 meshButton.addEventListener('click', () => {
+  diagnostic = false;
   weighting = false;
   rigging = false;
   uvEditing = false;
@@ -978,6 +1010,7 @@ meshButton.addEventListener('click', () => {
 });
 
 repairButton.addEventListener('click', () => {
+  diagnostic = false;
   weighting = false;
   rigging = false;
   uvEditing = false;
@@ -989,6 +1022,7 @@ repairButton.addEventListener('click', () => {
 });
 
 uvButton.addEventListener('click', () => {
+  diagnostic = false;
   weighting = false;
   rigging = false;
   extracting = false;
@@ -1003,6 +1037,7 @@ uvButton.addEventListener('click', () => {
 });
 
 extractButton.addEventListener('click', () => {
+  diagnostic = false;
   weighting = false;
   rigging = false;
   extracting = !extracting;
@@ -1016,6 +1051,7 @@ extractButton.addEventListener('click', () => {
 });
 
 rigButton.addEventListener('click', () => {
+  diagnostic = false;
   weighting = false;
   rigging = !rigging;
   if (rigging) {
@@ -1027,17 +1063,32 @@ rigButton.addEventListener('click', () => {
 });
 
 weightsButton.addEventListener('click', () => {
-  weighting = !weighting;
-  if (weighting && current) {
-    painting = meshEditing = repairing = uvEditing = extracting = rigging = false;
-    if (!editor.panel.hidden) editor.close();
-    if (!(current.adapter.objects.get(selected) instanceof SkinnedMesh)) {
-      const first = current.adapter.viewEntries.find(entry => current!.adapter.objects.get(entry.id) instanceof SkinnedMesh);
-      if (first) selectObject(first.id);
-    }
-  }
+  if (weighting) weighting = false;
+  else openWeights();
   controls();
   status.textContent = weighting ? 'Weight Paint is active. Right-drag to orbit.' : 'Weight Paint is off.';
+});
+
+function openWeights(frame?: Parameters<WeightTool['useDiagnostic']>[0]) {
+  if (!current) return;
+  const first = current.adapter.viewEntries.find(entry => current!.adapter.objects.get(entry.id) instanceof SkinnedMesh);
+  if (!first) throw new Error('Weight Paint requires a skinned mesh.');
+  weighting = true;
+  painting = meshEditing = repairing = uvEditing = extracting = rigging = diagnostic = false;
+  if (!editor.panel.hidden) editor.close();
+  if (frame) weightsTool.useDiagnostic(frame);
+  if (!(current.adapter.objects.get(selected) instanceof SkinnedMesh)) selectObject(first.id);
+  controls();
+}
+
+diagnosticButton.addEventListener('click', () => {
+  diagnostic = !diagnostic;
+  if (diagnostic) {
+    painting = meshEditing = repairing = uvEditing = extracting = rigging = weighting = false;
+    if (!editor.panel.hidden) editor.close();
+  }
+  controls();
+  status.textContent = diagnostic ? 'Humanoid Tests is active.' : 'Humanoid Tests is off.';
 });
 
 function pointerPoint(event: PointerEvent): Point {

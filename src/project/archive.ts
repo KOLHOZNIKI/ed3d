@@ -5,7 +5,9 @@ import { decodePng, encodeImage } from '../texture/image';
 import { boundaryId, decodeEdit } from '../mesh/commands';
 import type { TextureBake } from '../e00/rebake';
 import { glbSlots } from '../uv/transfer';
-import type { Joint, Pose, PoseState, Quat, RigClip, RigState } from '../rig/state';
+import type { Joint, Pose, PoseState, PoseTranslations, Quat, RigClip, RigState } from '../rig/state';
+import { roles, type HumanoidProfile, type HumanoidState, type MotionId, type Role } from '../humanoid/profile';
+import { motions } from '../humanoid/motions';
 import type { Vec3 } from '../mesh/data';
 
 const MiB = 1024 * 1024;
@@ -108,10 +110,10 @@ export async function writeProject(document: AssetDocument<WorkingState>, option
     }
     meshEdits = await retain(bytes);
   }
-  const manifest = encoder.encode(JSON.stringify({ format: 'AssetFixer', schemaVersion: 10, id: options?.id ?? document.id,
+  const manifest = encoder.encode(JSON.stringify({ format: 'AssetFixer', schemaVersion: 11, id: options?.id ?? document.id,
     name: options?.name ?? document.name, revision, settings: { historyBudget }, scene, originals: originalRefs,
     resources, working: { objects: state.objects, geometry, bake, paint, textures, meshEdits, keepOpen: state.keepOpen, uvBakes, extracts,
-      rig: state.rig, poses: state.poses, weightLocks: state.weightLocks } }));
+      rig: state.rig, poses: state.poses, weightLocks: state.weightLocks, humanoid: state.humanoid } }));
   if (manifest.byteLength > MiB || expanded + manifest.byteLength > limits.total) throw new Error('The project manifest exceeds its size limit.');
   files.set('manifest.json', manifest);
   const bytes = await pack(files);
@@ -128,7 +130,7 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
   const manifest = record(JSON.parse(decoder.decode(encoded)));
   if (manifest.format !== 'AssetFixer') throw new Error('This file is not an AssetFixer project.');
   const version = integer(manifest.schemaVersion, 1);
-  if (version > 10) throw new Error(`Project schema ${version} is newer than this application supports.`);
+  if (version > 11) throw new Error(`Project schema ${version} is newer than this application supports.`);
   // Version 1 had a fixed history budget. Version 2 persists the project setting.
   const historyBudget = version === 1 ? defaultHistoryBudget : integer(record(manifest.settings).historyBudget, MiB, projectLimit);
   if (historyBudget % MiB) throw new Error('Invalid project history budget.');
@@ -327,8 +329,9 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
   const poses = version >= 9 && working.poses !== undefined ? readPoses(working.poses) : undefined;
   const weightLocks = version >= 10 && working.weightLocks !== undefined ? list(working.weightLocks, 2048).map(readJointId) : undefined;
   if (weightLocks && new Set(weightLocks).size !== weightLocks.length) throw new Error('Duplicate saved weight lock.');
+  const humanoid = version >= 11 && working.humanoid !== undefined ? readHumanoid(working.humanoid) : undefined;
   return { id, name: text(manifest.name, 160), revision: integer(manifest.revision, 0, 1e12), originals, historyBudget, scene,
-    state: { objects, atlas, bake, paint, textures, meshEdits, keepOpen, uvBakes, extracts, rig, poses, weightLocks } };
+    state: { objects, atlas, bake, paint, textures, meshEdits, keepOpen, uvBakes, extracts, rig, poses, weightLocks, humanoid } };
 }
 
 function readJointId(value: unknown) {
@@ -375,9 +378,16 @@ function readRig(value: unknown): RigState {
     const item = record(info), mode = item.mode;
     if (!/^\d{1,5}$/.test(id) || mode !== 'original' && mode !== 'exclude' && mode !== 'adapted') throw new Error('Invalid saved clip setting.');
     clips[Number(id)] = mode === 'adapted' ? { mode, name: text(item.name, 160), basis: readBasis(item.basis),
-      offsets: item.offsets === undefined ? undefined : readPose(item.offsets) } : { mode };
+      offsets: item.offsets === undefined ? undefined : readPose(item.offsets), translationOffsets: readPoseTranslations(item.translationOffsets) } : { mode };
   }
   return { joints, transfers, clips, rebind: list(data.rebind, 2048).map(readJointId), basis: readBasis(data.basis) };
+}
+
+function readPoseTranslations(value: unknown): PoseTranslations | undefined {
+  if (value === undefined) return;
+  const entries = Object.entries(record(value));
+  if (entries.length > 2048) throw new Error('Invalid saved pose translation count.');
+  return Object.fromEntries(entries.map(([id, vector]) => [readJointId(id), readVector(vector, 3)]));
 }
 
 function readPoses(value: unknown): PoseState {
@@ -386,9 +396,41 @@ function readPoses(value: unknown): PoseState {
     const item = record(row), id = text(item.id, 36);
     if (!uuidPattern.test(id) || ids.has(id)) throw new Error('Invalid saved pose ID.');
     ids.add(id);
-    return { id, name: text(item.name, 120), rotations: readPose(item.rotations) };
+    return { id, name: text(item.name, 120), rotations: readPose(item.rotations), translations: readPoseTranslations(item.translations) };
   });
-  return { current: readPose(data.current), saved };
+  return { current: readPose(data.current), translations: readPoseTranslations(data.translations), saved };
+}
+
+function readHumanoidProfile(value: unknown): HumanoidProfile {
+  const data = record(value), corrections = record(data.corrections);
+  const roleEntries = <T>(value: unknown, read: (item: unknown) => T) => Object.fromEntries(Object.entries(record(value)).map(([role, item]) => {
+    if (!(roles as readonly string[]).includes(role)) throw new Error('Invalid saved humanoid role.');
+    return [role as Role, read(item)];
+  }));
+  const angles = (value: unknown) => {
+    const angle = finite(value);
+    if (Math.abs(angle) > 180) throw new Error('Invalid saved humanoid angle.');
+    return angle;
+  };
+  const c = data.calibration === undefined ? undefined : record(data.calibration);
+  if (c && c.kind !== 'A' && c.kind !== 'T') throw new Error('Invalid saved calibration reference.');
+  return { group: readJointId(data.group), mapping: roleEntries(data.mapping, readJointId),
+    axes: roleEntries(data.axes, item => { const axis = readVector(item, 3); axis.forEach(angles); return axis; }),
+    reverseForward: bool(data.reverseForward),
+    corrections: { armAbduction: angles(corrections.armAbduction), legSpacing: angles(corrections.legSpacing), pelvis: readVector(corrections.pelvis, 3) },
+    calibration: c ? { kind: c.kind as 'A' | 'T', basis: readBasis(c.basis), mapping: text(c.mapping, 2048), rotations: readPose(c.rotations) } : undefined };
+}
+
+function readHumanoid(value: unknown): HumanoidState {
+  const data = record(value), names = new Set<string>();
+  const published = list(data.published, 24).map(row => {
+    const item = record(row), name = text(item.name, 120), motion = item.motion as MotionId;
+    if (!motions.some(clip => clip.id === motion) || names.has(name) || !/^[\p{L}\p{N}_ -]+$/u.test(name)) throw new Error('Invalid published diagnostic clip.');
+    names.add(name);
+    return { name, motion, basis: readBasis(item.basis), profile: readHumanoidProfile(item.profile),
+      corrected: bool(item.corrected), rootMotion: bool(item.rootMotion) };
+  });
+  return { profile: readHumanoidProfile(data.profile), published };
 }
 
 function validatePng(png: Uint8Array<ArrayBuffer>, width: number, height: number) {

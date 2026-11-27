@@ -49,6 +49,12 @@
         color: #fff; font-weight: 600; text-shadow: 0 1px 3px #000; }
       #weights-cursor { position: absolute; border: 1px solid #fff; box-shadow: 0 0 1px 1px #141821;
         border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
+      #diag-tools input[type=number] { width: 5.3rem; }
+      #diag-map { max-height: 24rem; overflow: auto; }
+      #diag-map table { width: 100%; border-collapse: collapse; text-align: left; }
+      #diag-map th, #diag-map td { padding: .25rem; border-bottom: 1px solid #80808042; }
+      #diag-tools p { font-size: .875rem; }
+      #diag-scrub { width: 100%; margin: .5rem 0; }
       #paint-tools input[type=number] { width: 5.5rem; }
       #paint-target { width: 100%; margin: .35rem 0; }
       #paint-info { font-size: .875rem; margin: .5rem 0 0; }
@@ -123,6 +129,7 @@
         <button id="extract-mode" type="button" aria-pressed="false" disabled>Extract</button>
         <button id="rig-mode" type="button" aria-pressed="false" disabled>Rig &amp; Pose</button>
         <button id="weights-mode" type="button" aria-pressed="false" disabled>Weight Paint</button>
+        <button id="diag-mode" type="button" aria-pressed="false" disabled>Humanoid Tests</button>
         <button id="undo-stroke" type="button" disabled>Undo</button>
         <button id="redo" type="button" disabled>Redo</button>
         <button id="toggle-texture" type="button" aria-expanded="false" disabled>Texture editor</button>
@@ -295,6 +302,86 @@
         <p id="selection-details"></p>
       </fieldset>
       </div>
+      <fieldset id="diag-tools" hidden>
+        <legend>Humanoid Tests</legend>
+        <details id="diag-mapping">
+          <summary>Humanoid mapping</summary>
+          <div class="actions">
+            <label>Rig <select id="diag-group"></select></label>
+            <button id="diag-suggest" type="button">Suggest roles</button>
+            <label><input id="diag-reverse" type="checkbox" /> Reverse forward direction</label>
+          </div>
+          <p id="diag-map-summary" aria-live="polite"></p>
+          <div id="diag-map"><table><thead><tr><th>Role</th><th>Joint</th><th>Mapping check</th></tr></thead><tbody id="diag-roles"></tbody></table></div>
+        </details>
+        <details id="diag-calibration">
+          <summary>Calibration and offsets</summary>
+          <div class="actions">
+            <label>Reference <select id="diag-reference"><option>T</option><option>A</option></select></label>
+            <button id="diag-calibrate" type="button">Align reference pose</button>
+            <button id="diag-capture" type="button">Capture current manual pose</button>
+          </div>
+          <p id="diag-calibration-state"></p>
+          <div class="actions">
+            <label>Calibrate axes for <select id="diag-axis-role"></select></label>
+            <label>X ° <input id="diag-axis-x" type="number" min="-180" max="180" value="0" step="any" /></label>
+            <label>Y ° <input id="diag-axis-y" type="number" min="-180" max="180" value="0" step="any" /></label>
+            <label>Z ° <input id="diag-axis-z" type="number" min="-180" max="180" value="0" step="any" /></label>
+            <button id="diag-save-axes" type="button">Save local axes</button>
+          </div>
+          <div class="actions">
+            <label>Arm abduction ° <input id="diag-arm-offset" type="number" value="0" step="any" /></label>
+            <label>Leg spacing ° <input id="diag-leg-offset" type="number" value="0" step="any" /></label>
+            <label>Pelvis side <input id="diag-hip-x" type="number" value="0" step="any" /></label>
+            <label>Pelvis height <input id="diag-hip-y" type="number" value="0" step="any" /></label>
+            <label>Pelvis forward <input id="diag-hip-z" type="number" value="0" step="any" /></label>
+            <button id="diag-save-offsets" type="button">Save character offsets</button>
+          </div>
+        </details>
+        <div class="actions">
+          <label>Diagnostic clip <select id="diag-clip"></select></label>
+          <label>Preset or saved pose <select id="diag-preset"></select></label>
+          <button id="diag-base" type="button">Reset to working rest</button>
+        </div>
+        <div class="actions">
+          <button id="diag-play" type="button" aria-pressed="false">Play</button>
+          <button id="diag-step-back" type="button" aria-label="Previous frame">−1 frame</button>
+          <button id="diag-step-forward" type="button" aria-label="Next frame">+1 frame</button>
+          <label><input id="diag-loop" type="checkbox" checked /> Loop</label>
+          <label>Speed <select id="diag-speed"><option value=".25">0.25×</option><option value=".5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="custom">Custom</option></select></label>
+          <label>Custom speed <input id="diag-speed-custom" type="number" value="1" min="0.05" max="4" step="any" /></label>
+          <label><input id="diag-root" type="checkbox" /> Root motion</label>
+        </div>
+        <label for="diag-scrub">Time <output id="diag-time">0.000 s</output></label>
+        <input id="diag-scrub" type="range" min="0" max="0" value="0" step="0.001" />
+        <div class="actions">
+          <label><input id="diag-range" type="checkbox" /> Repeat range</label>
+          <label>From (s) <input id="diag-in" type="number" min="0" value="0" step="any" /></label>
+          <label>To (s) <input id="diag-out" type="number" min="0" value="0" step="any" /></label>
+          <button id="diag-freeze" type="button">Freeze for Weight Paint</button>
+        </div>
+        <div class="actions">
+          <label><input id="diag-overlay" type="checkbox" checked /> Skeleton overlay</label>
+          <label><input id="diag-corrected" type="checkbox" checked /> Apply character offsets</label>
+          <label><input id="diag-compare" type="checkbox" /> Compare source skeleton</label>
+          <label>Display <select id="diag-display"><option value="lit">Lit</option><option value="unlit">Unlit</option><option value="heatmap">Weight heatmap</option></select></label>
+          <label>Heatmap joint <select id="diag-heat-joint"></select></label>
+        </div>
+        <div class="actions">
+          <label>Pose name <input id="diag-pose-name" maxlength="120" /></label>
+          <button id="diag-save-pose" type="button">Save current pose</button>
+        </div>
+        <details id="diag-export">
+          <summary>Published diagnostic clips</summary>
+          <div class="actions">
+            <label>Clip name <input id="diag-publish-name" maxlength="120" /></label>
+            <button id="diag-publish" type="button">Include selected diagnostic in exports</button>
+            <label>Included clip <select id="diag-published"></select></label>
+            <button id="diag-remove" type="button">Remove from exports</button>
+          </div>
+        </details>
+        <p id="diag-info" aria-live="polite"></p>
+      </fieldset>
       <fieldset id="weights-tools" hidden>
         <legend>Skin Weights</legend>
         <div class="actions">

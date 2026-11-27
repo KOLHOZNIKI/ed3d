@@ -60,6 +60,10 @@ Open **Weight Paint** and choose a skinned object. Select an influence to see it
 
 Use **Find invalid** to locate problem vertices. Choose a fallback joint for zero sums, and use **Preview conversion** to see weight loss and the resulting deformation before converting rows with extra influences. **Mirror weights** uses the chosen world plane and explicit joint pairs. **Transfer weights** samples an original or captured working mesh using distance, normal, and source-face limits. Both operations report skipped vertices.
 
+Open **Humanoid Tests**, expand **Humanoid mapping**, and use **Suggest roles** to assign joints. Review the confidence and resolve missing or duplicate roles. Under **Calibration and offsets**, align a T/A reference or capture the current manual pose. You can adjust the local motion axes and save arm, leg, and pelvis offsets for the character.
+
+Choose one of the ten diagnostic clips and use play, scrub, frame step, or repeat range. Turn on **Root motion** to preview travel where the clip provides it. Use **Freeze for Weight Paint** to edit at the selected frame. Return to **Humanoid Tests** to replay the same interval. **Save current pose** stores a reusable checkpoint. **Include selected diagnostic in exports** stores a separately named clip recipe from the current settings.
+
 | Command | Purpose |
 | --- | --- |
 | `npm run typecheck` | Check the application with strict TypeScript settings. |
@@ -84,6 +88,7 @@ Use **Find invalid** to locate problem vertices. Choose a fallback joint for zer
 
 ## Verification
 
+- [E11 humanoid diagnostics verification](Docs/E11_Report.md) covers mapping, calibration, all ten clips, frozen weight painting, and FBX and GLB export.
 - [E10 weight editing verification](Docs/E10_Report.md) covers locks, fifth-influence conflicts, frozen-frame smoothing, UV seams, weight transfer, and FBX and GLB exports.
 - [E09 rig and manual pose verification](Docs/E09_Report.md) covers shared binding, pose persistence, clip compatibility, and FBX and GLB exports.
 - [E08 extended repair and projection verification](Docs/E08_Report.md) covers pinned patches, bridge pairing, projected normals, missing samples, and FBX animation after Smooth Fill.

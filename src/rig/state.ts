@@ -2,6 +2,7 @@ import type { Vec3 } from '../mesh/data';
 
 export type Quat = readonly [number, number, number, number];
 export type Pose = Readonly<Record<string, Quat>>;
+export type PoseTranslations = Readonly<Record<string, Vec3>>;
 
 export interface Joint {
   readonly id: string;
@@ -18,6 +19,7 @@ export interface RigClip {
   readonly name?: string;
   readonly basis?: string;
   readonly offsets?: Pose;
+  readonly translationOffsets?: PoseTranslations;
 }
 
 export interface RigState {
@@ -30,7 +32,8 @@ export interface RigState {
 
 export interface PoseState {
   readonly current: Pose;
-  readonly saved: readonly { id: string; name: string; rotations: Pose }[];
+  readonly translations?: PoseTranslations;
+  readonly saved: readonly { id: string; name: string; rotations: Pose; translations?: PoseTranslations }[];
 }
 
 export type RigAction =

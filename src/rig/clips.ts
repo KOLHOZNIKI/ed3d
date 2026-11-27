@@ -1,4 +1,4 @@
-import { AnimationClip, Bone, PropertyBinding, Quaternion, QuaternionKeyframeTrack, type KeyframeTrack, type Object3D } from 'three';
+import { AnimationClip, Bone, PropertyBinding, Quaternion, QuaternionKeyframeTrack, VectorKeyframeTrack, type KeyframeTrack, type Object3D } from 'three';
 import type { Joint, RigClip, RigState } from './state';
 
 export interface Track {
@@ -44,6 +44,7 @@ export function makeClips(originals: readonly OriginalClip[], source: ReadonlyMa
       const adapted = setting.mode === 'adapted';
       if (adapted && unsafeBinding) throw new Error('A clip animates an external rig parent or has an unresolved transform binding. Exclude it until it can be retargeted.');
       const mapped = new Set<string>();
+      const mappedTranslations = new Set<string>();
       const tracks = original.tracks.map(entry => {
         const { node, track, property, component } = entry;
         const old = node && source.get(node), joint = node && after.get(node);
@@ -73,7 +74,9 @@ export function makeClips(originals: readonly OriginalClip[], source: ReadonlyMa
             value.fromArray(next.values, j).premultiply(prefix).multiply(offset).normalize().toArray(next.values, j);
           }
         } else if (property === 'position') {
-          for (let j = 0; j < next.values.length; j++) next.values[j] += joint.position[j % 3] - old.position[j % 3];
+          mappedTranslations.add(joint.id);
+          const shift = setting.translationOffsets?.[joint.id] ?? [0, 0, 0];
+          for (let j = 0; j < next.values.length; j++) next.values[j] += joint.position[j % 3] - old.position[j % 3] + shift[j % 3];
         }
         return next;
       });
@@ -84,6 +87,14 @@ export function makeClips(originals: readonly OriginalClip[], source: ReadonlyMa
         const rotation = new Quaternion(...joint.rotation).multiply(new Quaternion(...offset)).normalize().toArray();
         const times = original.clip.duration > 0 ? [0, original.clip.duration] : [0];
         tracks.push(new QuaternionKeyframeTrack(`${joint.name}.quaternion`, times, times.flatMap(() => rotation)));
+      }
+      if (adapted) for (const [id, offset] of Object.entries(setting.translationOffsets ?? {})) {
+        const joint = after.get(id);
+        if (!joint) throw new Error('A saved correction references a missing joint.');
+        if (mappedTranslations.has(id)) continue;
+        const position = joint.position.map((value, axis) => value + offset[axis]);
+        const times = original.clip.duration > 0 ? [0, original.clip.duration] : [0];
+        tracks.push(new VectorKeyframeTrack(`${joint.name}.position`, times, times.flatMap(() => position)));
       }
       if (tracks.every((track, index) => track === original.clip.tracks[index]) && !adapted) return { ...result, clip: original.clip };
       const clip = new AnimationClip(adapted ? setting.name! : original.clip.name, original.clip.duration, tracks, original.clip.blendMode);

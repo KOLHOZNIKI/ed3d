@@ -9,6 +9,7 @@ import type { WorkingState } from '../project/state';
 import type { Viewer } from '../project/viewer';
 import type { Point } from '../texture/stroke';
 import type { UvTriangle } from '../texture/overlay';
+import type { FrozenDiagnostic } from '../humanoid/tool';
 import { total, type Row, type WeightEditRow } from './data';
 import { adjacency, blend, readProfile, reconcile, weightOf, type Weights } from './operations';
 import { deformation, drawVertices, sample } from './sampling';
@@ -36,6 +37,7 @@ export class WeightTool {
   #context?: Context;
   #profile?: Profile;
   #gesture?: Gesture;
+  #external?: FrozenDiagnostic;
   #geometry?: BufferGeometry;
   #conversion?: Conversion;
   #snapshot?: { object: string; snapshot: Snapshot };
@@ -79,6 +81,7 @@ export class WeightTool {
     ui('tools').hidden = !context;
     if (!context) {
       if (previous) {
+        this.#external = undefined;
         this.#snapshot = this.#profile = this.#conversion = undefined;
         this.#highlight.clear();
         this.#maskPick = false;
@@ -101,8 +104,9 @@ export class WeightTool {
       catch (error) { this.#profile = undefined; this.#report(error); }
       this.#options();
       if (previous?.adapter !== context.adapter) {
-        select('pose').value = 'rest';
-        field('time').value = '0';
+        const handoff = this.#external?.adapter === context.adapter ? this.#external : undefined;
+        select('pose').value = handoff ? 'diagnostic' : 'rest';
+        field('time').value = String(handoff?.time ?? 0);
       }
       this.#refresh();
     }
@@ -111,6 +115,8 @@ export class WeightTool {
     }
     ui<HTMLButtonElement>('confirm').disabled = !this.#conversion;
   }
+
+  useDiagnostic(frame: FrozenDiagnostic) { this.#external = frame; }
 
   #read(object: string, original = false): Profile {
     const { adapter, state } = this.#context!;
@@ -128,7 +134,10 @@ export class WeightTool {
     const joints = [...this.#profile?.palette ?? []].map(id => [id, adapter.rig.bone(id)?.name || id] as const);
     for (const picker of ['joint', 'replace', 'fallback']) this.#selectOptions(picker, joints, picker === 'joint' ? undefined : 'None');
     const clips = adapter.model.scene.animations.map((clip, index) => [`clip-${index}`, clip.name] as const);
-    this.#selectOptions('pose', [['rest', 'Working rest'], ...(state.poses && Object.keys(state.poses.current).length ? [['manual', 'Current manual pose'] as const] : []), ...clips]);
+    const manual = state.poses && (Object.keys(state.poses.current).length || Object.keys(state.poses.translations ?? {}).length);
+    const handoff = this.#external?.adapter === adapter ? this.#external : undefined;
+    this.#selectOptions('pose', [['rest', 'Working rest'], ...(manual ? [['manual', 'Current manual pose'] as const] : []), ...clips,
+      ...(handoff ? [['diagnostic', `${handoff.name} · diagnostic frame`] as const] : [])]);
     const original = select('source-mode').value === 'original';
     this.#selectOptions('source', adapter.viewEntries.filter(entry => adapter.objects.get(entry.id) instanceof SkinnedMesh &&
       (!original || adapter.mesh.originalGeometry(entry.id))).map(entry => [entry.id, state.objects[entry.id]?.name ?? entry.name]), undefined, object);
@@ -149,9 +158,13 @@ export class WeightTool {
     field('lock').checked = ctx.state.weightLocks?.includes(select('joint').value) ?? false;
     ui<HTMLButtonElement>('confirm').disabled = !this.#conversion;
     const pose = select('pose').value;
-    const clip = pose.startsWith('clip-') ? ctx.adapter.model.scene.animations[Number(pose.slice(5))] : undefined;
-    this.viewer.manualPose(clip ? undefined : () => ctx.adapter.rig.applyPose(pose === 'manual' ? ctx.state.poses?.current ?? {} : {}));
-    this.viewer.freeze(clip, clip ? Math.min(clip.duration, Math.max(0, field('time').valueAsNumber || 0)) : 0);
+    const handoff = pose === 'diagnostic' && this.#external?.adapter === ctx.adapter ? this.#external : undefined;
+    const clip = pose.startsWith('clip-') ? ctx.adapter.model.scene.animations[Number(pose.slice(5))] : handoff?.clip;
+    field('time').disabled = !!handoff;
+    if (handoff) field('time').value = String(handoff.time);
+    this.viewer.manualPose(clip ? undefined : () => ctx.adapter.rig.applyPose(pose === 'manual' ? ctx.state.poses?.current ?? {} : {},
+      pose === 'manual' ? ctx.state.poses?.translations : undefined));
+    this.viewer.freeze(clip, clip ? Math.min(clip.duration, Math.max(0, handoff?.time ?? (field('time').valueAsNumber || 0))) : 0);
     this.#draw();
     const count = [...profile.weights.issues.values()].filter(issues => issues.includes('over four influences')).length;
     this.#info(`${profile.weights.rows.size.toLocaleString()} logical vertices · ${profile.palette.size} influences` +

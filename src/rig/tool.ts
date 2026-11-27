@@ -4,7 +4,7 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import type { WorkingState } from '../project/state';
 import type { Viewer } from '../project/viewer';
 import type { RigSession } from './session';
-import { emptyPose, type Joint, type Pose, type PoseState, type Quat, type RigAction, type RigClip } from './state';
+import { emptyPose, type Joint, type Pose, type PoseState, type PoseTranslations, type Quat, type RigAction, type RigClip } from './state';
 import { unpack, worldMatrices } from './transforms';
 
 const ui = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(`rig-${id}`)! as T;
@@ -63,10 +63,12 @@ export class RigTool {
     ui('exclude').onclick = () => void this.#clip('exclude');
     ui('reset-bone').onclick = () => {
       const current = { ...this.#poses.current };
+      const translations = { ...this.#poses.translations };
       delete current[this.#id];
-      void this.#pose(current, 'Reset bone pose');
+      delete translations[this.#id];
+      void this.#pose(current, 'Reset bone pose', translations);
     };
-    ui('reset-pose').onclick = () => void this.#pose({}, 'Reset manual pose');
+    ui('reset-pose').onclick = () => void this.#pose({}, 'Reset manual pose', {});
     ui('save').onclick = () => void this.#save('save');
     ui('rename-pose').onclick = () => void this.#save('rename');
     ui('copy-pose').onclick = () => void this.#save('duplicate');
@@ -133,7 +135,7 @@ export class RigTool {
       presets.replaceChildren(...this.#poses.saved.map(pose => {
         const shortcut = document.createElement('button');
         shortcut.type = 'button';
-        const missing = this.#missing(pose.rotations);
+        const missing = this.#missing(pose.rotations, pose.translations);
         shortcut.textContent = pose.name + (missing.length ? ` (${missing.length} missing)` : '');
         shortcut.title = missing.join(', ');
         shortcut.setAttribute('aria-pressed', String(pose.id === this.#savedId));
@@ -176,13 +178,13 @@ export class RigTool {
     if (!clip?.clip) field('preview-clip').checked = false;
     const trim = checked('preview-clip') && clip?.clip;
     const pose = this.#posing ? this.#preview ?? this.#poses.current : emptyPose.current;
-    const manual = trim ? undefined : () => context.session.applyPose(pose);
+    const manual = trim ? undefined : () => context.session.applyPose(pose, this.#posing ? this.#poses.translations : undefined);
     this.viewer.manualPose(manual);
     this.viewer.freeze(trim || undefined, trim ? Math.min(this.#time, trim.duration) : 0);
     const joint = this.#joints.find(item => item.id === this.#id);
     if (joint) {
       const position = new Vector3().setFromMatrixPosition(worldMatrices(this.#joints, context.session.anchor)(joint.id));
-      const missing = this.#missing(this.#poses.current);
+      const missing = this.#missing(this.#poses.current, this.#poses.translations);
       const affected = context.session.affectedMeshes(joint);
       this.#say(`${joint.name || joint.id} · ${joint.id} · ${affected} bound meshes · Rest XYZ ${position.toArray().map(v => v.toFixed(4)).join(', ')}. ` +
         (this.#rotating ? 'Offsets are degrees.' : 'Offsets are scene units.') +
@@ -258,20 +260,22 @@ export class RigTool {
     if (!context || id === undefined) return;
     try {
       const offsets = checked('include-offsets') ? this.#poses.current : undefined;
-      const rig = context.session.withClip(context.state.rig, id, mode, offsets);
+      const translations = checked('include-offsets') ? this.#poses.translations : undefined;
+      const rig = context.session.withClip(context.state.rig, id, mode, offsets, translations);
       await this.#write({ rig }, mode === 'adapted' ? 'Save adapted clip' : 'Set clip export mode');
     } catch (error) { this.#say(error); }
   }
 
-  async #pose(current: Pose, label: string) {
+  async #pose(current: Pose, label: string, translations = this.#poses.translations) {
     field('preview-clip').checked = false;
     this.#preview = undefined;
-    await this.#write({ poses: { ...this.#poses, current } }, label);
+    await this.#write({ poses: { ...this.#poses, current, translations } }, label);
   }
 
-  #missing(pose: Pose) {
+  #missing(pose: Pose, translations?: PoseTranslations) {
     const session = this.#context!.session;
-    return Object.keys(pose).filter(id => !session.bone(id)).map(id => session.original.joints.find(joint => joint.id === id)?.name || id);
+    return [...new Set([...Object.keys(pose), ...Object.keys(translations ?? {})])].filter(id => !session.bone(id))
+      .map(id => session.original.joints.find(joint => joint.id === id)?.name || id);
   }
 
   #load(id: string) {
@@ -280,7 +284,7 @@ export class RigTool {
     const saved = this.#preset;
     if (saved) {
       field('pose-name').value = saved.name;
-      void this.#pose(saved.rotations, 'Load saved pose');
+      void this.#pose(saved.rotations, 'Load saved pose', saved.translations ?? {});
     } else {
       for (const item of ui('presets').children) item.setAttribute('aria-pressed', 'false');
       this.#sync();
@@ -306,7 +310,8 @@ export class RigTool {
         else {
           if (saved.length >= 128) throw new Error('The project holds up to 128 saved poses.');
           this.#savedId = crypto.randomUUID();
-          saved.push({ id: this.#savedId, name, rotations: mode === 'duplicate' ? prior!.rotations : data.current });
+          saved.push({ id: this.#savedId, name, rotations: mode === 'duplicate' ? prior!.rotations : data.current,
+            translations: mode === 'duplicate' ? prior!.translations : data.translations });
         }
       }
       await this.#write({ poses: { ...data, saved } }, `${mode[0].toUpperCase() + mode.slice(1)} saved pose`);
@@ -352,7 +357,7 @@ export class RigTool {
           if (this.#posing && this.dragging && this.#context) {
             const { session } = this.#context;
             const preview = this.#preview = { ...this.#poses.current, [this.#id]: this.#poseOffset(this.#handle.quaternion) };
-            this.viewer.manualPose(() => session.applyPose(preview));
+            this.viewer.manualPose(() => session.applyPose(preview, this.#poses.translations));
           }
           this.#draw();
         });

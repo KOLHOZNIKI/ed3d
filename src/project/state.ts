@@ -4,6 +4,7 @@ import type { UvAtlasEdit } from '../e00/uv-atlas';
 import type { ObjectOverrides } from './document';
 import type { TextureImage } from '../texture/image';
 import type { PoseState, RigState } from '../rig/state';
+import type { HumanoidState } from '../humanoid/profile';
 
 export const atlasColor = 'atlas-color';
 
@@ -46,6 +47,7 @@ export interface WorkingState {
   readonly rig?: RigState;
   readonly poses?: PoseState;
   readonly weightLocks?: readonly string[];
+  readonly humanoid?: HumanoidState;
 }
 
 export function* workingBuffers(state: WorkingState): Iterable<ArrayBuffer> {

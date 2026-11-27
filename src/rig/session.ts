@@ -3,7 +3,8 @@ import type { SceneEntry } from '../project/document';
 import type { Model } from '../project/adapter';
 import { matrixDelta, rebindMesh } from './bindings';
 import { captureClips, forGhost, makeClips, type ClipResult } from './clips';
-import type { Joint, Pose, RigAction, RigClip, RigState } from './state';
+import type { Joint, Pose, PoseTranslations, Quat, RigAction, RigClip, RigState } from './state';
+import type { Vec3 } from '../mesh/data';
 import { changeRig, jointName, pack, unpack, worldMatrices } from './transforms';
 
 type NodeSnapshot = { node: Object3D; parent: string | null; index: number; local: Matrix4; world: Matrix4; name: string };
@@ -111,14 +112,14 @@ export class RigSession {
     return next;
   }
 
-  withClip(current: RigState | undefined, id: number, mode: RigClip['mode'], offsets?: Pose): RigState {
+  withClip(current: RigState | undefined, id: number, mode: RigClip['mode'], offsets?: Pose, translationOffsets?: PoseTranslations): RigState {
     const state = current ?? this.original;
     const original = this.originalClips[id];
     if (!original) throw new Error('Select an original clip.');
     let name = `${original.clip.name.slice(0, 120)}_Adapted_${id + 1}`;
     const taken = new Set(this.originalClips.map(({ clip }) => clip.name));
     while (taken.has(name)) name += '_';
-    const setting: RigClip = mode === 'adapted' ? { mode, name, basis: state.basis, offsets } : { mode };
+    const setting: RigClip = mode === 'adapted' ? { mode, name, basis: state.basis, offsets, translationOffsets } : { mode };
     const next = { ...state, clips: { ...state.clips, [id]: setting } };
     const changed = this.#changed(next);
     const reason = makeClips(this.originalClips, this.#source, next, changed, this.#anchors(changed))[id].reason;
@@ -230,12 +231,13 @@ export class RigSession {
     }
   }
 
-  applyPose(pose: Pose): () => void {
+  applyPose(pose: Pose, translations?: PoseTranslations): () => void {
     const restore: (() => void)[] = [];
     for (const [id, joint] of this.#rest) {
       const offset = pose[id];
+      const move = translations?.[id];
       const useBind = !this.#error && !this.#rebound.has(joint.group);
-      if (!useBind && !offset) continue;
+      if (!useBind && !offset && !move) continue;
       const bone = this.#nodes.get(id)!;
       const position = bone.position.clone(), rotation = bone.quaternion.clone(), scale = bone.scale.clone();
       restore.push(() => { bone.position.copy(position); bone.quaternion.copy(rotation); bone.scale.copy(scale); bone.updateMatrix(); });
@@ -245,6 +247,7 @@ export class RigSession {
         bone.scale.fromArray(joint.scale);
       }
       if (offset) bone.quaternion.multiply(new Quaternion(...offset)).normalize();
+      if (move) bone.position.add(new Vector3(...move));
       bone.updateMatrix();
     }
     this.model.scene.updateMatrixWorld(true);
@@ -252,6 +255,19 @@ export class RigSession {
       for (const reset of restore) reset();
       this.model.scene.updateMatrixWorld(true);
     };
+  }
+
+  capturePose(joints: readonly Joint[]) {
+    const rotations: Record<string, Quat> = {}, translations: Record<string, Vec3> = {};
+    for (const joint of joints) {
+      const bone = this.#nodes.get(joint.id);
+      if (!bone) continue;
+      const q = new Quaternion(...joint.rotation).invert().multiply(bone.quaternion).normalize();
+      const shift = bone.position.clone().sub(new Vector3(...joint.position));
+      if (1 - Math.abs(q.w) > 1e-12) rotations[joint.id] = q.toArray();
+      if (shift.lengthSq() > 1e-16) translations[joint.id] = shift.toArray();
+    }
+    return { rotations, translations };
   }
 
   comparison(clipIndex?: number, time = 0) {
