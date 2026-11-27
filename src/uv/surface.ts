@@ -22,12 +22,14 @@ export function flatten(geometry: BufferGeometry, name: string, size: number) {
   return out;
 }
 
-export function uvSurface(adapter: ModelAdapter, object: string): Surface {
+export function uvSurface(adapter: ModelAdapter, object: string, original = false): Surface {
   const node = adapter.objects.get(object);
   if (!(node instanceof Mesh)) throw new Error('Select a mesh object.');
-  const geometry = node.geometry, positions = flatten(geometry, 'position', 3)!;
-  const count = positions.length / 3, edited = adapter.mesh.render.get(object)?.render;
-  const topology = adapter.workingTopology(object);
+  const geometry = original ? adapter.mesh.originalGeometry(object) : node.geometry;
+  if (!geometry) throw new Error('The selected object has no original imported geometry.');
+  const positions = flatten(geometry, 'position', 3)!;
+  const count = positions.length / 3, edited = !original ? adapter.mesh.render.get(object)?.render : undefined;
+  const topology = original ? adapter.topology.get(object) : adapter.workingTopology(object);
   if (!topology || topology.renderFaces.length !== count / 3) throw new Error('The mesh has no stable triangle correspondence.');
   const points = edited?.renderVertices ?? (adapter.model.format === 'fbx'
     ? renderControlPoints(sourceMesh(geometry)) : Uint32Array.from({ length: count }, (_, i) => geometry.index?.getX(i) ?? i));

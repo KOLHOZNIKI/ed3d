@@ -73,9 +73,28 @@ export function decodeEdit(data: Uint8Array) {
 function isFill(value: unknown): value is Fill {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const fill = value as Record<string, unknown>;
-  return boundaryId(fill.id) && (fill.method === 'planar' || fill.method === 'fan') && typeof fill.project === 'boolean' &&
-    typeof fill.tolerance === 'number' && fill.tolerance >= 0 && fill.tolerance <= 1 &&
-    (fill.center === undefined || fill.method === 'fan' && vec(fill.center)) && (fill.material === undefined || index(fill.material));
+  if (!boundaryId(fill.id) || typeof fill.project !== 'boolean' || typeof fill.tolerance !== 'number' ||
+      fill.tolerance < 0 || fill.tolerance > 1 || fill.material !== undefined && !index(fill.material)) return false;
+  const range = (value: unknown, low: number, high: number) => Number.isInteger(value) && Number(value) >= low && Number(value) <= high;
+  switch (fill.method) {
+    case 'planar': return fill.center === undefined;
+    case 'fan': return fill.center === undefined || vec(fill.center);
+    case 'smooth': {
+      const config = fill.smooth as Record<string, unknown> | undefined;
+      return !!config && range(config.density, 1, 3) && range(config.iterations, 0, 50);
+    }
+    case 'grid': {
+      const config = fill.grid as Record<string, unknown> | undefined;
+      return !!config && (config.corners === undefined || Array.isArray(config.corners) && config.corners.length === 4 && indices(config.corners, 4));
+    }
+    case 'bridge': {
+      const config = fill.bridge as Record<string, unknown> | undefined;
+      return !!config && boundaryId(config.other) && config.other !== fill.id && range(config.startA, 0, 255) &&
+        (config.startB === undefined || range(config.startB, 0, 255)) && range(config.twist, -255, 255) &&
+        range(config.segments, 1, 16) && (config.span === undefined || range(config.span, 0, 255)) && typeof config.reverse === 'boolean';
+    }
+    default: return false;
+  }
 }
 
 function invalid() { return new Error('Invalid saved mesh edit.'); }

@@ -26,6 +26,7 @@ interface Actions {
   apply(object: string, patches: Fill[], revision: number): Promise<boolean>;
   manual(vertices: readonly number[], project: boolean, material: string): void;
   selectFaces(ids: number[]): void;
+  uvFaces(ids: number[]): void;
   paintFaces(object: string, ids: number[]): void;
 }
 
@@ -48,7 +49,8 @@ export class RepairTool {
     this.#overlay.renderOrder = 10;
     viewer.scene.add(this.#overlay);
     for (const id of ['method', 'project', 'material', 'tolerance', 'custom', ...xyz, 'scope', 'max-edges',
-      'max-diameter', 'allow-planar', 'allow-fan']) {
+      'max-diameter', 'allow-planar', 'allow-fan', 'density', 'iterations', 'grid-corners', 'start-a', 'start-b',
+      'twist', 'segments', 'span', 'reverse']) {
       ui(id).addEventListener('input', () => this.#invalidate());
     }
     ui('preview').addEventListener('click', () => this.#prepare(false));
@@ -63,6 +65,9 @@ export class RepairTool {
     });
     ui('select-new').addEventListener('click', () => {
       if (this.#recent) actions.selectFaces(this.#recent.faces);
+    });
+    ui('uv-new').addEventListener('click', () => {
+      if (this.#recent) actions.uvFaces(this.#recent.faces);
     });
     ui('paint-new').addEventListener('click', () => {
       if (this.#recent) actions.paintFaces(this.#recent.object, this.#recent.paint);
@@ -202,8 +207,19 @@ export class RepairTool {
         if (!center.every(Number.isFinite)) throw new Error('Enter finite X, Y and Z coordinates.');
       }
       const material = choice('material');
+      const whole = (name: string, min: number, max: number) => {
+        const value = number(name);
+        if (!Number.isInteger(value) || value < min || value > max) throw new Error(`Choose a whole number between ${min} and ${max} for the repair parameter.`);
+        return value;
+      };
+      const smooth = !automatic && method === 'smooth' ? { density: whole('density', 1, 3), iterations: whole('iterations', 0, 50) } : undefined;
+      const corners = ui<HTMLInputElement>('grid-corners').value.trim();
+      const grid = !automatic && method === 'grid' ? { corners: corners ? corners.split(/[\s,]+/).map(Number) : undefined } : undefined;
+      const bridge = !automatic && method === 'bridge' ? { other: '', startA: whole('start-a', 0, 255),
+        startB: ui<HTMLInputElement>('start-b').value ? whole('start-b', 0, 255) : undefined,
+        twist: whole('twist', -255, 255), segments: whole('segments', 1, 16), span: whole('span', 0, 255), reverse: toggle('reverse') } : undefined;
       const plan = planRepair(data, this.#contours, { selected, protected: this.#kept, methods, tolerance,
-        auto: automatic ? { maxEdges, maxDiameter } : undefined, center, project: toggle('project'),
+        auto: automatic ? { maxEdges, maxDiameter } : undefined, center, smooth, grid, bridge, project: toggle('project'),
         material: material ? Number(material) : undefined });
       this.#preview = { plan, revision: context.revision };
       this.#populate();
@@ -266,6 +282,7 @@ export class RepairTool {
     const count = this.#preview?.plan.fills.length;
     const manual = this.#singleLoop();
     ui('center').hidden = choice('method') !== 'fan';
+    for (const method of ['smooth', 'grid', 'bridge']) ui(`${method}-settings`).hidden = choice('method') !== method;
     xyz.forEach(id => { ui<HTMLInputElement>(id).disabled = !toggle('custom'); });
     ui<HTMLButtonElement>('preview').disabled = !ready;
     ui<HTMLButtonElement>('auto').disabled = !ready;
@@ -273,10 +290,12 @@ export class RepairTool {
     ui<HTMLButtonElement>('apply').disabled = !count;
     ui<HTMLButtonElement>('cancel').disabled = count === undefined;
     ui('select-new').hidden = !this.#recent;
+    ui('uv-new').hidden = !this.#recent;
     ui('paint-new').hidden = !this.#recent?.paint.length;
     if (count !== undefined) {
       const uv = toggle('project') ? 'New faces have no source texture. Projected UVs may share existing texels.' : 'New faces have no source texture and require UV review.';
-      this.#say(`Preview · ${count} to fill · ${this.#contours.length - count} skipped.${count ? ` ${uv}` : ''}`);
+      const used = this.#preview!.plan.fills.reduce((total, fill) => total + (fill.method === 'bridge' ? 2 : 1), 0);
+      this.#say(`Preview · ${count} to fill · ${this.#contours.length - used} skipped.${count ? ` ${uv}` : ''}`);
     } else if (this.#context?.blocked) this.#say('Discard the generated atlas through the UV tools before repairing the mesh.');
     else if (!this.#data) this.#say(this.#context?.object ? 'The selected mesh does not support topology editing.' : 'Select a mesh object.');
     else if (!ready) this.#say('This object has no open boundaries.');

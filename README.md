@@ -40,9 +40,13 @@ Open **Mesh Edit** and choose an object. Click a vertex, edge or face in the vie
 
 Open **Repair** to inspect boundaries on the selected object. Mark intentional openings **Keep Open**. Choose **Planar Fill**, **Fan Fill**, or **Manual Face** for selected boundaries. **Auto Fill** previews a batch with edge, diameter, and planarity limits. Check the wireframe and the reason for each skipped contour before applying. The resulting faces can be selected for mesh editing or 3D Paint.
 
+Use **Smooth Fill** for a non-planar patch with a fixed rim. Set refinement passes and fairing iterations. **Grid Fill** creates quads between four automatically detected or entered corner vertex IDs. Opposite sides need the same segment counts. **Bridge** joins two boundaries or equal-length spans. The default pairing minimizes distance. Use offsets, twist, and segments to adjust the preview. **Edit new UVs** opens the UV Editor with the added faces selected.
+
 Open **UV Editor** to select a material, map, and UV channel. Pick UV vertices, edges, faces, or islands in the grid or on the model. Drag to move the selection, use the transform handle for rotation and scaling, or enter numeric values. Use the wheel to zoom and middle-drag to pan. **Auto Unwrap** and **Pack Islands** write to the UV draft.
 
 Choose **Change Mapping** to move UVs while keeping the images unchanged. Choose **Preserve Appearance** to transfer the current painted maps to the draft. You can also select **Original import** when the source corners still match. **Rebake and Apply** commits both the UVs and the new maps together. Use **Coverage** to inspect sampled texels and any repairs filled with neutral data. FBX exports put the baked layout in UV0 and retain the source layout in UV1. GLB exports bind the baked maps to the selected channel.
+
+Choose **Spatial Projection** to transfer maps onto changed geometry. Select the source mesh and snapshot. If either mesh has multiple components, assign each target component one source component using the displayed component IDs. Use maximum distance, normal angle, ray direction, and offset to constrain the transfer. **Coverage** marks hits in teal, unresolved texels in magenta, and explicitly permitted nearest-surface samples in amber.
 
 Open **Extract** to select a whole static mesh, one or more connected components, or arbitrary faces. Use **Isolate selection** to review the result and check the count of newly exposed boundary edges. **Copy** is the default. **Separate Geometry** keeps the existing material bindings. **Make Independent Asset** creates separate maps so later paint edits affect only the new object.
 
@@ -72,6 +76,7 @@ Choose **Keep UVs** to clear unused atlas regions, **Pack existing islands** to 
 
 ## Verification
 
+- [E08 extended repair and projection verification](Docs/E08_Report.md) covers pinned patches, bridge pairing, projected normals, missing samples, and FBX animation after Smooth Fill.
 - [E07 static asset extraction verification](Docs/E07_Report.md) covers component grouping, map ownership, pivot, scale, orientation, and batch export.
 - [E06 UV editing and direct bake verification](Docs/E06_Report.md) covers painted appearance, UV corner selection, cancellation, skinned export, and directional normals.
 - [E05 Basic Repair verification](Docs/E05_Report.md) covers protected openings, concave and non-planar contours, patch intersections, and skinned FBX repair.

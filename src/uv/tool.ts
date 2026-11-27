@@ -9,6 +9,8 @@ import { bounds, cross, density, diagnose, editUv, groups, planar, read, type La
 import { pack, type PackOptions } from './pack';
 import { autoUnwrap, currentLayout, uvName, uvSurface } from './surface';
 import type { TransferOptions } from './transfer';
+import { faceComponents } from '../e00/topology-components';
+import type { SpatialOptions } from './spatial';
 
 const ui = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(`uv-${id}`)! as T;
 const choice = (id: string) => ui<HTMLSelectElement>(id).value;
@@ -36,6 +38,7 @@ export interface UvRequest {
   surface: Surface;
   preserve: boolean;
   options: TransferOptions;
+  projection?: SpatialOptions;
 }
 
 interface Actions {
@@ -68,6 +71,7 @@ export class UvTool {
   #zoom = 1;
   #gesture?: Gesture;
   #locked = false;
+  #componentNote = '';
   #wire = new LineSegments(new BufferGeometry(), new LineBasicMaterial({ color: 0x4ee8ff, depthTest: false }));
 
   constructor(readonly viewer: Viewer, readonly viewport: HTMLCanvasElement, readonly actions: Actions) {
@@ -81,8 +85,11 @@ export class UvTool {
     ui('pivot').addEventListener('change', () => this.#draw());
     ui('size').addEventListener('change', () => this.#update());
     ui('operation').addEventListener('change', () => { this.#operationFields(true); this.#draw(); });
-    ui('mode-select').addEventListener('change', () => this.#update());
-    ui('source').addEventListener('change', () => this.#update());
+    for (const id of ['mode-select', 'source', 'projection-object']) ui(id).addEventListener('change', () => {
+      if (id !== 'mode-select') ui<HTMLInputElement>('projection-pairs').value = '';
+      this.#projectionComponents();
+      this.#update();
+    });
     ui('fit').addEventListener('click', () => this.#fit(false));
     ui('fit-selection').addEventListener('click', () => this.#fit(true));
     ui('select-all').addEventListener('click', () => {
@@ -142,6 +149,12 @@ export class UvTool {
     this.#selection.clear();
     this.#surface = this.#mesh = this.#target = this.#map = this.#coverage = undefined;
     this.#imageTicket++;
+    const source = ui<HTMLSelectElement>('projection-object'), previousSource = source.value;
+    if (old?.object !== context?.object || old?.adapter !== context?.adapter) ui<HTMLInputElement>('projection-pairs').value = '';
+    source.replaceChildren(...(context?.adapter.viewEntries.filter(entry => entry.mesh).map(entry =>
+      new Option(context.state.objects[entry.id]?.name ?? entry.name, entry.id)) ?? []));
+    source.value = old?.adapter === context?.adapter && old?.object === context?.object &&
+      [...source.options].some(option => option.value === previousSource) ? previousSource : context?.object ?? '';
     const node = context && context.adapter.objects.get(context.object);
     if (context && node instanceof Mesh) {
       this.#mesh = node;
@@ -164,6 +177,7 @@ export class UvTool {
       this.#loadImage();
       this.#fit(false);
     }
+    this.#projectionComponents();
     this.#update();
   }
 
@@ -208,6 +222,15 @@ export class UvTool {
       }
     }
     this.#select(ids, event.shiftKey);
+  }
+
+  selectFaces(ids: readonly number[]) {
+    if (!this.#surface) return;
+    const wanted = new Set(ids);
+    ui<HTMLSelectElement>('kind').value = 'face';
+    this.#edge = undefined;
+    this.#selection = new Set(this.#corners().filter(corner => wanted.has(this.#surface!.faces[Math.floor(corner / 3)])));
+    this.#update();
   }
 
   #corners() { return indices(this.#surface?.points.length ?? 0); }
@@ -351,14 +374,39 @@ export class UvTool {
   }
 
   async #apply() {
-    const context = this.#context, surface = this.#surface, layout = this.#draft.get(this.#channel);
+    const projecting = choice('mode-select') === 'projection';
+    const context = this.#context, surface = this.#surface, layout = projecting ? this.#layout : this.#draft.get(this.#channel);
     if (!context || !surface || !layout) return;
     try {
       const { size, padding } = this.#options();
+      const color = ui<HTMLInputElement>('projection-color').value;
+      const projection: SpatialOptions | undefined = projecting ? {
+        object: choice('projection-object'), pairs: ui<HTMLInputElement>('projection-pairs').value,
+        distance: number('projection-distance'), angle: number('projection-angle'), offset: number('projection-offset'),
+        color: [1, 3, 5].map(i => parseInt(color.slice(i, i + 2), 16)) as [number, number, number],
+        direction: choice('projection-direction') as SpatialOptions['direction'],
+        fallback: choice('projection-fallback') as SpatialOptions['fallback'],
+      } : undefined;
       await this.actions.commit({ object: context.object, revision: context.revision, layout, surface, channel: this.#channel,
-        preserve: choice('mode-select') === 'preserve', options: { size, padding, filter: choice('filter') === 'nearest' ? 'nearest' : 'linear',
+        preserve: choice('mode-select') !== 'mapping', projection, options: { size, padding, filter: choice('filter') === 'nearest' ? 'nearest' : 'linear',
           original: choice('source') === 'original', fillMissing: checked('missing') } });
     } catch (error) { this.#say(error); }
+  }
+
+  #projectionComponents() {
+    const context = this.#context, target = this.#surface;
+    if (choice('mode-select') !== 'projection' || !context || !target) return;
+    const summarize = (surface: Surface) => {
+      const ids = new Map<number, number>();
+      faceComponents(surface.points).forEach((component, i) => {
+        if (!ids.has(component)) ids.set(component, surface.faces[i]);
+      });
+      return [...ids].slice(0, 12).map(([id, face]) => `${id + 1} (face ${face})`).join(', ') + (ids.size > 12 ? ` · ${ids.size} total` : '');
+    };
+    try {
+      const source = uvSurface(context.adapter, choice('projection-object'), choice('source') === 'original');
+      this.#componentNote = `Target components ${summarize(target)}. Source components ${summarize(source)}.`;
+    } catch (error) { this.#componentNote = error instanceof Error ? error.message : String(error); }
   }
 
   #cancel() {
@@ -514,11 +562,15 @@ export class UvTool {
       this.#groups = layout && surface ? groups(surface, layout) : undefined;
       this.#findings = layout ? diagnose(layout.uv, this.#topDown) : undefined;
     }
-    const dirty = this.#draft.has(this.#channel), preserve = choice('mode-select') === 'preserve';
+    const dirty = this.#draft.has(this.#channel), projecting = choice('mode-select') === 'projection', preserve = choice('mode-select') !== 'mapping';
     const apply = ui<HTMLButtonElement>('apply');
-    apply.textContent = preserve ? 'Rebake and Apply' : 'Apply Mapping';
-    apply.disabled = ui<HTMLButtonElement>('cancel').disabled = !dirty;
+    apply.textContent = projecting ? 'Project and Apply' : preserve ? 'Rebake and Apply' : 'Apply Mapping';
+    apply.disabled = !layout || !projecting && !dirty;
+    ui<HTMLButtonElement>('cancel').disabled = !dirty;
+    ui('projection-settings').hidden = !projecting;
+    ui('projection-components').textContent = projecting ? this.#componentNote : '';
     for (const id of ['source', 'filter', 'missing']) ui<HTMLInputElement>(id).disabled = !preserve;
+    if (projecting) ui<HTMLInputElement>('missing').disabled = true;
     for (const id of ['unwrap', 'pack', 'run', 'select-all']) ui<HTMLButtonElement>(id).disabled = !layout;
     this.#operationFields();
     if (!layout || !surface) {
@@ -533,7 +585,9 @@ export class UvTool {
       const state = this.#context!.state;
       const bake = this.#target?.transfer?.bake ?? state.bake;
       const info = dirty ? 'UV draft.' : 'Drag a selection or its transform handle. Middle-drag to pan.';
-      const currentBake = bake?.direct ? ` Last bake used ${bake.direct.sourceName}. ${bake.direct.misses}/${bake.covered} occupied texels have no source (${(100 * bake.direct.misses / bake.covered).toFixed(2)}%).` : '';
+      const nearest = bake?.projection?.nearest;
+      const currentBake = bake?.direct ? ` Last bake used ${bake.direct.sourceName}. ${bake.direct.misses}/${bake.covered} occupied texels have no source (${(100 * bake.direct.misses / bake.covered).toFixed(2)}%).` +
+        (nearest !== undefined ? ` ${nearest} texels used the nearest eligible fallback.` : '') : '';
       const fbx = preserve && this.#context?.model.format === 'fbx' ? ' FBX export uses the baked layout in UV0.' : '';
       this.#say(`${info}${preserve ? ` Bake source is ${choice('source') === 'original' ? 'the original import' : `working revision ${this.#context!.revision}`}.` : ''}${fbx}${currentBake}`);
     }

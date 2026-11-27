@@ -92,8 +92,8 @@ export class TextureCatalog {
     for (const [object, transfer] of Object.entries(state.uvBakes ?? {})) {
       const binding = this.bindings.find(item => item.object === object);
       const channel = transfer.channel ? `uv${transfer.channel}` : 'uv';
-      if (this.#format !== 'glb' || !binding || Array.isArray(binding.mesh.material) || !binding.mesh.geometry.hasAttribute(channel)) {
-        throw new Error('The saved UV transfer has no matching GLB material and channel.');
+      if (this.#format === 'fbx' && transfer.channel !== 0 || !binding || Array.isArray(binding.mesh.material) || !binding.mesh.geometry.hasAttribute(channel)) {
+        throw new Error('The saved UV transfer has no matching material and channel.');
       }
     }
     if (state.bake?.generated && !this.#generatedBinding) throw new Error('The source does not support a generated paint atlas.');

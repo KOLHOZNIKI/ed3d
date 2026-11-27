@@ -106,7 +106,7 @@ export async function writeProject(document: AssetDocument<WorkingState>, option
     }
     meshEdits = await retain(bytes);
   }
-  const manifest = encoder.encode(JSON.stringify({ format: 'AssetFixer', schemaVersion: 7, id: options?.id ?? document.id,
+  const manifest = encoder.encode(JSON.stringify({ format: 'AssetFixer', schemaVersion: 8, id: options?.id ?? document.id,
     name: options?.name ?? document.name, revision, settings: { historyBudget }, scene, originals: originalRefs,
     resources, working: { objects: state.objects, geometry, bake, paint, textures, meshEdits, keepOpen: state.keepOpen, uvBakes, extracts } }));
   if (manifest.byteLength > MiB || expanded + manifest.byteLength > limits.total) throw new Error('The project manifest exceeds its size limit.');
@@ -125,7 +125,7 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
   const manifest = record(JSON.parse(decoder.decode(encoded)));
   if (manifest.format !== 'AssetFixer') throw new Error('This file is not an AssetFixer project.');
   const version = integer(manifest.schemaVersion, 1);
-  if (version > 7) throw new Error(`Project schema ${version} is newer than this application supports.`);
+  if (version > 8) throw new Error(`Project schema ${version} is newer than this application supports.`);
   // Version 1 had a fixed history budget. Version 2 persists the project setting.
   const historyBudget = version === 1 ? defaultHistoryBudget : integer(record(manifest.settings).historyBudget, MiB, projectLimit);
   if (historyBudget % MiB) throw new Error('Invalid project history budget.');
@@ -235,7 +235,8 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
     if (target && (width !== target.metrics.width * scale || height !== target.metrics.height * scale) || width * height > 16_777_216 * 4) {
       throw new Error('Saved baked images do not match the atlas dimensions.');
     }
-    const slots: readonly string[] = target || extracting ? [...glbSlots, 'alphaMap', 'roughness', 'metallic'] : glbSlots;
+    const slots: readonly string[] = target || extracting || !originals.some(file => /\.glb$/i.test(file.name)) ?
+      [...glbSlots, 'alphaMap', 'roughness', 'metallic'] : glbSlots;
     const maps = list(data.maps, slots.length).map(value => {
       const map = record(value), slot = text(map.slot, 32), source = text(map.source, 2048), png = resource(map.hash);
       if (!slots.includes(slot)) throw new Error('Unknown project bake map slot.');
@@ -257,7 +258,16 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
       coverage = resource(data.coverage);
       validatePng(coverage, width, height);
     } else if (!target || data.coverage !== undefined) throw new Error('A UV transfer requires coverage diagnostics.');
-    return { maps, width, height, padding: integer(data.padding), covered,
+    let projection: TextureBake['projection'];
+    if (data.projection !== undefined) {
+      const info = record(data.projection), maxDistance = finite(info.maxDistance);
+      if (!(maxDistance > 0)) throw new Error('Invalid saved projection distance.');
+      projection = { sourceName: text(info.sourceName, 160), maxDistance, misses: integer(info.misses, 0, covered),
+        eligibleSources: list(info.eligibleSources, 250000).map(group => list(group, 250000).map(id => integer(id))),
+        nearest: info.nearest === undefined ? undefined : integer(info.nearest, 0, covered) };
+      if (projection.misses + (projection.nearest ?? 0) > covered) throw new Error('Invalid saved projection coverage.');
+    }
+    return { maps, width, height, padding: integer(data.padding), covered, projection,
       padded: integer(data.padded, 0, width * height), boundaryOnlyTriangles: integer(data.boundaryOnlyTriangles), generated: data.generated, direct, coverage };
   };
   if (working.bake && !atlas) throw new Error('The saved bake has no target atlas.');

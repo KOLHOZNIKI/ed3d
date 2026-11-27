@@ -1,10 +1,10 @@
 import { generateTangents } from 'three/addons/libs/mikktspace.module.js';
-import { Vector3 } from 'three';
+import { Matrix3, Vector3 } from 'three';
 import { encode } from 'fast-png';
 import type { TextureBake } from './rebake';
 import type { UvTransform } from './alpha-profile';
 import { paddingSources, rasterize } from './atlas-raster';
-import { projectTextureCoordinates, type ProjectionInput } from './projection-rays';
+import { projectTextureCoordinates, spatialProjection, type ProjectionInput } from './projection-rays';
 
 export interface BakeMap {
   slot: string;
@@ -64,27 +64,54 @@ async function bake(input: BakeInput): Promise<BakeOutput> {
   if (overlaps.size) throw new Error('The target atlas has conflicting triangle coverage.');
   if (!covered) throw new Error('The atlas has no covered texels.');
   let directMisses = 0, coverage: Uint8Array<ArrayBuffer> | undefined;
+  const spatial = input.projection?.spatial;
+  const finder = spatial && spatialProjection(input.projection!);
+  const hits = spatial && new Int32Array(faces.length).fill(-1);
+  const sb = spatial && new Float32Array(faces.length), sc = spatial && new Float32Array(faces.length);
+  let nearest = 0;
   if (direct) {
     const mask = new Uint8Array(width * height * 4);
     for (let p = 0; p < faces.length; p++) {
       if (!faces[p]) continue;
-      const missing = !!direct.missing?.[faces[p] - 1];
+      let missing = !!direct.missing?.[faces[p] - 1], fallback = false;
+      if (finder) {
+        const match = finder(faces[p] - 1, 1 - wb[p] - wc[p], wb[p], wc[p]);
+        if (match) {
+          hits![p] = match.face;
+          sb![p] = match.b;
+          sc![p] = match.c;
+          fallback = match.nearest;
+          if (fallback) nearest++;
+        } else missing = true;
+      }
       if (missing) directMisses++;
-      mask.set(missing ? [245, 65, 189, 255] : [48, 189, 161, 255], p * 4);
+      mask.set(missing ? [245, 65, 189, 255] : fallback ? [248, 174, 50, 255] : [48, 189, 161, 255], p * 4);
     }
     coverage = new Uint8Array(encode({ width, height, data: mask, channels: 4 }));
   }
   // Keep every chart's nearest-source gutter populated for mip levels whose
   // filter footprint extends past the requested chart spacing.
-  const padded = paddingSources(faces, width, direct?.clearUnused ? padding : Infinity);
+  const padded = paddingSources(faces, width, direct?.clearUnused ? padding : Infinity,
+    hits ? pixel => hits[pixel] >= 0 : undefined);
   const normalMap = input.maps.find(map => map.mode === 'normal');
-  const sourceTangent = normalMap ? generateTangents(position, normals, normalMap.uv ?? sourceUv) : null;
+  const normalUv = normalMap?.uv ?? sourceUv;
+  const usableNormalUv = spatial && normalMap && Uint8Array.from({ length: sourceUv.length / 6 }, (_, face) => {
+    const i = face * 6, a = normalUv[i + 2] - normalUv[i], b = normalUv[i + 3] - normalUv[i + 1];
+    const c = normalUv[i + 4] - normalUv[i], d = normalUv[i + 5] - normalUv[i + 1];
+    return Number(Math.abs(a * d - b * c) > 1e-12);
+  });
+  const sourceTangent = normalMap ? generateTangents(spatial?.sourceLocalPosition ?? position,
+    spatial?.sourceLocalNormal ?? normals, normalUv) : null;
   const targetTangent = normalMap ? generateTangents(position, normals, targetUv) : null;
   const n = new Vector3(), ts = new Vector3(), tt = new Vector3(), cross = new Vector3();
   const color = [0, 0, 0, 0];
-  const projection = input.projection && projectTextureCoordinates(input.projection, position, normals, sourceUv);
+  const projection = input.projection && !spatial && projectTextureCoordinates(input.projection, position, normals, sourceUv);
+  const sourceToTarget = spatial && new Matrix3().fromArray(spatial.worldNormalToTarget)
+    .multiply(new Matrix3().fromArray(spatial.sourceNormalToWorld));
+  const sn = new Vector3(), transformed = new Vector3();
   const projectedUv: [number, number] = [0, 0];
   const missColor = [255, 0, 255, 255];
+  const spatialMiss = spatial?.fallback === 'color' ? [...spatial.color, 255] : [0, 0, 0, 0];
   let misses = 0;
   const canvas = new OffscreenCanvas(width, height);
   const context = canvas.getContext('2d')!;
@@ -107,6 +134,14 @@ async function bake(input: BakeInput): Promise<BakeOutput> {
       }
       const i = (face - 1) * 3;
       const b = wb[pixel], c = wc[pixel], a = 1 - b - c;
+      let from = i, sa = a, sB = b, sC = c;
+      if (spatial) {
+        if (hits![pixel] < 0) {
+          pixels.set(map.slot === 'map' ? spatialMiss : neutral, pixel * 4);
+          continue;
+        }
+        from = hits![pixel] * 3; sB = sb![pixel]; sC = sc![pixel]; sa = 1 - sB - sC;
+      }
       if (projection) {
         if (!projection(face - 1, a, b, c, projectedUv)) {
           pixels.set(missColor, pixel * 4);
@@ -115,29 +150,40 @@ async function bake(input: BakeInput): Promise<BakeOutput> {
         }
         sample(map, projectedUv[0], projectedUv[1], color);
       } else {
-        sample(map, lerpAttribute(uv, 2, i, 0, a, b, c), lerpAttribute(uv, 2, i, 1, a, b, c), color, direct?.filter === 'nearest');
+        sample(map, lerpAttribute(uv, 2, from, 0, sa, sB, sC), lerpAttribute(uv, 2, from, 1, sa, sB, sC), color, direct?.filter === 'nearest');
       }
       if (map.mode === 'normal' && sourceTangent && targetTangent) {
-        const basis = (attr: Float32Array, stride: number, out: Vector3) => out.set(
-          lerpAttribute(attr, stride, i, 0, a, b, c), lerpAttribute(attr, stride, i, 1, a, b, c),
-          lerpAttribute(attr, stride, i, 2, a, b, c));
+        if (usableNormalUv && !usableNormalUv[from / 3]) throw new Error('A matched source face has degenerate normal-map UVs.');
+        const basis = (attr: Float32Array, stride: number, out: Vector3, corner = i, u = a, v = b, w = c) => out.set(
+          lerpAttribute(attr, stride, corner, 0, u, v, w), lerpAttribute(attr, stride, corner, 1, u, v, w),
+          lerpAttribute(attr, stride, corner, 2, u, v, w));
         basis(normals, 3, n).normalize();
-        basis(sourceTangent, 4, ts).addScaledVector(n, -ts.dot(n)).normalize();
+        const oldNormal = spatial ? basis(spatial.sourceLocalNormal, 3, sn, from, sa, sB, sC).normalize() : n;
+        basis(sourceTangent, 4, ts, from, sa, sB, sC).addScaledVector(oldNormal, -ts.dot(oldNormal)).normalize();
         basis(targetTangent, 4, tt).addScaledVector(n, -tt.dot(n)).normalize();
         // glTF uses the opposite tangent sign convention from MikkTSpace.
         const convention = direct?.topDown ? -1 : 1;
-        const sourceSign = convention * sourceTangent[i * 4 + 3], targetSign = convention * targetTangent[i * 4 + 3];
-        if (n.lengthSq() < 0.99 || ts.lengthSq() < 0.99 || tt.lengthSq() < 0.99 ||
+        const sourceSign = convention * sourceTangent[from * 4 + 3], targetSign = convention * targetTangent[i * 4 + 3];
+        if (n.lengthSq() < 0.99 || oldNormal.lengthSq() < 0.99 || ts.lengthSq() < 0.99 || tt.lengthSq() < 0.99 ||
             Math.abs(sourceSign) !== 1 || Math.abs(targetSign) !== 1) {
           throw new Error(`A normal map requires valid source and target tangents on face ${face}.`);
         }
-        const cos = ts.dot(tt), sin = cross.crossVectors(n, ts).dot(tt);
         const x = color[0] / 127.5 - 1, y = (color[1] / 127.5 - 1) * sourceSign, z = color[2] / 127.5 - 1;
         const length = Math.hypot(x, y, z);
         if (length < 1e-5) throw new Error('The source normal map contains a zero-length vector.');
-        color[0] = 127.5 * (1 + (cos * x + sin * y) / length);
-        color[1] = 127.5 * (1 + targetSign * (cos * y - sin * x) / length);
-        color[2] = 127.5 * (1 + z / length);
+        if (sourceToTarget) {
+          transformed.copy(ts).multiplyScalar(x).addScaledVector(cross.crossVectors(oldNormal, ts), y)
+            .addScaledVector(oldNormal, z).applyMatrix3(sourceToTarget).normalize();
+          if (n.dot(transformed) < 0) throw new Error('A projected normal points below the target tangent plane. Tighten the normal-angle limit or choose a different source.');
+          color[0] = 127.5 * (1 + tt.dot(transformed));
+          color[1] = 127.5 * (1 + targetSign * cross.crossVectors(n, tt).dot(transformed));
+          color[2] = 127.5 * (1 + n.dot(transformed));
+        } else {
+          const cos = ts.dot(tt), sin = cross.crossVectors(n, ts).dot(tt);
+          color[0] = 127.5 * (1 + (cos * x + sin * y) / length);
+          color[1] = 127.5 * (1 + targetSign * (cos * y - sin * x) / length);
+          color[2] = 127.5 * (1 + z / length);
+        }
       }
       pixels.set(color, pixel * 4);
     }
@@ -158,8 +204,8 @@ async function bake(input: BakeInput): Promise<BakeOutput> {
   }
   return { width, height, padding, covered, padded, boundaryOnlyTriangles, maps, coverage,
     direct: direct && { sourceName: direct.sourceName, filter: direct.filter, misses: directMisses },
-    projection: input.projection && { sourceName: input.projection.sourceName, misses, maxDistance: input.projection.maxDistance,
-      eligibleSources: input.projection.eligibleSources } };
+    projection: input.projection && { sourceName: input.projection.sourceName, misses: spatial ? directMisses : misses, maxDistance: input.projection.maxDistance,
+      eligibleSources: input.projection.eligibleSources, nearest: spatial ? nearest : undefined } };
 }
 
 function sample({ width, height, pixels, mode, uvTransform, wrapS, wrapT, topDown }: BakeMap, u: number, v: number, out: number[], nearest = false) {

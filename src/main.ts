@@ -23,6 +23,7 @@ import { RepairTool } from './repair/tool';
 import { UvTool, type UvRequest } from './uv/tool';
 import { fbxAtlas, uvCommand } from './uv/surface';
 import { transfer } from './uv/transfer';
+import { prepareProjection } from './uv/spatial';
 import type { Layout } from './uv/layout';
 import { ExtractTool } from './extract/tool';
 import { buildExtraction } from './extract/build';
@@ -154,6 +155,12 @@ const repairTool = new RepairTool(viewer, canvas, {
     controls();
     meshTool.selectFaces(ids);
   },
+  uvFaces(ids) {
+    repairing = false;
+    uvEditing = true;
+    controls();
+    uvTool.selectFaces(ids);
+  },
   paintFaces(object, ids) {
     const work = current!;
     const faces = work.adapter.mesh.data(object).faces.filter(face => ids.includes(face.id));
@@ -213,7 +220,24 @@ function commitUv(request: UvRequest) {
     const oldAtlas = model.format === 'fbx' && channel === 1 && model.uvAtlas?.inputGeometry === mesh.geometry ? state.atlas : undefined;
     const extracted = state.extracts?.[object];
     let next: WorkingState;
-    if (request.preserve && extracted) {
+    if (request.projection) {
+      if (model.format === 'fbx' && (state.atlas || channel !== 0)) {
+        throw new Error('Spatial FBX output uses UV0. Discard any global atlas before projecting.');
+      }
+      if (options.size > 2048) throw new Error('Choose a spatial bake resolution of 2048 pixels or less.');
+      const source = request.projection.object;
+      const label = state.objects[source]?.name ?? work.adapter.viewEntries.find(entry => entry.id === source)?.name ?? source;
+      const sourceName = `${options.original ? 'Original import' : `Working revision ${revision}`} · ${label.slice(0, 100)}`;
+      const input = prepareProjection(work.adapter, state, object, request.surface, request.projection, options.original, sourceName);
+      const bake = await transfer(work.adapter, model, work.textures, state, revision, object, layout, request.surface,
+        { ...options, projection: { object: source, input } }, signal);
+      const textures = { ...state.textures };
+      delete textures[`slot/${object}/0`];
+      const meshEdits = [...state.meshEdits ?? [], encodeEdit(uvCommand(object, channel, layout, true))];
+      next = { ...state, textures, meshEdits,
+        ...(extracted ? { extracts: { ...state.extracts, [object]: { ...extracted, bakes: { 0: { channel, bake } } } } }
+          : { uvBakes: { ...state.uvBakes, [object]: { channel, bake } } }) };
+    } else if (request.preserve && (extracted || model.format === 'fbx' && state.uvBakes?.[object])) {
       const slots = new Set(request.surface.slots);
       const [slot] = slots;
       if (slots.size !== 1 || model.format === 'fbx' && channel !== 0) {
@@ -224,7 +248,9 @@ function commitUv(request: UvRequest) {
       const textures = { ...state.textures };
       delete textures[`slot/${object}/${slot}`];
       const meshEdits = [...state.meshEdits ?? [], encodeEdit(uvCommand(object, channel, layout, true))];
-      next = { ...state, textures, meshEdits, extracts: { ...state.extracts, [object]: { ...extracted, bakes: { [slot]: { channel, bake } } } } };
+      next = { ...state, textures, meshEdits,
+        ...(extracted ? { extracts: { ...state.extracts, [object]: { ...extracted, bakes: { [slot]: { channel, bake } } } } }
+          : { uvBakes: { ...state.uvBakes, [object]: { channel, bake } } }) };
     } else if (model.format === 'fbx' && (request.preserve || oldAtlas)) {
       if (model.stats.meshes !== 1) throw new Error('FBX atlas transfer requires a single mesh. Change Mapping is available per mesh.');
       if (layout.uv.some(value => value < 0 || value > 1)) throw new Error('This FBX atlas requires UVs inside 0–1.');
@@ -249,7 +275,7 @@ function commitUv(request: UvRequest) {
         next = { ...next, textures, uvBakes: { ...state.uvBakes, [object]: { channel, bake } } };
       }
     }
-    await edit(work, revision, next, request.preserve ? 'Rebake and apply UVs' : 'Change UV mapping', object, signal);
+    await edit(work, revision, next, request.projection ? 'Project maps and apply UVs' : request.preserve ? 'Rebake and apply UVs' : 'Change UV mapping', object, signal);
     const baked = request.preserve && (next.bake ?? next.uvBakes?.[object]?.bake ??
       Object.values(next.extracts?.[object]?.bakes ?? {})[0]?.bake);
     status.textContent = baked ? `UVs and ${baked.maps.length} maps applied from ${baked.direct!.sourceName}. ${baked.direct!.misses} occupied texels had no source.` :
@@ -643,7 +669,8 @@ exportButton.addEventListener('click', () => void locked(async () => {
       else {
         const projected = projectedModel(model, document.state);
         if (projected.format !== 'fbx') throw new Error('Invalid FBX export state.');
-        output = await exportAsset(projected, bound.fbx);
+        const transfers = Object.entries(document.state.uvBakes ?? {}).map(([object, transfer]) => ({ object, bake: transfer.bake }));
+        output = await exportAsset(projected, bound.fbx, undefined, transfers.length ? transfers : undefined);
       }
     } finally {
       restore();

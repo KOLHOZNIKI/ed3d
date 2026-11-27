@@ -2,6 +2,7 @@ import { Mesh, MeshLambertMaterial, MeshPhongMaterial, MeshStandardMaterial, Tex
 import { bakeInWorker, originalFbxMaps, samplerWrap, type TextureBake } from '../e00/rebake';
 import { renderControlPoints, sourceMesh } from '../e00/fbx-topology';
 import type { BakeMap } from '../e00/rebake-worker';
+import type { ProjectionInput } from '../e00/projection-rays';
 import type { Model, ModelAdapter } from '../project/adapter';
 import type { WorkingState } from '../project/state';
 import type { TextureCatalog } from '../texture/bindings';
@@ -16,6 +17,7 @@ export interface TransferOptions {
   original: boolean;
   fillMissing: boolean;
   scope?: { slot: number; triangles: readonly number[]; clearUnused: boolean };
+  projection?: { object: string; input: ProjectionInput };
 }
 
 export const glbSlots = ['map', 'normalMap', 'emissiveMap', 'aoMap', 'metalRough'] as const;
@@ -27,16 +29,17 @@ export async function transfer(adapter: ModelAdapter, model: Model, catalog: Tex
   if (diagnostics.outside || diagnostics.degenerate || diagnostics.overlaps) {
     throw new Error(`Target UVs must be inside 0–1 with no degenerate or overlapping triangles. Found ${diagnostics.outside} outside, ${diagnostics.degenerate} degenerate, ${diagnostics.overlaps} conflicting.`);
   }
-  const mesh = adapter.objects.get(object);
-  const { scope } = options;
+  const { scope, projection } = options;
+  const sourceObject = projection?.object ?? object;
+  const mesh = adapter.objects.get(sourceObject);
   if (!(mesh instanceof Mesh) || Array.isArray(mesh.material) && !scope) throw new Error('Direct transfer requires one material on the selected mesh.');
   const slot = scope?.slot ?? 0;
   const material = Array.isArray(mesh.material) ? mesh.material[slot] : mesh.material;
   if (!material) throw new Error('The selected faces have no material.');
   if (mesh.geometry.hasAttribute('tangent')) throw new Error('Direct transfer requires generated tangents. Authored tangent replacement is unavailable.');
-  const geometry = options.original ? adapter.mesh.originalGeometry(object) : mesh.geometry;
+  const geometry = options.original ? adapter.mesh.originalGeometry(sourceObject) : mesh.geometry;
   if (!geometry) throw new Error('This object has no original imported mesh. Choose the working snapshot.');
-  if (geometry !== mesh.geometry) {
+  if (geometry !== mesh.geometry && !projection) {
     const points = model.format === 'fbx' ? renderControlPoints(sourceMesh(geometry)) :
       Uint32Array.from({ length: geometry.index?.count ?? geometry.getAttribute('position').count }, (_, i) => geometry.index?.getX(i) ?? i);
     const same = (a: ArrayLike<number> | undefined, b: Float32Array) =>
@@ -46,10 +49,10 @@ export async function transfer(adapter: ModelAdapter, model: Model, catalog: Tex
       throw new Error('The original geometry no longer matches these corners. Choose the working snapshot.');
     }
   }
-  const target = catalog.targets(state).find(target => target.binding.object === object && target.binding.slot === slot);
+  const target = catalog.targets(state).find(target => target.binding.object === sourceObject && target.binding.slot === slot);
   const currentColor = !options.original && target && state.textures?.[target.key]?.image;
   const fbxHasBakedRepairs = !options.original && model.format === 'fbx' && state.bake?.direct && model.uvAtlas;
-  const pending = new Set(fbxHasBakedRepairs ? [] :
+  const pending = new Set(fbxHasBakedRepairs || projection ? [] :
     adapter.mesh.render.get(object)?.state.mesh.faces.filter(face => face.needsUv).map(face => face.id));
   const missing = Uint8Array.from(surface.faces, id => Number(pending.has(id)));
   if (!options.fillMissing && missing.includes(1)) throw new Error('Some repair faces have no source texture. Enable neutral fill for those faces to continue.');
@@ -60,7 +63,7 @@ export async function transfer(adapter: ModelAdapter, model: Model, catalog: Tex
     sourceUv = flatten(geometry, uvName(stored.channel), 2);
     for (const entry of stored.bake.maps) maps.push(pngMap(entry, entry.slot === 'map' ? currentColor || undefined : undefined, model.format === 'glb'));
   } else if (model.format === 'fbx') {
-    if (!scope && model.stats.meshes !== 1 || !(material instanceof MeshPhongMaterial || material instanceof MeshLambertMaterial)) {
+    if (!scope && !projection && model.stats.meshes !== 1 || !(material instanceof MeshPhongMaterial || material instanceof MeshLambertMaterial)) {
       throw new Error('FBX Preserve Appearance requires a single mesh with one Phong or Lambert material.');
     }
     if (!options.original && state.bake && model.uvAtlas) {
@@ -108,7 +111,8 @@ export async function transfer(adapter: ModelAdapter, model: Model, catalog: Tex
       if (scope.clearUnused) map.preserveAlpha = true;
     }
   }
-  if (!sourceUv || sourceUv.length !== layout.uv.length || !maps.some(map => map.slot === 'map')) {
+  const length = projection ? projection.input.sourceComponents.length * 6 : layout.uv.length;
+  if (!sourceUv || sourceUv.length !== length || !maps.some(map => map.slot === 'map')) {
     throw new Error('Preserve Appearance requires linked Base Color and source UV correspondence.');
   }
   for (const map of maps) if (map.mode === 'normal') {
@@ -117,9 +121,24 @@ export async function transfer(adapter: ModelAdapter, model: Model, catalog: Tex
       throw new Error('Tangent-space transfer requires normal-map coordinates inside the source image.');
     }
   }
+  if (projection) {
+    const output = catalog.targets(state).find(target => target.binding.object === object);
+    if (!output) throw new Error('The target needs a linked Base Color material before projecting maps.');
+    const material = output.binding.material;
+    const names = new Set(maps.map(map => map.slot));
+    for (const [slot, texture] of Object.entries(material)) if (texture instanceof Texture) {
+      const role = slot === 'metalnessMap' || slot === 'roughnessMap' ? 'metalRough' : slot;
+      if (!names.has(role)) throw new Error(`The source has no ${role} map for the target material binding.`);
+    }
+    if (names.has('normalMap') && !(material instanceof MeshStandardMaterial || material instanceof MeshPhongMaterial)) {
+      throw new Error('The target material does not support a tangent-space normal map.');
+    }
+    for (const map of maps) map.preserveAlpha = true;
+  }
   const bake = await bakeInWorker({ width: options.size, height: options.size, padding: options.padding,
     position: surface.positions.slice(), normals: surface.normals.slice(), sourceUv, targetUv: layout.uv.slice(), maps,
-    direct: { sourceName: options.original ? 'Original import' : `Working revision ${revision}`,
+    projection: projection?.input,
+    direct: { sourceName: projection?.input.sourceName ?? (options.original ? 'Original import' : `Working revision ${revision}`),
       filter: options.filter, topDown: model.format === 'glb', missing, clearUnused: scope?.clearUnused },
   }, signal);
   return model.format === 'fbx' && !options.original && state.bake?.generated ? { ...bake, generated: true } : bake;

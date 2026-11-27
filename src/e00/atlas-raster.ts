@@ -48,7 +48,7 @@ export function rasterize(width: number, height: number, targetUv: Float32Array)
   return { faces, wb, wc, covered, boundaryOnlyTriangles: smallTriangles.length, overlaps };
 }
 
-export function paddingSources(faces: Int32Array, width: number, distance = Infinity): number {
+export function paddingSources(faces: Int32Array, width: number, distance = Infinity, valid?: (pixel: number) => boolean): number {
   const queue = new Int32Array(faces.length);
   let tail = 0, head = 0, padded = 0;
   const adjacent = (pixel: number, visit: (neighbor: number) => void) => {
@@ -58,7 +58,7 @@ export function paddingSources(faces: Int32Array, width: number, distance = Infi
     if (pixel + width < faces.length) visit(pixel + width);
   };
   const seed = (pixel: number) => {
-    if (!faces[pixel]) return;
+    if (!faces[pixel] || valid && !valid(pixel)) return;
     let edge = false;
     adjacent(pixel, neighbor => { if (!faces[neighbor]) edge = true; });
     if (edge) queue[tail++] = pixel;

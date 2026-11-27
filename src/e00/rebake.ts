@@ -20,7 +20,7 @@ export interface TextureBake {
   generated?: true;
   direct?: { sourceName: string; filter: 'nearest' | 'linear'; misses: number };
   coverage?: Uint8Array<ArrayBuffer>;
-  projection?: { sourceName: string; misses: number; maxDistance: number; eligibleSources: number[][] };
+  projection?: { sourceName: string; misses: number; maxDistance: number; eligibleSources: number[][]; nearest?: number };
 }
 
 export function blankPaintMesh(asset: ImportedAsset) {
@@ -206,8 +206,12 @@ async function readPixels(bytes: Uint8Array<ArrayBuffer>) {
 export async function bakeInWorker(input: BakeInput, signal?: AbortSignal): Promise<TextureBake> {
   const worker = new Worker(new URL('./rebake-worker.ts', import.meta.url), { type: 'module' });
   const projection = input.projection;
+  const spatial = projection?.spatial;
   return finishWorker(worker, input, [...new Set([input.position.buffer, input.normals.buffer, input.sourceUv.buffer, input.targetUv.buffer,
     ...input.maps.flatMap(map => [map.pixels.buffer, ...(map.uv ? [map.uv.buffer] : [])]),
     ...(input.direct?.missing ? [input.direct.missing.buffer] : []), ...(projection ? [projection.sourcePosition.buffer,
-      projection.sourceComponents.buffer, projection.targetComponents.buffer] : [])])], signal);
+      projection.sourceComponents.buffer, projection.targetComponents.buffer] : []),
+    ...(spatial ? [spatial.targetPosition.buffer, spatial.targetNormal.buffer, spatial.sourceLocalPosition.buffer, spatial.sourceLocalNormal.buffer,
+      spatial.sourceWorldNormal.buffer, ...(spatial.directFaces ? [spatial.directFaces.buffer] : []),
+      ...(spatial.excluded ? [spatial.excluded.buffer] : [])] : [])])], signal);
 }

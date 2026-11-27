@@ -131,6 +131,7 @@ export function moveControlPointY(asset: ImportedAsset, controlPoint: number, of
 export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMap<Texture, Uint8Array<ArrayBuffer>>,
   extract?: { layout: string; originAtZero: boolean; pivot: number[];
     auxiliary: { semantic: string; file: string; colorSpace: string; channel: string; png: Uint8Array<ArrayBuffer> }[] },
+  transfers?: readonly { object: string; bake: TextureBake }[],
 ): Promise<{ name: string; bytes: Uint8Array<ArrayBuffer> }> {
   if (asset.deformation.hasMorphTargets) {
     throw new Error('FBX export blocked. The current exporter cannot preserve source morph targets.');
@@ -226,6 +227,14 @@ export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMa
   }
   const extractMetadata = extract && { layout: extract.layout, originAtZero: extract.originAtZero, pivot: extract.pivot,
     auxiliaryMaps: extract.auxiliary.map(({ png, ...map }) => { files.set(map.file, png); return map; }) };
+  const transferMetadata = transfers?.map(({ object, bake }) => ({
+    object, channel: 'uv0', covered: bake.covered, projection: bake.projection,
+    auxiliaryMaps: bake.maps.filter(map => map.slot === 'metallic' || map.slot === 'roughness').map(map => {
+      const file = `rebaked/${object}/${map.slot}.png`;
+      files.set(file, map.png);
+      return { semantic: map.slot, file, colorSpace: 'linear' };
+    }),
+  }));
   const model = `${name}.fbx`;
   files.set(model, new Uint8Array(fbx));
   const cornerMap = repair ? 'repair-source-corners.bin' : 'uv-atlas-source-corners.bin';
@@ -238,7 +247,8 @@ export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMa
     files.set(cornerMap, bytes);
   }
   files.set('manifest.json', new TextEncoder().encode(JSON.stringify({
-    stage: extract ? 'E07' : 'E00', model, unitsInCentimeters: asset.unitScale, meshes: asset.stats, extract: extractMetadata,
+    stage: transferMetadata?.some(map => map.projection) ? 'E08' : extract ? 'E07' : 'E00',
+    model, unitsInCentimeters: asset.unitScale, meshes: asset.stats, extract: extractMetadata, transfers: transferMetadata,
     skinInfluences: asset.deformation.pointsOverPreviewLimit > 0 ? {
       maxPerControlPoint: asset.deformation.maxSkinInfluences, pointsOverPreviewLimit: asset.deformation.pointsOverPreviewLimit, previewLimit: 4,
     } : undefined,

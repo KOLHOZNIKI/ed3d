@@ -6,14 +6,18 @@ import type { Boundary } from './boundaries';
 type Facet = { ids: number[]; points: Vector3[]; area: Triangle; normal: Vector3; bounds: Box3 };
 const tolerance = 1e-8;
 
-export function validatePatch(mesh: MeshData, patch: readonly Face[], boundary: Pick<Boundary, 'edges' | 'diameter'>, normal: Vector3) {
-  const rim = new Set(boundary.edges.map(([a, b]) => edgeKey(a, b)));
+export function validatePatch(mesh: MeshData, patch: readonly Face[], boundary: Pick<Boundary, 'edges' | 'diameter'>,
+  normal?: Vector3, sourceWinding = false, exposed: readonly (readonly [number, number])[] = []) {
+  const rim = new Map(boundary.edges.map(([a, b]) => [edgeKey(a, b), a]));
+  const ends = new Set(exposed.map(([a, b]) => edgeKey(a, b)));
   const edges = new Map<string, number[]>();
   const epsilon = boundary.diameter * tolerance;
-  const added = patch.map(face => facet(mesh, face.corners.map(c => c.vertex)));
+  const added = patch.flatMap(face => Array.from({ length: face.triangles.length / 3 }, (_, i) =>
+    facet(mesh, face.triangles.slice(i * 3, i * 3 + 3).map(corner => face.corners[corner].vertex))));
   const area = new Box3();
   for (const face of added) {
-    const orientedArea = face.points[1].clone().sub(face.points[0]).cross(face.points[2].clone().sub(face.points[0])).dot(normal);
+    const cross = face.points[1].clone().sub(face.points[0]).cross(face.points[2].clone().sub(face.points[0]));
+    const orientedArea = normal ? cross.dot(normal) : cross.length();
     if (orientedArea <= epsilon * epsilon) throw new Error('The patch has a collapsed or inverted triangle.');
     area.union(face.bounds);
     face.ids.forEach((id, i) => {
@@ -23,11 +27,18 @@ export function validatePatch(mesh: MeshData, patch: readonly Face[], boundary: 
     });
   }
   for (const [key, uses] of edges) {
-    if (rim.has(key) ? uses.length !== 1 : uses.length !== 2 || uses[0] === uses[1]) {
+    if (rim.has(key) ? uses.length !== 1 || sourceWinding && uses[0] === rim.get(key) :
+        ends.has(key) ? uses.length !== 1 : uses.length !== 2 || uses[0] === uses[1]) {
       throw new Error('The patch does not meet the source boundary with consistent winding.');
     }
   }
-  if ([...rim].some(key => !edges.has(key))) throw new Error('The patch skipped a boundary edge.');
+  if ([...rim.keys(), ...ends].some(key => !edges.has(key))) throw new Error('The patch skipped a boundary edge.');
+  added.sort((a, b) => a.bounds.min.x - b.bounds.min.x);
+  for (const [i, face] of added.entries()) for (let j = i + 1; j < added.length; j++) {
+    const other = added[j];
+    if (other.bounds.min.x > face.bounds.max.x + epsilon) break;
+    if (intersects(face, other, epsilon)) throw new Error('The patch crosses itself. Adjust its parameters.');
+  }
 
   area.expandByScalar(epsilon);
   for (const face of mesh.faces) {

@@ -1,4 +1,5 @@
-import { MeshBasicMaterial, type BufferGeometry, type Material, type Mesh, type Texture } from 'three';
+import { MeshBasicMaterial, MeshStandardMaterial, NoColorSpace, SRGBColorSpace,
+  type BufferGeometry, type Material, type Mesh, type Texture } from 'three';
 import { mappedTexture, sourceImage, transferSampling, type TextureCatalog, type TextureTarget } from './bindings';
 import type { WorkingState } from '../project/state';
 import { decodePng, encodeImage, type TextureImage } from './image';
@@ -91,11 +92,14 @@ export function sourceAppearance(catalog: TextureCatalog, state: WorkingState, m
           if (entry.slot === 'map') continue;
           if (entry.slot === 'roughness' || entry.slot === 'metallic') continue;
           const names = entry.slot === 'metalRough' ? ['metalnessMap', 'roughnessMap'] : [entry.slot];
-          const source = slots[names[0]];
-          if (!source) throw new Error(`Missing GLB ${names[0]} binding for the UV transfer.`);
+          const original = slots[names[0]], source = original ?? binding.texture;
           const canvas = mode === 'fbx' ? undefined : sourceImage(decodePng(entry.png));
           const texture = canvas ? mappedTexture(source, canvas) : source.clone();
           transferSampling(texture, target.transfer.channel);
+          if (!original) {
+            texture.colorSpace = entry.slot === 'emissiveMap' ? SRGBColorSpace : NoColorSpace;
+            if (entry.slot === 'normalMap' && material instanceof MeshStandardMaterial) material.normalScale.y = -material.normalScale.x;
+          }
           texture.userData = { ...texture.userData, mimeType: 'image/png' };
           result.textures.push(texture);
           if (mode === 'glb' && canvas) glb.set(canvas, { blob: new Blob([entry.png], { type: 'image/png' }), name: entry.source });
