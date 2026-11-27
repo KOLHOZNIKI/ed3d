@@ -2,7 +2,7 @@ import { inputLimit, pack, readPackage, type Files } from '../e00/zip';
 import { AssetDocument, defaultHistoryBudget, type ObjectOverrides, type OriginalFile, type SceneEntry } from './document';
 import { atlasColor, type AtlasState, type TextureEdit, type WorkingState } from './state';
 import { decodePng, encodeImage } from '../texture/image';
-import { decodeEdit } from '../mesh/commands';
+import { boundaryId, decodeEdit } from '../mesh/commands';
 
 const MiB = 1024 * 1024;
 export const projectLimit = 512 * MiB;
@@ -100,9 +100,9 @@ export async function writeProject(document: AssetDocument<WorkingState>, option
     }
     meshEdits = await retain(bytes);
   }
-  const manifest = encoder.encode(JSON.stringify({ format: 'AssetFixer', schemaVersion: 4, id: options?.id ?? document.id,
+  const manifest = encoder.encode(JSON.stringify({ format: 'AssetFixer', schemaVersion: 5, id: options?.id ?? document.id,
     name: options?.name ?? document.name, revision, settings: { historyBudget }, scene, originals: originalRefs,
-    resources, working: { objects: state.objects, geometry, bake, paint, textures, meshEdits } }));
+    resources, working: { objects: state.objects, geometry, bake, paint, textures, meshEdits, keepOpen: state.keepOpen } }));
   if (manifest.byteLength > MiB || expanded + manifest.byteLength > limits.total) throw new Error('The project manifest exceeds its size limit.');
   files.set('manifest.json', manifest);
   const bytes = await pack(files);
@@ -119,7 +119,7 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
   const manifest = record(JSON.parse(decoder.decode(encoded)));
   if (manifest.format !== 'AssetFixer') throw new Error('This file is not an AssetFixer project.');
   const version = integer(manifest.schemaVersion, 1);
-  if (version > 4) throw new Error(`Project schema ${version} is newer than this application supports.`);
+  if (version > 5) throw new Error(`Project schema ${version} is newer than this application supports.`);
   // Version 1 had a fixed history budget. Version 2 persists the project setting.
   const historyBudget = version === 1 ? defaultHistoryBudget : integer(record(manifest.settings).historyBudget, MiB, projectLimit);
   if (historyBudget % MiB) throw new Error('Invalid project history budget.');
@@ -183,6 +183,19 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
     if (!entries.has(id)) throw new Error('The project refers to an unknown object.');
     const node = record(value);
     objects[id] = { name: text(node.name, 1024), visible: bool(node.visible) };
+  }
+  let keepOpen: Record<string, Record<string, boolean>> | undefined;
+  if (version >= 5 && working.keepOpen !== undefined) {
+    keepOpen = Object.create(null) as Record<string, Record<string, boolean>>;
+    for (const [object, flags] of Object.entries(record(working.keepOpen))) {
+      if (!entries.has(object)) throw new Error('A protected boundary refers to an unknown object.');
+      const saved: Record<string, boolean> = Object.create(null);
+      for (const [key, flag] of Object.entries(record(flags))) {
+        if (!boundaryId(key)) throw new Error('Invalid protected boundary ID.');
+        saved[key] = bool(flag);
+      }
+      keepOpen[object] = saved;
+    }
   }
 
   let atlas: AtlasState | undefined;
@@ -248,7 +261,7 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
   const id = text(manifest.id, 36);
   if (!uuidPattern.test(id)) throw new Error('Invalid project identifier.');
   return { id, name: text(manifest.name, 160), revision: integer(manifest.revision, 0, 1e12), originals, historyBudget, scene,
-    state: { objects, atlas, bake, paint, textures, meshEdits } };
+    state: { objects, atlas, bake, paint, textures, meshEdits, keepOpen } };
 }
 
 function validatePng(png: Uint8Array<ArrayBuffer>, width: number, height: number) {

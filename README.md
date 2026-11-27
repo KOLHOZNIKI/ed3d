@@ -38,6 +38,8 @@ Open **Texture editor** to edit the selected object's Base Color material. The 2
 
 Open **Mesh Edit** and choose an object. Click a vertex, edge or face in the viewport, use Shift-click to extend the selection, or enter element IDs. Move, Rotate and Scale support axis handles, numeric values and a pivot. Use **Preview** to inspect an edit, then **Apply** or Enter. Press Esc to cancel. Use the ordered vertex selection for **Create Face**. **Separate** creates another object with the selected faces and their existing material bindings.
 
+Open **Repair** to inspect boundaries on the selected object. Mark intentional openings **Keep Open**. Choose **Planar Fill**, **Fan Fill**, or **Manual Face** for selected boundaries. **Auto Fill** previews a batch with edge, diameter, and planarity limits. Check the wireframe and the reason for each skipped contour before applying. The resulting faces can be selected for mesh editing or 3D Paint.
+
 | Command | Purpose |
 | --- | --- |
 | `npm run typecheck` | Check the application with strict TypeScript settings. |
@@ -62,6 +64,7 @@ Open **Mesh Edit** and choose an object. Click a vertex, edge or face in the vie
 
 ## Verification
 
+- [E05 Basic Repair verification](Docs/E05_Report.md) covers protected openings, concave and non-planar contours, patch intersections, and skinned FBX repair.
 - [E04 Mesh Core verification](Docs/E04_Report.md) covers logical vertex edits, UV and normal seams, ordered face creation, and FBX skinning after a split and separation.
 - [E03 3D Paint verification](Docs/E03_Report.md) covers UV seams, visible surface isolation, masks, and painting on a frozen skinned pose.
 - [E02 texture editor verification](Docs/E02_Report.md) records color sampling, stamp isolation, pixel zoom, mixed history and FBX/GLB export.

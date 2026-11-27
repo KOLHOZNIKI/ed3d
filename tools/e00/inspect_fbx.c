@@ -620,9 +620,73 @@ static bool e04_mesh_report(char **paths)
     return move_ok && undo_corners && split_ok && holes_ok && skin_ok && piece_ok && clip_ok;
 }
 
+static bool bottle_changes(const ufbx_mesh *source, const ufbx_mesh *result, bool fan)
+{
+    if (source->num_vertices != 60 || source->num_faces != 104 || result->num_vertices != 60u + (fan ? 1u : 0u) ||
+        result->num_faces != 104u + (fan ? 3u : 2u) || !source->vertex_uv.exists || !result->vertex_uv.exists ||
+        !source->vertex_normal.exists || !result->vertex_normal.exists) return false;
+    if (memcmp(source->vertices.data, result->vertices.data, source->num_vertices * sizeof(ufbx_vec3)) ||
+        memcmp(source->vertex_indices.data, result->vertex_indices.data, source->num_indices * sizeof(uint32_t))) return false;
+    double min = INFINITY, max = -INFINITY;
+    for (size_t i = 0; i < source->num_indices; i++) {
+        const ufbx_vec2 uv = ufbx_get_vertex_vec2(&source->vertex_uv, i);
+        if (uv_distance(uv, ufbx_get_vertex_vec2(&result->vertex_uv, i)) > 1e-9 ||
+            normal_angle(ufbx_get_vertex_vec3(&source->vertex_normal, i), ufbx_get_vertex_vec3(&result->vertex_normal, i)) > 1e-5) return false;
+        if (source->vertex_indices.data[i] == 12) {
+            min = fmin(min, uv.x);
+            max = fmax(max, uv.x);
+        }
+    }
+    if (max - min < .99) return false;
+    unsigned char adjacency[61][61] = { 0 };
+    for (size_t f = 0; f < result->num_faces; f++) {
+        const ufbx_face face = result->faces.data[f];
+        if (face.num_indices != 3) return false;
+        for (size_t i = 0; i < 3; i++) {
+            unsigned a = result->vertex_indices.data[face.index_begin + i];
+            unsigned b = result->vertex_indices.data[face.index_begin + (i + 1) % 3];
+            if (a == b || adjacency[a][b]++) return false;
+        }
+    }
+    size_t open = 0;
+    for (unsigned a = 0; a < 61; a++) for (unsigned b = a + 1; b < 61; b++) {
+        if (adjacency[a][b] + adjacency[b][a] != 1) continue;
+        const bool mouth = a >= 48 && b < 60 && (b == a + 1 || (a == 48 && b == 59));
+        const bool second_hole = fan && ((a == 20 && b == 21) || (a == 20 && b == 32) || (a == 21 && b == 32));
+        if (!mouth && !second_hole) return false;
+        open++;
+    }
+    return open == (fan ? 15u : 12u);
+}
+
+static bool e05_mesh_report(char **paths)
+{
+    ufbx_scene *source = load(paths[0], 1), *repair = load(paths[1], 1);
+    ufbx_scene *rig = load(paths[2], 1), *fan = load(paths[3], 1);
+    const ufbx_mesh *a = source->meshes.data[0], *b = repair->meshes.data[0], *c = rig->meshes.data[0], *d = fan->meshes.data[0];
+    const bool planar = bottle_changes(a, b, false) && repair->textures.count == 1;
+    bool skinned = bottle_changes(c, d, true) && c->skin_deformers.count == 1 && d->skin_deformers.count == 1 && fan->textures.count == 1;
+    double w0 = 0.0, w1 = 0.0;
+    if (skinned) {
+        w0 = weight_at(d, 60, "Base");
+        w1 = weight_at(d, 60, "Neck");
+        skinned = fabs(w0 - 5.0 / 6.0) < 1e-9 && fabs(w1 - 1.0 / 6.0) < 1e-9;
+        for (size_t i = 0; i < 60; i++) {
+            skinned &= weight_at(c, i, "Base") == weight_at(d, i, "Base") && weight_at(c, i, "Neck") == weight_at(d, i, "Neck");
+        }
+    }
+    printf("{\"staticPatchPreservedBoundaryAndCorners\":%s,\"fanPreservedBoundaryAndCorners\":%s,\"newWeights\":[%.10g,%.10g]",
+        planar ? "true" : "false", skinned ? "true" : "false", w0, w1);
+    const bool clip = skinned && compare_clips(rig, fan, c, d);
+    puts("}");
+    ufbx_free_scene(source); ufbx_free_scene(repair); ufbx_free_scene(rig); ufbx_free_scene(fan);
+    return planar && skinned && clip;
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 10 && !strcmp(argv[1], "--e04")) return e04_mesh_report(argv + 2) ? 0 : 1;
+    if (argc == 6 && !strcmp(argv[1], "--e05")) return e05_mesh_report(argv + 2) ? 0 : 1;
     if (argc == 3 && strcmp(argv[1], "--f12-source") == 0) {
         ufbx_scene *scene = load(argv[2], 1);
         const bool matches = inspect_coordinate_source(scene);

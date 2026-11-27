@@ -18,7 +18,8 @@ import { encodeImage } from './texture/image';
 import { PaintTool } from './paint3d/tool';
 import type { Point } from './texture/stroke';
 import { MeshTool } from './mesh/tool';
-import { encodeEdit } from './mesh/commands';
+import { encodeEdit, type MeshEdit } from './mesh/commands';
+import { RepairTool } from './repair/tool';
 
 function element<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -34,6 +35,7 @@ const saveAs = element<HTMLButtonElement>('save-copy'), exportButton = element<H
 const unwrap = element<HTMLButtonElement>('unwrap'), rebake = element<HTMLButtonElement>('rebake');
 const paintButton = element<HTMLButtonElement>('paint');
 const meshButton = element<HTMLButtonElement>('mesh-mode');
+const repairButton = element<HTMLButtonElement>('repair-mode');
 const paintUnwrap = element<HTMLButtonElement>('paint-unwrap');
 const undo = element<HTMLButtonElement>('undo-stroke'), redo = element<HTMLButtonElement>('redo');
 const cancel = element<HTMLButtonElement>('cancel-job');
@@ -64,6 +66,7 @@ let current: Workspace | undefined;
 let selected = '';
 let painting = false;
 let meshEditing = false;
+let repairing = false;
 let stroke: { pointer: number; gesture: Exclude<ReturnType<PaintTool['begin']>, string | undefined> } | undefined;
 let paintBinding = '';
 let picking: { pointer: number; x: number; y: number } | undefined;
@@ -113,23 +116,67 @@ const editor = new TextureEditor({
   },
 });
 const painter = new PaintTool(viewer, canvas, target => current!.textures.load(target, current!.document.state), selectBinding);
-const meshTool = new MeshTool(viewer, canvas, (command, revision) => locked(async () => {
-  const work = current!;
-  work.document.assertRevision(revision);
-  const state = work.document.state, meshEdits = state.meshEdits ?? [];
-  let textures = state.textures;
-  if (command.type === 'separate') {
-    for (const target of work.textures.targets(state)) {
-      if (target.binding.object !== command.object || !state.textures?.[target.binding.id]) continue;
-      textures = { ...textures, [`slot/${command.piece}/${target.binding.slot}`]: state.textures[target.binding.id] };
+const meshTool = new MeshTool(viewer, canvas, (command, revision) =>
+  commitMesh(command, revision, element<HTMLSelectElement>('mesh-operation').selectedOptions[0].textContent!),
+  dragging => viewer.setPainting(painting || meshEditing || repairing, dragging || busy || !!stroke));
+const repairTool = new RepairTool(viewer, canvas, {
+  keep(object, id, value, revision) {
+    void locked(async () => {
+      const work = current!, state = work.document.state;
+      const keepOpen = { ...state.keepOpen, [object]: { ...state.keepOpen?.[object], [id]: value } };
+      await edit(work, revision, { ...state, keepOpen }, value ? 'Keep boundary open' : 'Allow boundary repair', object);
+      status.textContent = value ? `${id} is protected from repair.` : `${id} can be considered for repair.`;
+    });
+  },
+  apply(object, patches, revision) {
+    return commitMesh({ type: 'repair', object, patches }, revision, patches.length > 1 ? 'Fill boundaries' : 'Fill boundary');
+  },
+  manual(vertices, project, material) {
+    repairing = false;
+    meshEditing = true;
+    controls();
+    meshTool.buildFace(vertices, project, material);
+  },
+  selectFaces(ids) {
+    repairing = false;
+    meshEditing = true;
+    controls();
+    meshTool.selectFaces(ids);
+  },
+  paintFaces(object, ids) {
+    const work = current!;
+    const faces = work.adapter.mesh.data(object).faces.filter(face => ids.includes(face.id));
+    const target = work.textures.targets(work.document.state).find(target => target.binding.object === object &&
+      faces.some(face => face.material === target.binding.slot));
+    if (!target) { status.textContent = 'There is no editable Base Color binding for the new faces.'; return; }
+    repairing = false;
+    painting = true;
+    selectBinding(target.binding.id);
+    painter.selectFaces(object, faces.filter(face => face.material === target.binding.slot).map(face => face.id));
+    status.textContent = '3D Paint is active on the new faces.';
+  },
+});
+
+function commitMesh(command: MeshEdit, revision: number, label: string) {
+  return locked(async () => {
+    const work = current!;
+    work.document.assertRevision(revision);
+    const state = work.document.state, meshEdits = state.meshEdits ?? [];
+    let textures = state.textures;
+    let keepOpen = state.keepOpen;
+    if (command.type === 'separate') {
+      if (keepOpen?.[command.object]) keepOpen = { ...keepOpen, [command.piece]: keepOpen[command.object] };
+      for (const target of work.textures.targets(state)) {
+        if (target.binding.object !== command.object || !state.textures?.[target.binding.id]) continue;
+        textures = { ...textures, [`slot/${command.piece}/${target.binding.slot}`]: state.textures[target.binding.id] };
+      }
     }
-  }
-  const bytes = encodeEdit(command);
-  const label = element<HTMLSelectElement>('mesh-operation').selectedOptions[0].textContent!;
-  await edit(work, revision, { ...state, textures, meshEdits: [...meshEdits, bytes] }, label, command.object);
-  if (command.type === 'separate') selectObject(command.piece);
-  status.textContent = `${label} applied.`;
-}), dragging => viewer.setPainting(painting || meshEditing, dragging || busy || !!stroke));
+    const bytes = encodeEdit(command);
+    await edit(work, revision, { ...state, textures, keepOpen, meshEdits: [...meshEdits, bytes] }, label, command.object);
+    if (command.type === 'separate') selectObject(command.piece);
+    status.textContent = `${label} applied.`;
+  });
+}
 
 function controls() {
   const document = current?.document;
@@ -140,6 +187,7 @@ function controls() {
   const availablePaint = !!(viewer.available && model);
   if (!availablePaint) painting = false;
   if (!availablePaint) meshEditing = false;
+  if (!availablePaint) repairing = false;
   sources.disabled = locked;
   close.disabled = save.disabled = saveAs.disabled = exportButton.disabled = locked || !document;
   unwrap.disabled = locked || !fbx || editedMesh;
@@ -147,6 +195,7 @@ function controls() {
   rebake.disabled = locked || !fbx || !model.uvAtlas || canCreatePaintAtlas;
   paintButton.disabled = locked || !availablePaint;
   meshButton.disabled = locked || !availablePaint;
+  repairButton.disabled = locked || !availablePaint;
   undo.disabled = locked || !document?.undoDepth;
   redo.disabled = locked || !document?.redoDepth;
   restore.disabled = locked;
@@ -154,9 +203,10 @@ function controls() {
   cancel.disabled = abort?.signal.aborted ?? true;
   paintButton.setAttribute('aria-pressed', String(painting));
   meshButton.setAttribute('aria-pressed', String(meshEditing));
+  repairButton.setAttribute('aria-pressed', String(repairing));
   canvas.style.cursor = painting && !busy ? 'crosshair' : '';
   canvas.style.touchAction = 'none';
-  viewer.setPainting(painting || meshEditing, busy || !!stroke || meshTool.dragging);
+  viewer.setPainting(painting || meshEditing || repairing, busy || !!stroke || meshTool.dragging);
   exportButton.textContent = model?.format === 'glb' ? 'Export GLB' : 'Export FBX ZIP';
   unwrap.textContent = fbx && model.uvAtlas ? 'Discard UV atlas' : 'Generate UV atlas';
   rebake.textContent = fbx && model.textureBake ? 'Discard texture bake' : 'Rebake textures';
@@ -184,9 +234,12 @@ function controls() {
   paintUnwrap.disabled = locked;
   meshTool.configure(meshEditing && current ? { adapter: current.adapter, id: selected, revision: document!.revision,
     blocked: !!document!.state.atlas } : undefined, locked);
+  repairTool.configure(repairing && current ? { adapter: current.adapter, object: selected, revision: document!.revision,
+    flags: document!.state.keepOpen?.[selected], blocked: !!document!.state.atlas } : undefined, locked);
   const pendingUv = current?.adapter.mesh.pendingUv ?? 0;
   const notes = [current?.adapter.mesh.omittedPolygonMetadata ? 'GLB exports the edited topology as indexed triangles and omits incompatible private polygon metadata.' : '',
-    pendingUv ? `${pendingUv} created faces have placeholder UVs and require unwrapping.` : '',
+    pendingUv ? `${pendingUv} created faces require UV review or unwrapping.` : '',
+    current?.adapter.mesh.hasRepairFaces ? 'Repair geometry has no source texture. Use the patch selection to paint or assign its appearance.' : '',
     editedMesh && fbx && model.deformation.pointsOverPreviewLimit ? 'Some vertices have more than four influences. FBX retains the full weights.' : ''].filter(Boolean);
   element('mesh-export-note').hidden = !notes.length;
   element('mesh-export-note').textContent = notes.join(' ');
@@ -342,6 +395,7 @@ function closeWorkspace() {
   paintBinding = '';
   painting = false;
   meshEditing = false;
+  repairing = false;
   autosaveDue = undefined;
   window.clearTimeout(autosaveTimer);
   autosaveStatus.textContent = '';
@@ -695,7 +749,8 @@ frameSelection.addEventListener('click', () => frame(true));
 window.addEventListener('keydown', event => {
   if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement || event.target instanceof HTMLButtonElement ||
       busy || stroke || textureGesture || meshTool.dragging) return;
-  if (!event.ctrlKey && !event.metaKey && meshTool.keyboard(event.key.length === 1 ? event.key.toLowerCase() : event.key)) {
+  if (!event.ctrlKey && !event.metaKey && (repairTool.keyboard(event.key) ||
+      meshTool.keyboard(event.key.length === 1 ? event.key.toLowerCase() : event.key))) {
     event.preventDefault();
     return;
   }
@@ -707,6 +762,7 @@ window.addEventListener('keydown', event => {
 });
 
 paintButton.addEventListener('click', () => {
+  repairing = false;
   meshEditing = false;
   painting = !painting;
   controls();
@@ -714,10 +770,18 @@ paintButton.addEventListener('click', () => {
 });
 
 meshButton.addEventListener('click', () => {
+  repairing = false;
   meshEditing = !meshEditing;
   if (meshEditing) painting = false;
   controls();
   status.textContent = meshEditing ? 'Mesh Edit is active. Right-drag to orbit.' : 'Mesh Edit is off.';
+});
+
+repairButton.addEventListener('click', () => {
+  repairing = !repairing;
+  if (repairing) painting = meshEditing = false;
+  controls();
+  status.textContent = repairing ? 'Repair is active. Select boundaries in the list or viewport.' : 'Repair is off.';
 });
 
 function pointerPoint(event: PointerEvent): Point {
@@ -725,12 +789,12 @@ function pointerPoint(event: PointerEvent): Point {
   return { x: (event.clientX - bounds.left) * canvas.width / bounds.width, y: (event.clientY - bounds.top) * canvas.height / bounds.height };
 }
 
-canvas.addEventListener('contextmenu', event => { if (painting || meshEditing) event.preventDefault(); });
+canvas.addEventListener('contextmenu', event => { if (painting || meshEditing || repairing) event.preventDefault(); });
 canvas.addEventListener('pointerdown', event => {
   if (event.button !== 0 || busy || stroke || textureGesture || !current) return;
   if (!painting) {
     if (meshEditing && meshTool.gizmoHit) return;
-    if (meshEditing) canvas.focus({ preventScroll: true });
+    if (meshEditing || repairing) canvas.focus({ preventScroll: true });
     picking = { pointer: event.pointerId, x: event.clientX, y: event.clientY };
     return;
   }
@@ -765,10 +829,11 @@ canvas.addEventListener('pointerup', event => {
   if (!work) return;
   if (picking?.pointer === event.pointerId) {
     picking = undefined;
+    if (repairing && repairTool.pick(event)) return;
     const list = [...work.adapter.objects].filter((pair): pair is [string, Mesh] => pair[1] instanceof Mesh);
     const model = viewer.pick(event, list.map(([, mesh]) => mesh));
     const id = list.find(([, mesh]) => mesh === model)?.[0];
-    if (!meshEditing || id) selectObject(id ?? '');
+    if ((!meshEditing && !repairing) || id) selectObject(id ?? '');
     if (meshEditing && id) meshTool.pick(event);
   }
   if (stroke?.pointer !== event.pointerId) return;

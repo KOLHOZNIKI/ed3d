@@ -45,6 +45,12 @@
       #mesh-tools input[type=number] { width: 5.75rem; }
       #mesh-ids { width: min(100%, 22rem); }
       #mesh-info { font-size: .875rem; margin: .5rem 0 0; }
+      #repair-tools input[type=number] { width: 5.5rem; }
+      .contours { max-height: 16rem; overflow: auto; margin: .65rem 0; }
+      .contours table { width: 100%; border-collapse: collapse; font-size: .875rem; }
+      .contours th, .contours td { padding: .35rem .4rem; text-align: left; border-bottom: 1px solid #80808042; }
+      .contours th { white-space: nowrap; }
+      #repair-info { font-size: .875rem; margin: .5rem 0 0; }
 
       main:has(#texture-panel:not([hidden])) { max-width: 83rem; }
       .work-area:has(#texture-panel:not([hidden])) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.08fr); gap: 1rem; align-items: start; }
@@ -95,6 +101,7 @@
         <button id="rebake" type="button" disabled>Rebake textures</button>
         <button id="paint" type="button" aria-pressed="false" disabled>3D Paint</button>
         <button id="mesh-mode" type="button" aria-pressed="false" disabled>Mesh Edit</button>
+        <button id="repair-mode" type="button" aria-pressed="false" disabled>Repair</button>
         <button id="undo-stroke" type="button" disabled>Undo</button>
         <button id="redo" type="button" disabled>Redo</button>
         <button id="toggle-texture" type="button" aria-expanded="false" disabled>Texture editor</button>
@@ -147,6 +154,49 @@
         <canvas id="viewport" width="640" height="480" tabindex="0" role="img" aria-label="Imported model preview" hidden></canvas>
         <canvas id="paint-cursor" width="640" height="480" aria-hidden="true" hidden></canvas>
       </div>
+      <fieldset id="repair-tools" hidden>
+        <legend>Boundary Repair</legend>
+        <div class="contours">
+          <table aria-label="Model boundaries">
+            <thead><tr><th>Contour</th><th>Type</th><th>Edges</th><th>Length</th><th>Diameter</th><th>Deviation</th><th>Keep Open</th><th>Result</th></tr></thead>
+            <tbody id="repair-contours"></tbody>
+          </table>
+        </div>
+        <div class="actions">
+          <label for="repair-method">Method</label>
+          <select id="repair-method"><option value="planar">Planar Fill</option><option value="fan">Fan Fill</option></select>
+          <label for="repair-material">Material</label><select id="repair-material"><option value="">Adjacent material</option></select>
+          <label><input id="repair-project" type="checkbox" /> Project UVs into 0–1</label>
+          <label for="repair-tolerance">Planarity tolerance %</label><input id="repair-tolerance" type="number" value="2.5" min="0" max="100" step="any" />
+        </div>
+        <div class="actions" id="repair-center" hidden>
+          <label><input id="repair-custom" type="checkbox" /> Custom Fan center</label>
+          <label for="repair-x">X</label><input id="repair-x" type="number" step="any" />
+          <label for="repair-y">Y</label><input id="repair-y" type="number" step="any" />
+          <label for="repair-z">Z</label><input id="repair-z" type="number" step="any" />
+        </div>
+        <details id="repair-auto-settings">
+          <summary>Auto Fill</summary>
+          <div class="actions">
+            <label for="repair-scope">Scope</label>
+            <select id="repair-scope"><option value="selection">Selected contours</option><option value="object">Selected object</option></select>
+            <label for="repair-max-edges">Max edges</label><input id="repair-max-edges" type="number" min="3" step="1" value="8" />
+            <label for="repair-max-diameter">Max diameter (0 for any)</label><input id="repair-max-diameter" type="number" min="0" step="any" value="0" />
+            <label><input id="repair-allow-planar" type="checkbox" checked /> Planar</label>
+            <label><input id="repair-allow-fan" type="checkbox" checked /> Fan</label>
+            <button id="repair-auto" type="button">Preview Auto Fill</button>
+          </div>
+        </details>
+        <div class="actions">
+          <button id="repair-preview" type="button">Preview Fill</button>
+          <button id="repair-manual" type="button">Manual Face</button>
+          <button id="repair-apply" type="button" disabled>Apply</button>
+          <button id="repair-cancel" type="button" disabled>Cancel preview</button>
+          <button id="repair-select-new" type="button" hidden>Select new faces</button>
+          <button id="repair-paint-new" type="button" hidden>Paint new faces</button>
+        </div>
+        <p id="repair-info" aria-live="polite"></p>
+      </fieldset>
       <fieldset id="mesh-tools" hidden>
         <legend>Mesh Edit</legend>
         <div class="actions">

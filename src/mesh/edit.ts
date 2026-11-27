@@ -1,11 +1,14 @@
 import { Euler, Matrix3, Matrix4, Vector3 } from 'three';
 import type { MeshEdit } from './commands';
-import { edgeKey, edgesOf, edgeVertices, next, point, verticesOf, type Corner, type Face, type MeshData, type Side, type Weight } from './data';
+import { edgeKey, edgesOf, edgeVertices, ensureUvChannel, next, point, verticesOf, type Corner, type Face, type MeshData, type Side, type Weight } from './data';
 import { faceNormal, polygon, vector } from './polygon';
 import { recalculate, tangentFrame } from './normals';
+import { applyRepairs } from '../repair/fill';
+import { validatePatch } from '../repair/intersections';
 
 export function applyMeshEdit(mesh: MeshData, edit: MeshEdit): { mesh: MeshData; piece?: MeshData } {
   switch (edit.type) {
+    case 'repair': return { mesh: applyRepairs(mesh, edit.patches) };
     case 'move': case 'rotate': case 'scale': return { mesh: transform(mesh, edit) };
     case 'delete': case 'separate': {
       const faces = pickFaces(mesh, edit.faces);
@@ -130,12 +133,7 @@ function create(mesh: MeshData, edit: MeshEdit & { type: 'create' }) {
     if (sides.length > 1) throw new Error('This face would create an edge with more than two incident faces.');
     if (sides[0]?.face.corners[sides[0].corner].vertex === a) throw new Error('The face follows a shared edge in the same direction. Flip or reorder the contour.');
   }
-  if (edit.project && !mesh.channels.some(({ name }) => /^uv\d*$/.test(name))) {
-    mesh = { ...mesh, channels: [...mesh.channels, { name: mesh.glb ? 'uv' : 'uv0', size: 2 }],
-      faces: mesh.faces.map(face => ({ ...face, corners: face.corners.map(corner => ({
-        ...corner, attributes: [...corner.attributes, [0, 0]],
-      })) })) };
-  }
+  if (edit.project) mesh = ensureUvChannel(mesh);
   const attributes = new Map<number, Corner['attributes']>();
   for (const face of mesh.faces) for (const corner of face.corners) {
     if (selected.has(corner.vertex) && !attributes.has(corner.vertex)) attributes.set(corner.vertex, corner.attributes);
@@ -150,6 +148,14 @@ function create(mesh: MeshData, edit: MeshEdit & { type: 'create' }) {
   }));
   const face: Face = { id: mesh.nextFace, corners, triangles: shape.triangles, material: edit.material,
     created: true, needsUv: edit.project ? undefined : true };
+  const facets: Face[] = [];
+  for (let i = 0; i < shape.triangles.length; i += 3) {
+    facets.push({ ...face, corners: shape.triangles.slice(i, i + 3).map(index => corners[index]), triangles: [0, 1, 2] });
+  }
+  const origin = vector(mesh, edit.vertices[0]);
+  const diameter = Math.max(...edit.vertices.map(id => vector(mesh, id).distanceTo(origin)));
+  validatePatch(mesh, facets, { diameter, edges: edit.vertices.map((id, i) => [id, edit.vertices[(i + 1) % edit.vertices.length]]) },
+    new Vector3().fromArray(shape.normal));
   return { ...mesh, faces: [...mesh.faces, tangentFrame(mesh, face)], nextFace: mesh.nextFace + 1 };
 }
 
@@ -227,7 +233,8 @@ function combine(mesh: MeshData, sides: Side[], flip: boolean) {
     throw new Error('The edge has a UV, normal, color, or winding discontinuity. Keep the edge to preserve it.');
   }
   const outline = [...aa.slice(0, -1), ...bb.slice(0, -1)];
-  const merged = withCorners(mesh, { ...a.face, created: a.face.created || b.face.created, needsUv: a.face.needsUv || b.face.needsUv }, outline, true);
+  const merged = withCorners(mesh, { ...a.face, created: a.face.created || b.face.created, repaired: a.face.repaired || b.face.repaired,
+    needsUv: a.face.needsUv || b.face.needsUv }, outline, true);
   let result: Face[] = [merged];
   if (flip) {
     if (edgesOf(mesh).has(edgeKey(outline[1].vertex, outline[3].vertex))) throw new Error('The other diagonal already exists.');

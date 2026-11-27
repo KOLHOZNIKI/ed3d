@@ -69,6 +69,23 @@ export class MeshTool {
   get gizmoHit() { return !!this.#gizmo?.axis && !!this.#gizmo.object; }
   get context() { return this.#context; }
 
+  selectFaces(ids: number[]) {
+    this.#kind.value = 'face';
+    this.#selection.face = ids;
+    this.#selectionChanged();
+  }
+
+  buildFace(vertices: readonly number[], project: boolean, material: string) {
+    this.#kind.value = 'vertex';
+    this.#operation.value = 'create';
+    this.#selection.vertex = [...vertices];
+    ui<HTMLInputElement>('project').checked = project;
+    if (material) ui<HTMLSelectElement>('material').value = material;
+    this.#selectionChanged();
+    this.preview();
+    this.canvas.focus({ preventScroll: true });
+  }
+
   configure(context: Context | undefined, locked: boolean) {
     const previous = this.#context;
     this.#context = context;
@@ -196,7 +213,7 @@ export class MeshTool {
   }
 
   #command({ adapter, id }: Context): MeshEdit {
-    const object = id, type = choice('operation') as MeshEdit['type'];
+    const object = id, type = choice('operation') as Exclude<MeshEdit['type'], 'repair'>;
     const vertices = this.#selection.vertex;
     const edge = () => {
       if (this.#selection.edge.length !== 1) throw new Error('Select exactly one edge.');

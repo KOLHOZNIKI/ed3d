@@ -211,6 +211,14 @@ export class PaintTool {
       .map(face => `${target.binding.object}/face/${face.id}`));
   }
 
+  selectFaces(object: string, ids: readonly number[]) {
+    this.#scope.value = 'face';
+    this.#picking = false;
+    this.#mask = new Set(ids.map(id => `${object}/face/${id}`));
+    this.#info();
+    this.#queueCursor();
+  }
+
   begin(point: Point): Gesture | string | undefined {
     const target = this.#target, mapping = this.#mapping, image = this.#image;
     if (!target || !mapping || !image || mapping.unsupported) return 'Choose a supported Base Color binding before painting.';

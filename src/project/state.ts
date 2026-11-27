@@ -26,6 +26,7 @@ export interface WorkingState {
   readonly paint?: TexturePaint;
   readonly textures?: Readonly<Record<string, TextureEdit>>;
   readonly meshEdits?: readonly Uint8Array<ArrayBuffer>[];
+  readonly keepOpen?: Readonly<Record<string, Readonly<Record<string, boolean>>>>;
 }
 
 export function* workingBuffers(state: WorkingState): Iterable<ArrayBuffer> {

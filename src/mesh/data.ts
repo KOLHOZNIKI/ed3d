@@ -10,6 +10,7 @@ export interface Face {
   readonly triangles: readonly number[];
   readonly material: number;
   readonly created?: true;
+  readonly repaired?: true;
   readonly needsUv?: true;
 }
 export interface MeshData {
@@ -59,4 +60,12 @@ export function connected(mesh: MeshData, seeds: Iterable<number>) {
     queue.push(id);
   }
   return ids;
+}
+
+export function ensureUvChannel(mesh: MeshData): MeshData {
+  if (mesh.channels.some(({ name }) => /^uv\d*$/.test(name))) return mesh;
+  return { ...mesh, channels: [...mesh.channels, { name: mesh.glb ? 'uv' : 'uv0', size: 2 }],
+    faces: mesh.faces.map(face => ({ ...face, corners: face.corners.map(corner => ({
+      ...corner, attributes: [...corner.attributes, [0, 0]],
+    })) })) };
 }

@@ -36,6 +36,10 @@ export class MeshSession {
     for (const { mesh } of this.#states.values()) for (const face of mesh.faces) if (face.needsUv) count++;
     return count;
   }
+  get hasRepairFaces() {
+    for (const { mesh } of this.#states.values()) if (mesh.faces.some(face => face.repaired)) return true;
+    return false;
+  }
   get omittedPolygonMetadata() {
     for (const { state, node } of this.#renders.values()) {
       if (this.#sources.get(state.root)?.extensions?.FB_ngon_encoding && !node.userData.gltfExtensions?.FB_ngon_encoding) return true;
