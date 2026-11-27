@@ -1,6 +1,6 @@
 # AssetFixer E00 verification and E01 readiness
 
-**Status on 2026-11-27. The E00 prototypes have answered all seven questions in §21.4 on the verified profiles. The §7.7 topology and generator round-trips have results for the tested Tripo and Meshy files. The E00 acceptance gate remains open.** Corpus preparation still has gaps. The four measured memory phases fit on the benchmark workstation. The separate work-PC check specified in §20.2 has no recorded result. [Implementation stages](AssetFixer_Technical_Specification_v1.0.md#sec-21) · [Compatibility](AssetFixer_Technical_Specification_v1.0.md#sec-07) · [Corpus](AssetFixer_Technical_Specification_v1.0.md#sec-22) · [Benchmark setup](AssetFixer_Technical_Specification_v1.0.md#sec-20)
+**Status on 2026-11-27. E00 is complete and E01 can begin.** The prototypes answer all seven questions in §21.4 on the verified profiles. The §7.7 topology and generator round-trips have results for the tested Tripo and Meshy files. All 18 fixture IDs have prepared inputs and reference expectations. The §22.2 PNG identity check passed, and the separate §20.2 run is recorded on the confirmed work PC. [Implementation stages](AssetFixer_Technical_Specification_v1.0.md#sec-21) · [Compatibility](AssetFixer_Technical_Specification_v1.0.md#sec-07) · [Corpus completion](E00_Corpus.md) · [Work-PC check](E00_Memory.md#separate-work-pc-check)
 
 ## Verified results
 
@@ -20,11 +20,13 @@
 | xatlas | Both Tripo FBX fixtures retained source control points, corner attributes and skin through seam splits. Each exported corner maps back to its source corner. Unity matched character weights exactly. Seven imported character normals had vector differences above `1e-5`, with maximum angle about `0.04°`. ufbx measured `1.21e-6°` maximum corner angle for both FBX files. | [xatlas](E00_XAtlas.md) |
 | Direct texture rebake | Plate Base Color at 2396 × 2396. Character Base Color, Normal, Roughness and Metallic at 2828 × 2842. The final repack had 49 and 511 charts respectively. The FBX links Base Color and Normal where present and packages the two scalar character maps for manual assignment. Six views in both Unity versions showed no new dark seam lines after dilation. Mean lit seam error was `0.09/255` and `0.54/255` respectively. The character's highest seam pixel error was `46/255`. Local resampling differences remain at high-contrast transitions. | [Texture rebake](E00_Texture_Rebake.md) |
 | UV transform and alpha bake | A project-generated folded mesh with rotation, non-uniform scale, offset, mixed address modes and a UV seam. Cutout and Fade both retained the pattern on the exported atlas. Unity matched 1,400 interior RGBA samples exactly in each mode, including 133 with hidden RGB. The mean composite RGB error was at most `0.310/255`. | [UV transforms and alpha](E00_UV_Transforms_Alpha.md) |
+| Lossless PNG identity transfer | The direct-bake worker and FBX ZIP exporter retained all 3,782 interior RGBA8 texels exactly, including 16 zero-alpha texels with hidden RGB. The maximum per-channel error was `0/255`. | [Identity transfer](E00_Corpus.md#png-identity-transfer) |
 | Directional normal bake | A controlled F14 fixture exercised 37° rotation and a separate 23° rotation with a handedness change. Unity measured at most 0.517° and 0.257° world-space error away from edges, with no preferred-light reversals. The copied-RGB control reached 78.96° on the mirrored panel and reversed its preferred light. | [Directional normal map](E00_Directional_Normals.md) |
 | 3D brush | The exported plate retained one stroke across two new UV seams. Both Unity versions measured zero gaps at 323 samples around the crossings and at 1,168 centerline samples. All 310,242 visible underside pixels matched. Two pixels away from the crossings blended brush and base color under filtering. Undo restored the previous PNG byte for byte. | [3D brush](E00_3D_Brush.md) |
 | F15 nearby surfaces | On two panels 7.8125 mm apart, neither the component-locked brush nor the explicit-source projection changed the neighboring pattern. The controls contaminated 45,698 brush texels and 237,120 projection texels. The selected projection marked 118,560 misses in magenta. ufbx matched source topology, positions, original UVs and normals in both exports. | [F15 isolation](E00_F15.md) |
 | Smooth and Grid Fill | Same eight-edge cavity across an original plate UV seam. Smooth rebuilt eight triangles and moved the center by 1.865 mm. Grid rebuilt four quads and moved the center by 1.569 mm. Both Unity versions retained all eight boundary joins, both center UV variants, and the 9,130 outside triangles exactly. ufbx independently reconstructed each expected patch and matched the positions and corner UVs. | [Smooth and Grid Fill](E00_Smooth_Grid.md) |
 | Typical-model memory | Eight Chrome cycles with 50,000 triangles, 100 bones and four 2K inputs. The highest private commit was 1,607 MiB during bake. The final three closes stayed within 15 MiB, and memory fell from 1,365 MiB to 736 MiB after diagnostic GC and an additional 20 seconds idle. The empty baseline was 368 MiB. A real Tripo character reached 1,785 MiB private commit during bake. | [Memory benchmark](E00_Memory.md) |
+| Separate work-PC check | The user confirmed the workstation. Three typical-model cycles at 1920 × 1080 and DPR 1 peaked at 1,387 MiB of Chrome private commit. After the last close, diagnostic GC and 20 seconds idle reduced the total from 1,208 to 859 MiB. | [Work-PC results](E00_Memory.md#separate-work-pc-check) |
 | F18 heavy model and history | A 250,000-triangle grid with a 4K Base Color input completed three cycles of 24 brush strokes and 24 Undo operations. It restored matching exported PNGs at depths 16, 8 and 0, and peaked at 2,291 MiB private commit. The four-4K-map variant peaked at 2,554 MiB private commit. The edited ZIP reopened and reproduced its texture. | [F18 memory and checkpoints](E00_F18.md) |
 | Build and controlled failures | Release and Debug builds passed the type check. The Windows launcher served the selected build from a different working directory. The Release script installed dependencies in a clean copy. Browser probes verified missing texture, ZIP path traversal and unsupported Z-up diagnostics. The local workflows made no external requests. | [Build and launch](../README.md#local-development), [FBX input checks](E00_FBX_Round_Trip.md#results) |
 
@@ -59,11 +61,11 @@ These are bounded E00 outcomes. Full V1 acceptance still follows [§22.5](AssetF
 | AT-02 | Fixture pass for the ribbon, the authored Kenney clip and the F10 shared-skeleton clip. The ribbon and F10 sample the keyed extrema. The Kenney comparison uses 21 samples over its tested interval. |
 | AT-21 | F10 confirms shared bone identities, binding matrices, and deformations through import and export. The joint-edit and undo sequence belongs to the later rig workflow. |
 | USR-08, UV-17 and AT-11 | Verified on the two Tripo FBX fixtures, including skin and the original UVs. Morph unwrap is blocked by the prototype. F13 covers import and export diagnostics for a mesh with two morph channels and more than four influences. |
-| USR-07, BAKE-01, BAKE-06, AT-12 and AT-13 | Same-surface opaque and transformed RGBA transfer, Cutout/Fade, controlled normal transfer on rotated and mirrored UVs, and collision detection at the bake resolution demonstrated. The complete multi-material F08 fixture remains open. |
+| USR-07, BAKE-01, BAKE-06, AT-12 and AT-13 | Same-surface opaque and transformed RGBA transfer, Cutout/Fade, exact PNG identity transfer, controlled normal transfer on rotated and mirrored UVs, and collision detection at the bake resolution demonstrated. F08 verifies multi-material GLB bindings. Full multi-material baking follows the later UV stages. |
 | USR-03, PAINT3D-03, PAINT3D-05 and AT-07 | Static plate passes the seam and underside probe. F15 isolates two nearby disconnected panels in one mesh. Separate objects, geodesic distance and skinned painting remain open. |
 | AT-14 | F15 verifies selection isolation and visible misses for Base Color projection between disconnected panels. The general multi-object and multi-material workflow remains E08 work. |
 | USR-15 and AT-18 | Smooth and Grid pass the limited four-quad repair. Other fill methods and the general repair workflow are assigned to E05/E08. |
-| AT-31 | Missing-texture, unsafe ZIP-path, unsupported-axis and F13 morph-export failures tested. Corrupt-index and non-manifold fixture cases remain open. |
+| AT-31 | Missing texture, unsafe ZIP path, unsupported FBX axes, F13 morph export, and out-of-range GLB indices produce diagnostics. The non-manifold indexed GLB warns and retains its geometry for later repair. |
 
 ## E00 prototype scope
 
@@ -72,47 +74,41 @@ These are bounded E00 outcomes. Full V1 acceptance still follows [§22.5](AssetF
 | 1. Static and skinned FBX into Unity | Answered on the verified assets | Keep the Unity and ufbx checks as regressions. |
 | 2. Preserved topology and weights before conversion | Answered on the verified Tripo FBX assets and on the F01/F02 topology fixture | Carry the no-op and edited F01/F02 checks into E01 to verify stable document IDs. |
 | 3. Complete correspondence after xatlas | Answered on the two Tripo fixtures | Retain the original-corner and skin invariants in regression tests. |
-| 4. Direct bake with seams, texture transforms and alpha | Answered for the explicit single-material RGBA profile | Keep the transformed Cutout/Fade and constant-color interior checks. Extend F08 to multiple materials and UV channels and add a standalone lossless identity transfer against the §22.2 `1/255` tolerance. |
+| 4. Direct bake with seams, texture transforms and alpha | Answered for the explicit single-material RGBA profile. Identity transfer had zero channel error. F08 checks two GLB texture bindings across UV channels. | Keep both verification profiles. Multi-material baking belongs to the later UV stages. |
 | 5. Rotated/mirrored tangent-space normals | Answered on the controlled F14 fixture | Retain the floating-point Unity normal and lighting checks and the copied-RGB negative control. The maximum world-space error was 0.517° against the §22.2 limit of 2°. |
 | 6. Minimal Smooth/Grid implementation | Answered for the tested four-sided contour | Preserve the pinned-boundary test. Broader methods belong to the E05/E08 repair stages. |
-| 7. Typical-profile memory fit | Import, unwrap, rebake, export and repeated close fit on the recorded workstation at 1920 × 1080, DPR 1 | Record the separate §20.2 work-PC run. The available results cover Chrome process memory. Paint and undo, long-session behavior, resource budgets and dedicated VRAM remain unmeasured. |
+| 7. Typical-profile memory fit | Import, unwrap, rebake, export and repeated close fit at 1920 × 1080, DPR 1 in the separate work-PC run. F18 covers heavy paint and Undo memory. | Long-session behavior, resource budgets and dedicated VRAM remain later verification. |
 
-## Before E01
+## E00 exit evidence and E01 handoff
 
-Prepare the remaining §22.1 fixture inputs and record each source, permission for test use, expected invariants, and checksum. [Corpus and preservation criteria](AssetFixer_Technical_Specification_v1.0.md#sec-22)
+The §22.1 inventory records source, permission for repository or local test use, expected invariants and checksums. Later repair, extraction, rig and recovery stages use the corresponding fixture inputs. [Corpus and preservation criteria](AssetFixer_Technical_Specification_v1.0.md#sec-22)
 
 The Tripo FBX and GLB fixtures and the Meshy-generated F17 GLB have no-op and edited results for the §7.7 compatibility check. Carry these recipes and reference exports forward as adapter regressions. IO-07 gives conditional scope to Draco and KTX2 for corresponding inputs and adapters. [Compatibility and IO-07](AssetFixer_Technical_Specification_v1.0.md#sec-07) · [Generator regression decision](AssetFixer_Technical_Specification_v1.0.md#sec-24)
 
 ### Corpus inventory
 
-Ten of the 18 fixture IDs have documented results that meet their E00 expectations. Eight have partial evidence or a candidate. Each fixture needs the §22.1 provenance record before corpus sign-off.
+All 18 fixture IDs have documented inputs and results for E00. Prepared fixtures include reference conditions for operations assigned to later stages. [Supplementary corpus and hashes](E00_Corpus.md) · [Earlier fixture provenance](#fixture-provenance)
 
 | Fixture | State | Verified evidence or remaining preparation |
 | --- | --- | --- |
 | F01 | Verified | The project-owned checker cube retained all corner UVs and its 90° hard seams in both FBX exports. [Fixture and results](E00_Topology_Seams.md) |
 | F02 | Verified | The same FBX has two independent points with identical source coordinates. Only the selected cube point moved. [Fixture and results](E00_Topology_Seams.md) |
-| F03 | Partial | The plate supplies a Smooth fan. Prepare controlled concave planar and non-planar hole boundaries. |
-| F04 | Candidate | The local Tripo bottle supplies a textured FBX. Identify or author a protected mouth and small defects with known boundaries. |
-| F05 | Partial | The plate supplies a four-sided Grid cavity. Prepare the second case with two loops for Bridge. |
+| F03 | Verified for E00 | Two eight-vertex reference holes preserve the concave planar and non-planar contours. [Corpus results](E00_Corpus.md#cases-and-expected-results) |
+| F04 | Verified for E00 | The authored bottle preserves the protected 12-vertex mouth and both triangular defects. [Corpus results](E00_Corpus.md#cases-and-expected-results) |
+| F05 | Verified for E00 | The reference GLB preserves a four-sided Grid hole and two eight-vertex Bridge loops. The plate verifies the Smooth and Grid prototypes. [Corpus results](E00_Corpus.md#cases-and-expected-results) |
 | F06 | Verified | Tripo plate with one color map. Static import, paint across seams, and Unity export reproduced. |
-| F07 | Candidate | The local Tripo collection ZIPs each contain one FBX and one color map. Verify the object and component boundaries and actual atlas sharing, or prepare a controlled set. |
-| F08 | Partial | The generated RGBA fixture covers a transform, an original seam, Cutout and Fade. Add multiple materials, different UV channels and expected bindings. |
+| F07 | Verified for E00 | Three objects, including one with two components, retain four distinct atlas regions and one shared image. [Corpus results](E00_Corpus.md#cases-and-expected-results) |
+| F08 | Verified for E00 | The GLB materials retain UV0/UV1, RGBA images, affine texture transforms and mask/blend settings. The FBX fixture covers transformed direct bake. [Corpus results](E00_Corpus.md#cases-and-expected-results) |
 | F09 | Verified | The Tripo character covers standard skin and poses. The authored Kenney FBX and synthetic ribbon supply clip checks. |
 | F10 | Verified | The body and garment share three bones and retain their distinct skin bindings. Unity and ufbx matched the deformation of each mesh across 21 clip samples. [Fixture and results](E00_F10.md) |
-| F11 | Candidate | Establish a wide-torso character fixture with reference joints, weights and offsets. Verify the Tripo candidate against these expectations. |
-| F12 | Partial | The current input covers a Z-up refusal. Prepare a root transform, nonstandard scale and axes, intermediate nodes and a reference clip. |
+| F11 | Verified for E00 | A wide torso keeps eight joints, bind offsets, weights and the reference mid-clip deformation. [Corpus results](E00_Corpus.md#cases-and-expected-results) |
+| F12 | Verified for E00 | The GLB retains the transformed root, intermediate node and reference motion. The native reader confirms the Z-up FBX control and the app gives its axis diagnostic. [Corpus results](E00_Corpus.md#cases-and-expected-results) |
 | F13 | Verified | The combined source preserves five raw weights at two points and imports both position morphs. Export explains the morph block before download. The control FBX round-trip retains all five weights and matches deformation in both readers. [Fixture and results](E00_F13.md) |
 | F14 | Verified | The controlled directional normal map passed rotated and mirrored UVs in both Unity versions. |
 | F15 | Verified | The component-locked stroke leaves the other panel unchanged. Projection samples only the eligible source and visibly marks misses. Both controls demonstrate cross-contamination. [Fixture and results](E00_F15.md) |
-| F16 | Partial | Missing texture, unsafe ZIP path and unsupported-axis refusals passed. Add corrupt indices, non-manifold geometry and the applicable diagnostics. |
+| F16 | Verified for E00 | Out-of-range indices and missing textures are rejected. The non-manifold edge gives a visible diagnostic and is retained. [Corpus results](E00_Corpus.md#cases-and-expected-results) |
 | F17 | Verified | The Meshy-generated Dioramas pawn requires Meshopt, quantization and WebP. Both no-op and edited exports passed offline round-trips. The independent reader matched the one expected position edit, topology, corner data and embedded textures. [Fixture and results](E00_F17.md) |
 | F18 | Verified for E00 | Generated heavy mesh with 4K inputs. Repeated paint and Undo restored byte-identical checkpoints, and the final edited asset reopened. Saved-project recovery and autosave use E01's serializer. [Fixture and results](E00_F18.md) |
-
-### Outstanding acceptance evidence
-
-The standalone lossless PNG identity-transfer check still needs to demonstrate a maximum per-channel error of `1/255` on interior texels under identical sampling and format. The transformed alpha probe covers the separate constant-color tolerance. Add identity transfer to the texture fixtures. [Preservation criteria](AssetFixer_Technical_Specification_v1.0.md#sec-22) · [UV transforms and alpha](E00_UV_Transforms_Alpha.md)
-
-The separate §20.2 check requires a recorded run on the user's work PC at 1920 × 1080 and DPR 1. The eight-cycle typical run and three-cycle F18 history run characterize the recorded workstation. §20.3 still requires bounded history, tile or delta storage and memory verification over wider workloads and longer sessions. [Benchmark and memory requirements](AssetFixer_Technical_Specification_v1.0.md#sec-20) · [Memory benchmark](E00_Memory.md) · [F18 memory and checkpoints](E00_F18.md)
 
 ### Work assigned to later stages
 
@@ -122,7 +118,7 @@ E01 builds the working document with stable IDs, explicit ownership and immutabl
 
 ## Fixture provenance
 
-The Tripo inputs are user-provided local files under `D:/downloads/Tripo`. The checksums below were verified against the local originals. Tripo redistribution permission has not been established. The Kenney FBX is read from the pinned ufbx corpus checkout and is used locally. Establish its asset-level distribution terms before repackaging it. The project-owned synthetic ribbon is regenerated using [animated-fixture.mjs](../tools/e00/animated-fixture.mjs).
+The Tripo inputs are user-provided files for local testing under `D:/downloads/Tripo`. The checksums below were verified against the local originals. They include exploratory Tripo samples from the initial search for F04 and F07. Tripo redistribution permission has not been established. The Kenney FBX is read from the pinned ufbx corpus checkout and is used locally. Establish its asset-level distribution terms before repackaging it. The project-owned synthetic ribbon is regenerated using [animated-fixture.mjs](../tools/e00/animated-fixture.mjs). The supplemental corpus hashes and license are in the [corpus completion report](E00_Corpus.md).
 
 | Input | Origin and expected content | SHA-256 |
 | --- | --- | --- |

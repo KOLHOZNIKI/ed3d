@@ -328,6 +328,28 @@ static ufbx_scene *evaluate(const ufbx_scene *scene, const ufbx_anim_stack *stac
     return pose;
 }
 
+static bool inspect_coordinate_source(const ufbx_scene *source)
+{
+    const ufbx_node *panel = ufbx_find_node(source, "Panel");
+    if (!panel || !panel->parent || !panel->parent->parent ||
+        strcmp(panel->parent->name.data, "Intermediate") || strcmp(panel->parent->parent->name.data, "SurveyRoot") ||
+        source->anim_stacks.count != 1) return false;
+    const ufbx_anim_stack *clip = source->anim_stacks.data[0];
+    if (strcmp(clip->name.data, "ReferenceLift") || fabs(clip->time_begin) > 1e-6 || fabs(clip->time_end - 1.0) > 1e-6) return false;
+    ufbx_vec3 centers[3];
+    for (size_t i = 0; i < 3; i++) {
+        ufbx_scene *pose = evaluate(source, clip, (double)i * 0.5);
+        centers[i] = ufbx_find_node(pose, "Panel")->node_to_world.cols[3];
+        ufbx_free_scene(pose);
+    }
+    const double displacement = point_distance(centers[0], centers[1]) * source->settings.unit_meters;
+    const ufbx_coordinate_axes axes = source->settings.axes;
+    printf("{\"axes\":[%d,%d,%d],\"metersPerUnit\":%.9g,\"clipSeconds\":%.9g,\"midpointDisplacementMeters\":%.9g}\n",
+           (int)axes.right, (int)axes.up, (int)axes.front, source->settings.unit_meters, clip->time_end, displacement);
+    return axes.up == UFBX_COORDINATE_AXIS_POSITIVE_Z && fabs(source->settings.unit_meters - 0.0254) < 1e-8 &&
+        fabs(displacement - 0.00635) < 1e-6 && point_distance(centers[0], centers[2]) < 1e-6;
+}
+
 static ufbx_vec3 posed_point(const ufbx_scene *scene, uint32_t mesh_id, size_t index)
 {
     const ufbx_mesh *mesh = scene->meshes.data[mesh_id];
@@ -510,6 +532,13 @@ static bool inspect_adverse_source(const ufbx_scene *scene)
 
 int main(int argc, char **argv)
 {
+    if (argc == 3 && strcmp(argv[1], "--f12-source") == 0) {
+        ufbx_scene *scene = load(argv[2], 1);
+        const bool matches = inspect_coordinate_source(scene);
+        if (!matches) fprintf(stderr, "F12 axes, hierarchy or clip expectations failed in %s.\n", argv[2]);
+        ufbx_free_scene(scene);
+        return matches ? 0 : 1;
+    }
     if (argc == 3 && strcmp(argv[1], "--f13-source") == 0) {
         ufbx_scene *scene = load(argv[2], 1);
         const bool matches = inspect_adverse_source(scene);

@@ -9,7 +9,7 @@ from pathlib import Path
 from struct import Struct, pack, unpack_from
 
 
-class Glb:
+class GlbDocument:
     def __init__(self, path):
         self.bytes = path.read_bytes()
         magic, version, size, json_size, kind = unpack_from("<4sIII4s", self.bytes)
@@ -19,17 +19,6 @@ class Glb:
         bin_size, kind = unpack_from("<I4s", self.bytes, end)
         assert kind == b"BIN\x00" and end + 8 + bin_size == size
         self.binary = memoryview(self.bytes)[end + 8:]
-        nodes = self.document["nodes"]
-        self.parents = {child: index for index, node in enumerate(nodes) for child in node.get("children", [])}
-        self.mesh_node, = (node for node in nodes if "mesh" in node)
-        self.primitive, = self.document["meshes"][self.mesh_node["mesh"]]["primitives"]
-        assert self.primitive.get("mode", 4) == 4
-        self.skin = self.document["skins"][self.mesh_node["skin"]]
-        self.joints = self.skin["joints"]
-        self.joint_names = [nodes[index]["name"] for index in self.joints]
-        self.attributes = {key: self.accessor(index) for key, index in self.primitive["attributes"].items()}
-        self.indices = self.accessor(self.primitive["indices"])
-        self.bind = self.accessor(self.skin["inverseBindMatrices"])
 
     def buffer_view(self, index):
         view = self.document["bufferViews"][index]
@@ -48,6 +37,22 @@ class Glb:
         stride = self.document["bufferViews"][index].get("byteStride", packed.size)
         start = accessor.get("byteOffset", 0)
         return [packed.unpack_from(data, start + i * stride) for i in range(accessor["count"])]
+
+
+class Glb(GlbDocument):
+    def __init__(self, path):
+        super().__init__(path)
+        nodes = self.document["nodes"]
+        self.parents = {child: index for index, node in enumerate(nodes) for child in node.get("children", [])}
+        self.mesh_node, = (node for node in nodes if "mesh" in node)
+        self.primitive, = self.document["meshes"][self.mesh_node["mesh"]]["primitives"]
+        assert self.primitive.get("mode", 4) == 4
+        self.skin = self.document["skins"][self.mesh_node["skin"]]
+        self.joints = self.skin["joints"]
+        self.joint_names = [nodes[index]["name"] for index in self.joints]
+        self.attributes = {key: self.accessor(index) for key, index in self.primitive["attributes"].items()}
+        self.indices = self.accessor(self.primitive["indices"])
+        self.bind = self.accessor(self.skin["inverseBindMatrices"])
 
     def texture(self, role):
         doc = self.document

@@ -148,6 +148,9 @@ sources.addEventListener('change', async () => {
     if (asset.format === 'glb' && asset.affineCorrections) {
       status.textContent += ` · Corrected rounding in ${asset.affineCorrections} inverse bind matrices for GLB export`;
     }
+    if (asset.format === 'glb' && asset.nonManifoldEdges) {
+      status.textContent += ` · Non-manifold topology: ${asset.nonManifoldEdges} indexed mesh edge(s) with more than two incident triangles`;
+    }
     if (asset.format === 'fbx') {
       const { maxSkinInfluences, pointsOverPreviewLimit, morphChannels, hasMorphTargets } = asset.deformation;
       if (pointsOverPreviewLimit > 0) {

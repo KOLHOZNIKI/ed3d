@@ -51,6 +51,19 @@ ufbx verified the final ZIP from each run. Both exports retained all control-poi
 
 The follow-up F18 benchmark records memory during a longer brush and Undo sequence and a four-map heavy workload on a 250,000-triangle model. [F18 checkpoints and measurements](E00_F18.md)
 
+## Separate work-PC check
+
+The user confirmed that the Windows workstation described above is their work PC. A separate Chrome session on this machine ran the typical fixture through three import, unwrap, four-map rebake, export and close cycles. The drawing buffer was 1920 × 1080 at DPR 1. The 1,547 samples measured all discovered processes. The median interval was 31 ms and the longest gap was 58 ms.
+
+| Phase | Peak private commit, MiB | Peak summed working set, MiB | Duration range, s |
+| --- | ---: | ---: | ---: |
+| Import | 1,289 | 1,163 | 0.410–0.516 |
+| UV unwrap | 1,290 | 1,174 | 0.480–0.503 |
+| Rebake four maps | 1,387 | 1,246 | 2.866–3.256 |
+| Export | 1,224 | 1,069 | 0.534–0.647 |
+
+Private commit was 377 MiB at baseline, 988, 1,123 and 1,208 MiB after the three closes, 909 MiB after diagnostic GC and 859 MiB after 20 more seconds idle. The browser reported zero active workers after each close. ufbx matched all 25,326 control points, 50,000 triangle boundaries, original UVs and raw skin weights in the last export. These results record the typical-workload check for §20.2. The full feature latency targets and long-session memory budgets remain part of later acceptance. Use `--cycles 3 --label e00-work-pc --idle-seconds 20` in the typical command below to select this report and export. [Benchmark requirements](AssetFixer_Technical_Specification_v1.0.md#sec-20)
+
 ## Reproduce on Windows
 
 Use the [pinned browser probe setup](E00_FBX_Round_Trip.md#reproduce-on-windows), locally installed Chrome and Python. Run one benchmark at a time.

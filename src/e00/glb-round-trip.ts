@@ -1,4 +1,4 @@
-import { LoadingManager, SkinnedMesh, Texture, type BufferAttribute, type Group, type InterleavedBufferAttribute, type Object3D } from 'three';
+import { LoadingManager, Mesh, Object3D, SkinnedMesh, Texture, type BufferAttribute, type Group, type InterleavedBufferAttribute } from 'three';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
@@ -44,6 +44,7 @@ export interface ImportedGlb {
   name: string;
   scene: Group;
   stats: ReturnType<typeof sceneStats>;
+  nonManifoldEdges: number;
   affineCorrections: number;
   images: Map<object, ImagePayload>;
   skins: Map<SkinnedMesh, ImportedSkin>;
@@ -63,9 +64,16 @@ export async function importGlb(file: File): Promise<ImportedGlb> {
   if (source.extensionsUsed?.includes(meshopt)) loader.setMeshoptDecoder(MeshoptDecoder);
   const { scene, animations, parser } = await loader.parseAsync(buffer, '');
   scene.animations = animations;
+  let nonManifoldEdges = 0;
+  const inspected = new Set<Mesh['geometry']>();
+  scene.traverse(object => {
+    if (!(object instanceof Mesh) || inspected.has(object.geometry)) return;
+    inspected.add(object.geometry);
+    nonManifoldEdges += inspectIndices(object.geometry);
+  });
   const images = new Map<object, ImagePayload>();
   for (const [object, reference] of parser.associations) {
-    if (!(object instanceof Texture) || reference.textures === undefined) continue;
+    if (!(object instanceof Texture) || reference?.textures === undefined) continue;
     const texture = source.textures?.[reference.textures];
     const imageIndex = texture?.extensions?.[webp]?.source ?? texture?.source;
     const image = imageIndex === undefined ? undefined : source.images?.[imageIndex];
@@ -76,7 +84,7 @@ export async function importGlb(file: File): Promise<ImportedGlb> {
   }
   const nodes = new Map<number, Object3D>();
   for (const [object, reference] of parser.associations) {
-    if (reference.nodes !== undefined && !(object instanceof Texture) && 'isObject3D' in object) nodes.set(reference.nodes, object);
+    if (reference?.nodes !== undefined && object instanceof Object3D) nodes.set(reference.nodes, object);
   }
   const skins = new Map<SkinnedMesh, ImportedSkin>();
   let affineCorrections = 0;
@@ -101,7 +109,36 @@ export async function importGlb(file: File): Promise<ImportedGlb> {
       affineCorrections++;
     }
   });
-  return { format: 'glb', name: file.name.slice(0, -4), scene, stats: sceneStats(scene, 'GLB'), affineCorrections, images, skins };
+  return { format: 'glb', name: file.name.slice(0, -4), scene, stats: sceneStats(scene, 'GLB'), nonManifoldEdges,
+    affineCorrections, images, skins };
+}
+
+function inspectIndices(geometry: Mesh['geometry']): number {
+  const index = geometry.index;
+  if (!index) return 0;
+  if (index.count % 3 !== 0) throw new Error('GLB triangle indices must occur in groups of three.');
+  const vertexCount = geometry.getAttribute('position').count;
+  const incidence = new Map<number, number>();
+  let nonManifold = 0;
+  for (let i = 0; i < index.count; i += 3) {
+    const a = index.getX(i), b = index.getX(i + 1), c = index.getX(i + 2);
+    if (![a, b, c].every(value => Number.isInteger(value) && value >= 0 && value < vertexCount)) {
+      throw new Error(`GLB triangle ${i / 3} references a vertex outside its position array.`);
+    }
+    if (a === b || b === c || a === c) continue;
+    edge(a, b);
+    edge(b, c);
+    edge(c, a);
+  }
+  return nonManifold;
+
+  function edge(a: number, b: number) {
+    // Use authored vertex indices so coincident positions and UV splits stay independent.
+    const key = Math.min(a, b) * vertexCount + Math.max(a, b);
+    const numberOfFaces = (incidence.get(key) ?? 0) + 1;
+    incidence.set(key, numberOfFaces);
+    if (numberOfFaces === 3) nonManifold++;
+  }
 }
 
 interface BinaryWriter {
