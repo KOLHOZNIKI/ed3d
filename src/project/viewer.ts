@@ -16,6 +16,7 @@ export class Viewer {
   #orbit?: OrbitControls;
   #appearance?: Appearance;
   #live?: Appearance;
+  #inspection?: { mesh: Mesh; geometry: BufferGeometry };
   #outline = new Box3Helper(new Box3(), 0x2ad9ed);
   #painting = false;
   #paintingStroke = false;
@@ -64,6 +65,7 @@ export class Viewer {
     this.#camera = undefined;
     this.#model?.removeFromParent();
     this.#model = undefined;
+    this.#inspection = undefined;
     this.#pose = undefined;
     if (this.#appearance) disposeAppearance(this.#appearance);
     this.#appearance = undefined;
@@ -86,6 +88,11 @@ export class Viewer {
 
   updateLive() {
     for (const texture of this.#live?.textures ?? []) texture.needsUpdate = true;
+    this.render();
+  }
+
+  inspect(mesh?: Mesh, geometry?: BufferGeometry) {
+    this.#inspection = mesh && geometry ? { mesh, geometry } : undefined;
     this.render();
   }
 
@@ -167,9 +174,22 @@ export class Viewer {
   render() {
     if (!this.#renderer || !this.#camera || this.#contextLost) return;
     const restore = applyViews((this.#live ?? this.#appearance)?.views ?? []);
+    const inspection = this.#inspection, masked: [Mesh, number][] = [];
+    const geometry = inspection?.mesh.geometry;
+    if (inspection) {
+      inspection.mesh.geometry = inspection.geometry;
+      this.#model?.traverse(node => {
+        if (node instanceof Mesh && node !== inspection.mesh) {
+          masked.push([node, node.layers.mask]);
+          node.layers.mask = 0;
+        }
+      });
+    }
     try {
       this.withPose(() => this.#renderer!.render(this.scene, this.#camera!));
     } finally {
+      if (inspection && geometry) inspection.mesh.geometry = geometry;
+      for (const [mesh, mask] of masked) mesh.layers.mask = mask;
       restore();
     }
   }

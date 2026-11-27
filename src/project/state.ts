@@ -25,6 +25,13 @@ export interface UvBake {
   readonly bake: TextureBake;
 }
 
+export interface ExtractedAsset {
+  readonly source: string;
+  readonly layout: 'keep' | 'pack' | 'unwrap';
+  readonly zeroOrigin: boolean;
+  readonly bakes: Readonly<Record<number, UvBake>>;
+}
+
 export interface WorkingState {
   readonly objects: ObjectOverrides;
   readonly atlas?: AtlasState;
@@ -34,6 +41,7 @@ export interface WorkingState {
   readonly meshEdits?: readonly Uint8Array<ArrayBuffer>[];
   readonly keepOpen?: Readonly<Record<string, Readonly<Record<string, boolean>>>>;
   readonly uvBakes?: Readonly<Record<string, UvBake>>;
+  readonly extracts?: Readonly<Record<string, ExtractedAsset>>;
 }
 
 export function* workingBuffers(state: WorkingState): Iterable<ArrayBuffer> {
@@ -46,6 +54,10 @@ export function* workingBuffers(state: WorkingState): Iterable<ArrayBuffer> {
   for (const map of state.bake?.maps ?? []) yield map.png.buffer;
   if (state.bake?.coverage) yield state.bake.coverage.buffer;
   for (const { bake } of Object.values(state.uvBakes ?? {})) {
+    for (const map of bake.maps) yield map.png.buffer;
+    if (bake.coverage) yield bake.coverage.buffer;
+  }
+  for (const { bakes } of Object.values(state.extracts ?? {})) for (const { bake } of Object.values(bakes)) {
     for (const map of bake.maps) yield map.png.buffer;
     if (bake.coverage) yield bake.coverage.buffer;
   }

@@ -31,7 +31,7 @@ export interface BakeInput {
   targetUv: Float32Array<ArrayBuffer>;
   maps: BakeMap[];
   projection?: ProjectionInput;
-  direct?: { sourceName: string; filter: 'nearest' | 'linear'; topDown: boolean; missing?: Uint8Array<ArrayBuffer> };
+  direct?: { sourceName: string; filter: 'nearest' | 'linear'; topDown: boolean; missing?: Uint8Array<ArrayBuffer>; clearUnused?: boolean };
 }
 
 export type BakeOutput = TextureBake;
@@ -76,7 +76,7 @@ async function bake(input: BakeInput): Promise<BakeOutput> {
   }
   // Keep every chart's nearest-source gutter populated for mip levels whose
   // filter footprint extends past the requested chart spacing.
-  const padded = paddingSources(faces, width);
+  const padded = paddingSources(faces, width, direct?.clearUnused ? padding : Infinity);
   const normalMap = input.maps.find(map => map.mode === 'normal');
   const sourceTangent = normalMap ? generateTangents(position, normals, normalMap.uv ?? sourceUv) : null;
   const targetTangent = normalMap ? generateTangents(position, normals, targetUv) : null;

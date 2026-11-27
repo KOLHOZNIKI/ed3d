@@ -67,7 +67,8 @@ export async function rebakeAsset(asset: ImportedAsset, signal?: AbortSignal, ba
   return { ...asset, textureBake: output };
 }
 
-export async function originalFbxMaps(asset: ImportedAsset, material: MeshPhongMaterial | MeshLambertMaterial, baseColor?: Uint8Array<ArrayBuffer>) {
+export async function originalFbxMaps(asset: ImportedAsset, material: MeshPhongMaterial | MeshLambertMaterial,
+  baseColor?: Uint8Array<ArrayBuffer>, auxiliary = true) {
   if (!material.map) throw new Error('The FBX material has no linked Base Color.');
   const normal = material instanceof MeshPhongMaterial ? material.normalMap : null;
   for (const [slot, value] of Object.entries(material)) {
@@ -77,10 +78,12 @@ export async function originalFbxMaps(asset: ImportedAsset, material: MeshPhongM
   }
   const slots = [['map', material.map], ...(normal ? [['normalMap', normal]] as const : [])] as const;
   const maps = await Promise.all(slots.map(([slot, texture]) => readLinkedMap(asset, slot, texture, slot === 'map' ? baseColor : undefined)));
+  if (!auxiliary) return maps;
   for (const [source, bytes] of asset.images) {
     if (maps.some(map => map.source === source)) continue;
     const slot = /_(roughness|metallic)\.(jpg|jpeg|png)$/i.exec(source)?.[1].toLowerCase();
     if (!slot) continue;
+    if (asset.stats.meshes > 1 && source.replace(/_(roughness|metallic)\.[^.]+$/i, '') !== maps[0].source.replace(/_basecolor\.[^.]+$/i, '')) continue;
     if (maps.some(map => map.slot === slot)) throw new Error(`Multiple Tripo ${slot} maps were found.`);
     maps.push({ slot, source, mode: 'linear', ...await readPixels(bytes) });
   }

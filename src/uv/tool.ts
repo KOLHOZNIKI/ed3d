@@ -156,7 +156,7 @@ export class UvTool {
       const missing = indices(4).find(channel => !channels.includes(channel));
       if (missing !== undefined) channels.push(missing);
       channels.sort((a, b) => a - b);
-      const preferred = context.state.uvBakes?.[context.object]?.channel ?? (context.state.bake ? 1 : targets[0]?.binding.texture.channel ?? 0);
+      const preferred = targets[0]?.transfer?.channel ?? (context.state.bake ? 1 : targets[0]?.binding.texture.channel ?? 0);
       const selector = ui<HTMLSelectElement>('channel');
       selector.replaceChildren(...channels.map(channel => new Option(`UV${channel}${!node.geometry.hasAttribute(uvName(channel)) &&
         !(channel === 1 && context.model.format === 'fbx' && context.model.uvAtlas) ? ' (new)' : ''}`, String(channel))));
@@ -221,7 +221,7 @@ export class UvTool {
     this.#target = targets.find(target => target.binding.slot === slot);
     const material = Array.isArray(mesh.material) ? mesh.material[slot] : mesh.material;
     const textures = new Map(Object.entries(material).filter((entry): entry is [string, Texture] => entry[1] instanceof Texture));
-    const bake = context.model.format === 'fbx' ? context.state.bake : context.state.uvBakes?.[context.object]?.bake;
+    const bake = this.#target?.transfer?.bake ?? context.state.bake;
     const slots = bake ? bake.maps.map(map => map.slot) : [...textures.keys()];
     if (this.#target && !slots.includes('map')) slots.unshift('map');
     const selector = ui<HTMLSelectElement>('map'), selected = selector.value;
@@ -531,7 +531,7 @@ export class UvTool {
       ui('diagnostics').textContent = `${this.#groups!.islands.size} islands · ${finding.outside} outside · ${finding.overlaps} overlapping · ${finding.flipped} flipped · ${finding.degenerate} degenerate` +
         (stats.length ? ` · Density ${Math.round(stats[0])}–${Math.round(stats.at(-1)!)} px/unit` : '');
       const state = this.#context!.state;
-      const bake = state.bake?.direct ? state.bake : state.uvBakes?.[this.#context!.object]?.bake;
+      const bake = this.#target?.transfer?.bake ?? state.bake;
       const info = dirty ? 'UV draft.' : 'Drag a selection or its transform handle. Middle-drag to pan.';
       const currentBake = bake?.direct ? ` Last bake used ${bake.direct.sourceName}. ${bake.direct.misses}/${bake.covered} occupied texels have no source (${(100 * bake.direct.misses / bake.covered).toFixed(2)}%).` : '';
       const fbx = preserve && this.#context?.model.format === 'fbx' ? ' FBX export uses the baked layout in UV0.' : '';

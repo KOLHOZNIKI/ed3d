@@ -1,6 +1,6 @@
 import { inputLimit, pack, readPackage, type Files } from '../e00/zip';
 import { AssetDocument, defaultHistoryBudget, type ObjectOverrides, type OriginalFile, type SceneEntry } from './document';
-import { atlasColor, type AtlasState, type TextureEdit, type WorkingState } from './state';
+import { atlasColor, type AtlasState, type ExtractedAsset, type TextureEdit, type WorkingState } from './state';
 import { decodePng, encodeImage } from '../texture/image';
 import { boundaryId, decodeEdit } from '../mesh/commands';
 import type { TextureBake } from '../e00/rebake';
@@ -83,6 +83,9 @@ export async function writeProject(document: AssetDocument<WorkingState>, option
   const bake = state.bake && await retainBake(state.bake);
   const uvBakes = state.uvBakes && Object.fromEntries(await Promise.all(Object.entries(state.uvBakes).map(async ([id, value]) =>
     [id, { channel: value.channel, bake: await retainBake(value.bake) }])));
+  const extracts = state.extracts && Object.fromEntries(await Promise.all(Object.entries(state.extracts).map(async ([id, asset]) =>
+    [id, { ...asset, bakes: Object.fromEntries(await Promise.all(Object.entries(asset.bakes).map(async ([slot, value]) =>
+      [slot, { channel: value.channel, bake: await retainBake(value.bake) }]))) }])));
   let paint;
   if (state.paint) {
     const { png, ...metadata } = state.paint;
@@ -103,9 +106,9 @@ export async function writeProject(document: AssetDocument<WorkingState>, option
     }
     meshEdits = await retain(bytes);
   }
-  const manifest = encoder.encode(JSON.stringify({ format: 'AssetFixer', schemaVersion: 6, id: options?.id ?? document.id,
+  const manifest = encoder.encode(JSON.stringify({ format: 'AssetFixer', schemaVersion: 7, id: options?.id ?? document.id,
     name: options?.name ?? document.name, revision, settings: { historyBudget }, scene, originals: originalRefs,
-    resources, working: { objects: state.objects, geometry, bake, paint, textures, meshEdits, keepOpen: state.keepOpen, uvBakes } }));
+    resources, working: { objects: state.objects, geometry, bake, paint, textures, meshEdits, keepOpen: state.keepOpen, uvBakes, extracts } }));
   if (manifest.byteLength > MiB || expanded + manifest.byteLength > limits.total) throw new Error('The project manifest exceeds its size limit.');
   files.set('manifest.json', manifest);
   const bytes = await pack(files);
@@ -122,7 +125,7 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
   const manifest = record(JSON.parse(decoder.decode(encoded)));
   if (manifest.format !== 'AssetFixer') throw new Error('This file is not an AssetFixer project.');
   const version = integer(manifest.schemaVersion, 1);
-  if (version > 6) throw new Error(`Project schema ${version} is newer than this application supports.`);
+  if (version > 7) throw new Error(`Project schema ${version} is newer than this application supports.`);
   // Version 1 had a fixed history budget. Version 2 persists the project setting.
   const historyBudget = version === 1 ? defaultHistoryBudget : integer(record(manifest.settings).historyBudget, MiB, projectLimit);
   if (historyBudget % MiB) throw new Error('Invalid project history budget.');
@@ -154,6 +157,7 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
   }
   if (!originals.length) throw new Error('The project has no original files.');
   const entries = new Set<string>();
+  const extracted = new Map<string, string>();
   const scene = list(manifest.scene, 10000).map(value => {
     const node = record(value), id = text(node.id, 32), parent = node.parent === null ? null : text(node.parent, 32);
     if (!objectId.test(id) || entries.has(id) || (parent !== null && !entries.has(parent))) throw new Error('Invalid project object hierarchy.');
@@ -172,9 +176,10 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
       if (bytes[i] !== 10) continue;
       const row = bytes.slice(start, i), edit = decodeEdit(row);
       if (!entries.has(edit.object)) throw new Error('A saved mesh edit refers to an unknown object.');
-      if (edit.type === 'separate') {
+      if (edit.type === 'separate' || edit.type === 'extract') {
         if (entries.has(edit.piece)) throw new Error('A saved separate operation reuses an object ID.');
         entries.add(edit.piece);
+        if (edit.type === 'extract') extracted.set(edit.piece, edit.object);
       }
       meshEdits.push(row);
       start = i + 1;
@@ -224,13 +229,13 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
       },
     };
   }
-  const readBake = (value: unknown, target?: AtlasState): TextureBake => {
+  const readBake = (value: unknown, target?: AtlasState, extracting = false): TextureBake => {
     const data = record(value), width = integer(data.width, 1, 16384), height = integer(data.height, 1, 16384);
     const scale = data.direct === undefined ? 2 : 1;
     if (target && (width !== target.metrics.width * scale || height !== target.metrics.height * scale) || width * height > 16_777_216 * 4) {
       throw new Error('Saved baked images do not match the atlas dimensions.');
     }
-    const slots: readonly string[] = target ? ['map', 'normalMap', 'emissiveMap', 'aoMap', 'alphaMap', 'roughness', 'metallic'] : glbSlots;
+    const slots: readonly string[] = target || extracting ? [...glbSlots, 'alphaMap', 'roughness', 'metallic'] : glbSlots;
     const maps = list(data.maps, slots.length).map(value => {
       const map = record(value), slot = text(map.slot, 32), source = text(map.source, 2048), png = resource(map.hash);
       if (!slots.includes(slot)) throw new Error('Unknown project bake map slot.');
@@ -266,6 +271,23 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
       uvBakes[object] = { channel: integer(item.channel, 0, 3), bake: readBake(item.bake) };
     }
   }
+  let extracts: Record<string, ExtractedAsset> | undefined;
+  if (version >= 7 && working.extracts !== undefined) {
+    extracts = Object.create(null) as Record<string, ExtractedAsset>;
+    for (const [object, value] of Object.entries(record(working.extracts))) {
+      const asset = record(value), source = text(asset.source, 32), layout = asset.layout;
+      if (extracted.get(object) !== source || layout !== 'keep' && layout !== 'pack' && layout !== 'unwrap') {
+        throw new Error('Invalid saved independent asset.');
+      }
+      const bakes: Record<number, NonNullable<WorkingState['uvBakes']>[string]> = Object.create(null);
+      for (const [slot, entry] of Object.entries(record(asset.bakes))) {
+        if (!/^(0|[1-9]\d{0,4})$/.test(slot)) throw new Error('Invalid extracted material slot.');
+        const item = record(entry);
+        bakes[Number(slot)] = { channel: integer(item.channel, 0, 3), bake: readBake(item.bake, undefined, true) };
+      }
+      extracts[object] = { source, layout, bakes, zeroOrigin: bool(asset.zeroOrigin) };
+    }
+  }
   let paint: WorkingState['paint'];
   if (working.paint) {
     if (!bake || bake.maps.length !== 1) throw new Error('The saved paint has no single-map target bake.');
@@ -289,7 +311,7 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
   const id = text(manifest.id, 36);
   if (!uuidPattern.test(id)) throw new Error('Invalid project identifier.');
   return { id, name: text(manifest.name, 160), revision: integer(manifest.revision, 0, 1e12), originals, historyBudget, scene,
-    state: { objects, atlas, bake, paint, textures, meshEdits, keepOpen, uvBakes } };
+    state: { objects, atlas, bake, paint, textures, meshEdits, keepOpen, uvBakes, extracts } };
 }
 
 function validatePng(png: Uint8Array<ArrayBuffer>, width: number, height: number) {

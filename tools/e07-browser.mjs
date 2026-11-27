@@ -1,0 +1,202 @@
+import assert from 'node:assert/strict';
+import { readFile, writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import { strFromU8, unzipSync } from 'fflate';
+import { decode } from 'fast-png';
+import { preview } from 'vite';
+
+const [executablePath] = process.argv.slice(2);
+const { chromium } = await import('../test-results/e00-browser/node_modules/playwright-core/index.mjs');
+const dir = resolve('test-results/e07');
+const server = await preview({ preview: { host: '127.0.0.1', port: 4290 } });
+const url = `http://127.0.0.1:${server.httpServer.address().port}/`;
+const external = [], errors = [];
+let browser;
+try {
+  browser = await chromium.launch({ ...(executablePath ? { executablePath } : { channel: 'chrome' }),
+    args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
+  const context = await browser.newContext({ viewport: { width: 1550, height: 1550 } });
+  await context.route(/^https?:/, route => {
+    const requested = route.request().url();
+    if (requested.startsWith(url)) return route.continue();
+    external.push(requested);
+    return route.abort();
+  });
+  const page = await context.newPage();
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('dialog', dialog => dialog.accept());
+  await page.goto(url);
+  const field = id => page.locator(`#${id}`);
+  const click = id => field(id).click();
+  const text = id => field(id).textContent();
+  const choose = (id, value) => field(id).selectOption(value);
+  const fill = (id, value) => field(id).fill(String(value));
+  const ready = () => page.waitForFunction(() => !document.querySelector('#sources').disabled, null, { timeout: 120000 });
+  const status = async pattern => assert.match(await text('status'), pattern);
+  const run = async (id, pattern) => { await click(id); await ready(); await status(pattern); };
+  const open = async (path, pattern) => { await field('sources').setInputFiles(path); await ready(); await status(pattern); };
+  const select = async label => {
+    const rows = await field('object-selection').locator('option').evaluateAll(options =>
+      options.map(option => ({ name: option.textContent, id: option.value })));
+    const row = rows.find(option => option.name.replaceAll('_', ' ') === label);
+    assert.ok(row, `Missing ${label} among ${rows.map(option => option.name).join(', ')}`);
+    await choose('object-selection', row.id);
+  };
+  const enter = async () => { if (await field('extract-tools').isHidden()) await click('extract-mode'); };
+  const download = async (id, name) => {
+    const [result] = await Promise.all([page.waitForEvent('download', { timeout: 120000 }), click(id)]);
+    const path = join(dir, name);
+    await result.saveAs(path);
+    await ready();
+    return readFile(path);
+  };
+  const readZip = data => {
+    const files = unzipSync(data);
+    return { files, manifest: JSON.parse(strFromU8(files['manifest.json'])) };
+  };
+  const png = ({ files, manifest }) => files[manifest.textures.find(map => map.semantic === 'BaseColor').file];
+  const components = async (...ids) => {
+    const summary = field('extract-tools').locator('details');
+    if (!(await summary.evaluate(node => node.open))) await summary.locator('summary').click();
+    for (const id of ids) await field('extract-components').locator(`[data-component="${id}"]`).click();
+  };
+  const paint = async () => {
+    if (await field('texture-editor').isHidden()) await click('toggle-texture');
+    await page.waitForFunction(() => /Base Color/.test(document.querySelector('#texture-info').textContent));
+    await choose('texture-tool', 'brush');
+    await fill('texture-color', '#ff0088');
+    await fill('texture-size', 17);
+    const pane = field('texture-viewport');
+    await pane.scrollIntoViewIfNeeded();
+    const [x, y] = await pane.evaluate(() => {
+      const r = document.querySelector('#texture-picture').getBoundingClientRect();
+      return [r.x + r.width * .4, r.y + r.height * .5];
+    });
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + 45, y, { steps: 8 });
+    await page.mouse.up();
+    await ready();
+  };
+
+  await open(join(dir, 'batch.zip'), /36 triangles/);
+  await enter();
+  assert.match(await text('extract-selection-info'), /18 faces in 18 components/);
+  await components(0, 1, 2);
+  assert.match(await text('extract-selection-info'), /3 faces in 3 components/);
+  await field('extract-preview').check();
+  await fill('extract-name', 'Assembly');
+  await click('extract-queue');
+  await page.getByRole('button', { name: 'Preview group' }).click();
+  await choose('extract-pivot', 'bottom');
+  await choose('extract-size', '256');
+  const untouched = await text('project-status');
+  await page.evaluate(() => {
+    document.querySelector('#extract-create').click();
+    document.querySelector('#cancel-job').click();
+  });
+  await ready();
+  await status(/cancelled/);
+  assert.equal(await text('project-status'), untouched);
+  await run('extract-create', /Created 1 independent object/);
+  assert.equal(await field('object-label').inputValue(), 'Assembly');
+  const packed = readZip(await download('extract-export', 'assembly.zip'));
+  assert.equal(packed.manifest.stage, 'E07');
+  assert.equal(packed.manifest.meshes.triangles, 6);
+  assert.equal(packed.manifest.textures.length, 1);
+  assert.deepEqual(packed.manifest.unassignedTextures, []);
+  assert.equal(Object.keys(packed.files).length, 3);
+  const base = png(packed);
+  assert.equal(decode(base).width, 256);
+  await run('undo-stroke', /Undid/);
+  assert.equal(await field('object-selection').locator('option').count(), 2);
+  await run('redo', /Redid/);
+  await select('Assembly');
+  assert.deepEqual(png(readZip(await download('extract-export', 'assembly-redo.zip'))), base);
+  await paint();
+  await enter();
+  const painted = png(readZip(await download('extract-export', 'assembly-painted.zip')));
+  assert.notDeepEqual(painted, base);
+  await select('Sixteen assets');
+  const complete = readZip(await download('export', 'whole-after-paint.zip'));
+  const raw = unzipSync(await readFile(join(dir, 'batch.zip')));
+  assert.ok(complete.manifest.textures.some(map => Buffer.from(complete.files[map.file]).equals(raw['batch.fbm/Shared.png'])));
+  assert.equal(complete.manifest.meshes.triangles, 42);
+
+  await choose('extract-selection', 'faces');
+  await fill('extract-faces', '3');
+  await click('extract-face-apply');
+  await fill('extract-name', 'Rebased');
+  await choose('extract-layout', 'keep');
+  await choose('extract-pivot', 'center');
+  await field('extract-origin').check();
+  await fill('extract-rz', 30);
+  await fill('extract-scale', 2);
+  await choose('extract-copy', 'cut');
+  await run('extract-create', /Created 1 independent object/);
+  const rebased = readZip(await download('extract-export', 'rebased.zip'));
+  assert.equal(rebased.manifest.meshes.triangles, 2);
+  assert.equal(rebased.manifest.extract.originAtZero, true);
+  const pixels = decode(png(rebased));
+  assert.ok(pixels.data.some((value, i) => i % 4 === 3 && value === 0));
+  assert.ok(pixels.data.some((value, i) => i % 4 === 3 && value === 255));
+  await select('Sixteen assets');
+  assert.match(await text('selection-details'), /17 faces/);
+  await run('undo-stroke', /Undid/);
+  assert.match(await text('selection-details'), /18 faces/);
+  await run('redo', /Redid/);
+  const batch = readZip(await download('extract-export-batch', 'independent-assets.zip'));
+  assert.equal(batch.manifest.assets.length, 2);
+  assert.deepEqual(batch.manifest.assets.map(item => item.path), ['01/Assembly.zip', '02/Rebased.zip']);
+  assert.deepEqual(png(readZip(batch.files['01/Assembly.zip'])), painted);
+
+  await download('save-project', 'extraction.assetfixer');
+  await open(join(dir, 'extraction.assetfixer'), /Project restored/);
+  await select('Assembly');
+  await enter();
+  assert.deepEqual(png(readZip(await download('extract-export', 'assembly-reopened.zip'))), painted);
+
+  await open(resolve('tools/e00/fixtures/corpus/f07_shared_atlas.glb'), /8 triangles/);
+  await select('Handle');
+  await enter();
+  await fill('extract-faces', '0');
+  await click('extract-face-apply');
+  assert.match(await text('extract-selection-info'), /1 edges exposed/);
+  await choose('extract-selection', 'all');
+  await choose('extract-copy', 'copy');
+  await choose('extract-layout', 'unwrap');
+  await choose('extract-pivot', 'center');
+  await fill('extract-rz', 0);
+  await fill('extract-scale', 1);
+  await field('extract-origin').uncheck();
+  await fill('extract-name', 'Isolated Handle');
+  assert.match(await text('extract-selection-info'), /4 faces in 2 components/);
+  await run('extract-create', /Created 1 independent object/);
+  await download('extract-export', 'handle.glb');
+  await download('export', 'whole.glb');
+  await select('Tray');
+  await click('extract-queue-components');
+  await page.getByRole('checkbox', { name: 'Include group 1' }).uncheck();
+  assert.equal(await field('extract-create-batch').isDisabled(), true);
+  await page.getByRole('checkbox', { name: 'Include group 1' }).check();
+  await page.getByRole('textbox', { name: 'Name for group 1' }).fill('Independent Tray');
+  await choose('extract-layout', 'keep');
+  await run('extract-create-batch', /Created 1 independent object/);
+  const glbBatch = readZip(await download('extract-export-batch', 'glb-batch.zip'));
+  assert.deepEqual(glbBatch.manifest.assets.map(item => item.path), ['01/Isolated_Handle.glb', '02/Independent_Tray.glb']);
+  await select('Lid');
+  await choose('extract-kind', 'geometry');
+  await fill('extract-name', 'Shared Lid');
+  await run('extract-create', /Created 1 geometry object/);
+  assert.equal(await field('extract-export').isDisabled(), true);
+  await download('export', 'whole-with-shared-copy.glb');
+  assert.deepEqual(errors, []);
+  assert.deepEqual(external, []);
+  const report = { chrome: browser.version(), fbxTriangles: 6, packedMap: 256, cutUndo: true, cancelledUnchanged: true,
+    sharedImageUnchangedAfterPaint: true, glbComponents: 2, batchAssets: 2, geometryOnlyCopy: true, external };
+  await writeFile(join(dir, 'browser-report.json'), JSON.stringify(report, null, 2));
+  console.log(report);
+} finally {
+  await browser?.close();
+  await new Promise(resolve => server.httpServer.close(resolve));
+}

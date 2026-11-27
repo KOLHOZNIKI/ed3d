@@ -110,6 +110,7 @@
         <button id="mesh-mode" type="button" aria-pressed="false" disabled>Mesh Edit</button>
         <button id="repair-mode" type="button" aria-pressed="false" disabled>Repair</button>
         <button id="uv-mode" type="button" aria-pressed="false" disabled>UV Editor</button>
+        <button id="extract-mode" type="button" aria-pressed="false" disabled>Extract</button>
         <button id="undo-stroke" type="button" disabled>Undo</button>
         <button id="redo" type="button" disabled>Redo</button>
         <button id="toggle-texture" type="button" aria-expanded="false" disabled>Texture editor</button>
@@ -263,6 +264,56 @@
         <p id="selection-details"></p>
       </fieldset>
       </div>
+      <fieldset id="extract-tools" hidden>
+        <legend>Extract Static Assets</legend>
+        <div class="actions">
+          <label for="extract-selection">Select</label>
+          <select id="extract-selection"><option value="all">Whole mesh</option><option value="components">Components</option><option value="faces">Faces</option></select>
+          <label for="extract-faces">Face IDs</label><input id="extract-faces" type="text" placeholder="3, 5, 9–14" />
+          <button id="extract-face-apply" type="button">Select faces</button>
+          <label for="extract-preview"><input id="extract-preview" type="checkbox" /> Isolate selection</label>
+        </div>
+        <details><summary>Connected components</summary><div id="extract-components" class="actions"></div></details>
+        <p id="extract-selection-info"></p>
+        <div class="actions">
+          <label for="extract-name">Output name</label><input id="extract-name" type="text" maxlength="120" />
+          <button id="extract-queue" type="button">Queue selected group</button>
+          <button id="extract-queue-components" type="button">Queue separate components</button>
+        </div>
+        <div id="extract-queue-list"></div>
+        <div class="actions">
+          <label for="extract-kind">Operation</label>
+          <select id="extract-kind"><option value="independent">Make Independent Asset</option><option value="geometry">Separate Geometry</option></select>
+          <label for="extract-copy">Source</label><select id="extract-copy"><option value="copy">Copy</option><option value="cut">Cut</option></select>
+          <label for="extract-layout">UVs</label>
+          <select id="extract-layout"><option value="pack" selected>Pack existing islands</option><option value="keep">Keep UVs</option><option value="unwrap">Auto Unwrap</option></select>
+          <label for="extract-size">Map size</label><select id="extract-size"><option>256</option><option>512</option><option selected>1024</option><option>2048</option><option>4096</option></select>
+          <label for="extract-padding">Padding (px)</label><input id="extract-padding" type="number" min="0" max="64" value="4" />
+          <label><input id="extract-fill" type="checkbox" /> Neutral fill for repairs</label>
+        </div>
+        <div class="actions">
+          <label for="extract-pivot">Pivot</label><select id="extract-pivot"><option value="original">Original</option><option value="center">Bounds center</option><option value="bottom">Bottom center</option><option value="point">Picked or local point</option></select>
+          <button id="extract-pick" type="button" aria-pressed="false">Pick pivot on mesh</button>
+          <label>Local X <input id="extract-x" type="number" step="any" value="0" /></label>
+          <label>Y <input id="extract-y" type="number" step="any" value="0" /></label>
+          <label>Z <input id="extract-z" type="number" step="any" value="0" /></label>
+        </div>
+        <div class="actions">
+          <label>Rotate X° <input id="extract-rx" type="number" step="any" value="0" /></label>
+          <label>Y° <input id="extract-ry" type="number" step="any" value="0" /></label>
+          <label>Z° <input id="extract-rz" type="number" step="any" value="0" /></label>
+          <label>Scale <input id="extract-scale" type="number" min="0.000001" step="any" value="1" /></label>
+          <label><input id="extract-origin" type="checkbox" /> Export pivot at world zero</label>
+        </div>
+        <div class="actions">
+          <button id="extract-create" type="button">Create selection</button>
+          <button id="extract-create-batch" type="button">Create queued groups</button>
+          <button id="extract-export" type="button">Export selected asset</button>
+          <button id="extract-export-batch" type="button">Export checked assets ZIP</button>
+        </div>
+        <div id="extract-assets" class="actions"></div>
+        <p id="extract-info" aria-live="polite"></p>
+      </fieldset>
       <fieldset id="uv-tools" hidden>
         <legend>UV Editor</legend>
         <div class="actions">

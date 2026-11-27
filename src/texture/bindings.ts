@@ -74,14 +74,21 @@ export class TextureCatalog {
       const binding = state.bake.generated ? this.#generatedBinding : this.bindings[0];
       return binding ? [{ binding, key: atlasColor, atlas: true, shared: [binding] }] : [];
     }
-    const keyFor = (binding: TextureBinding) => state.textures?.[binding.id] || state.uvBakes?.[binding.object] ? binding.id : binding.sharedKey;
+    const transferFor = (binding: TextureBinding) => state.extracts?.[binding.object]?.bakes[binding.slot] ??
+      (binding.slot === 0 ? state.uvBakes?.[binding.object] : undefined);
+    const keyFor = (binding: TextureBinding) => state.textures?.[binding.id] || transferFor(binding) ? binding.id : binding.sharedKey;
     return this.bindings.map(binding => {
       const key = keyFor(binding);
-      return { binding, key, atlas: false, transfer: state.uvBakes?.[binding.object], shared: this.bindings.filter(other => keyFor(other) === key) };
+      return { binding, key, atlas: false, transfer: transferFor(binding), shared: this.bindings.filter(other => keyFor(other) === key) };
     });
   }
 
   validate(state: WorkingState) {
+    for (const [object, asset] of Object.entries(state.extracts ?? {})) for (const [slot, transfer] of Object.entries(asset.bakes)) {
+      const binding = this.bindings.find(item => item.object === object && item.slot === Number(slot));
+      const channel = transfer.channel ? `uv${transfer.channel}` : 'uv';
+      if (!binding || !binding.mesh.geometry.hasAttribute(channel)) throw new Error('The saved extraction has no matching material and UV channel.');
+    }
     for (const [object, transfer] of Object.entries(state.uvBakes ?? {})) {
       const binding = this.bindings.find(item => item.object === object);
       const channel = transfer.channel ? `uv${transfer.channel}` : 'uv';

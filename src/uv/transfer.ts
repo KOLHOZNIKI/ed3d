@@ -1,4 +1,4 @@
-import { Mesh, MeshLambertMaterial, MeshPhongMaterial, MeshStandardMaterial, Texture } from 'three';
+import { Mesh, MeshLambertMaterial, MeshPhongMaterial, MeshStandardMaterial, Texture, type Material } from 'three';
 import { bakeInWorker, originalFbxMaps, samplerWrap, type TextureBake } from '../e00/rebake';
 import { renderControlPoints, sourceMesh } from '../e00/fbx-topology';
 import type { BakeMap } from '../e00/rebake-worker';
@@ -15,6 +15,7 @@ export interface TransferOptions {
   filter: 'nearest' | 'linear';
   original: boolean;
   fillMissing: boolean;
+  scope?: { slot: number; triangles: readonly number[]; clearUnused: boolean };
 }
 
 export const glbSlots = ['map', 'normalMap', 'emissiveMap', 'aoMap', 'metalRough'] as const;
@@ -27,7 +28,11 @@ export async function transfer(adapter: ModelAdapter, model: Model, catalog: Tex
     throw new Error(`Target UVs must be inside 0–1 with no degenerate or overlapping triangles. Found ${diagnostics.outside} outside, ${diagnostics.degenerate} degenerate, ${diagnostics.overlaps} conflicting.`);
   }
   const mesh = adapter.objects.get(object);
-  if (!(mesh instanceof Mesh) || Array.isArray(mesh.material)) throw new Error('Direct transfer requires one material on the selected mesh.');
+  const { scope } = options;
+  if (!(mesh instanceof Mesh) || Array.isArray(mesh.material) && !scope) throw new Error('Direct transfer requires one material on the selected mesh.');
+  const slot = scope?.slot ?? 0;
+  const material = Array.isArray(mesh.material) ? mesh.material[slot] : mesh.material;
+  if (!material) throw new Error('The selected faces have no material.');
   if (mesh.geometry.hasAttribute('tangent')) throw new Error('Direct transfer requires generated tangents. Authored tangent replacement is unavailable.');
   const geometry = options.original ? adapter.mesh.originalGeometry(object) : mesh.geometry;
   if (!geometry) throw new Error('This object has no original imported mesh. Choose the working snapshot.');
@@ -41,7 +46,7 @@ export async function transfer(adapter: ModelAdapter, model: Model, catalog: Tex
       throw new Error('The original geometry no longer matches these corners. Choose the working snapshot.');
     }
   }
-  const target = catalog.targets(state).find(target => target.binding.object === object);
+  const target = catalog.targets(state).find(target => target.binding.object === object && target.binding.slot === slot);
   const currentColor = !options.original && target && state.textures?.[target.key]?.image;
   const fbxHasBakedRepairs = !options.original && model.format === 'fbx' && state.bake?.direct && model.uvAtlas;
   const pending = new Set(fbxHasBakedRepairs ? [] :
@@ -50,8 +55,12 @@ export async function transfer(adapter: ModelAdapter, model: Model, catalog: Tex
   if (!options.fillMissing && missing.includes(1)) throw new Error('Some repair faces have no source texture. Enable neutral fill for those faces to continue.');
   const maps: BakeMap[] = [];
   let sourceUv: Float32Array<ArrayBuffer> | undefined;
-  if (model.format === 'fbx') {
-    if (model.stats.meshes !== 1 || !(mesh.material instanceof MeshPhongMaterial || mesh.material instanceof MeshLambertMaterial)) {
+  const stored = !options.original ? target?.transfer : undefined;
+  if (stored) {
+    sourceUv = flatten(geometry, uvName(stored.channel), 2);
+    for (const entry of stored.bake.maps) maps.push(pngMap(entry, entry.slot === 'map' ? currentColor || undefined : undefined, model.format === 'glb'));
+  } else if (model.format === 'fbx') {
+    if (!scope && model.stats.meshes !== 1 || !(material instanceof MeshPhongMaterial || material instanceof MeshLambertMaterial)) {
       throw new Error('FBX Preserve Appearance requires a single mesh with one Phong or Lambert material.');
     }
     if (!options.original && state.bake && model.uvAtlas) {
@@ -62,37 +71,41 @@ export async function transfer(adapter: ModelAdapter, model: Model, catalog: Tex
       }
     } else {
       sourceUv = flatten(geometry, 'uv', 2);
-      if ((mesh.material.transparent || mesh.material.alphaTest > 0) && !model.alphaProfile) {
+      if ((material.transparent || material.alphaTest > 0) && !model.alphaProfile) {
         throw new Error('This transparent FBX needs an explicit alpha profile for transfer.');
       }
-      maps.push(...await originalFbxMaps(model, mesh.material, currentColor ? encodeImage(currentColor) : undefined));
+      maps.push(...await originalFbxMaps(model, material, currentColor ? encodeImage(currentColor) : undefined, !scope || !Array.isArray(mesh.material)));
     }
   } else {
-    const material = mesh.material;
-    const stored = !options.original ? state.uvBakes?.[object] : undefined;
-    if (stored) {
-      sourceUv = flatten(mesh.geometry, uvName(stored.channel), 2);
-      for (const entry of stored.bake.maps) maps.push(pngMap(entry, entry.slot === 'map' ? currentColor || undefined : undefined, true));
-    } else {
-      const textures = glbMaps(mesh);
-      for (const [slot, texture] of textures) {
-        const image = model.images.get(texture.image as object);
-        const uv = flatten(geometry, uvName(texture.channel), 2);
-        if (!image || !uv || texture.flipY) throw new Error(`The GLB ${slot} requires an embedded image and a supported UV channel.`);
-        if (texture.matrixAutoUpdate) texture.updateMatrix();
-        const m = texture.matrix.elements;
-        const uvTransform = [m[0], m[3], m[6], m[1], m[4], m[7]] as const;
-        if (slot === 'normalMap' && (!uvTransform.every((v, i) => v === Number(i === 0 || i === 4)) ||
-            !(material instanceof MeshStandardMaterial) || material.normalScale.x < 0 ||
-            Math.abs(material.normalScale.x + material.normalScale.y) > 1e-6)) {
-          throw new Error('The normal map requires identity sampling and a supported tangent-space scale.');
-        }
-        const data = slot === 'map' && currentColor ? currentColor : await decodeImage(image.blob);
-        maps.push({ slot, source: image.name || slot, mode: encoding(slot), width: data.width, height: data.height,
-          pixels: rgbaBytes(data), preserveAlpha: true, topDown: true, uv, uvTransform,
-          wrapS: samplerWrap(texture.wrapS), wrapT: samplerWrap(texture.wrapT) });
+    for (const [slot, texture] of glbMaps(material)) {
+      const image = model.images.get(texture.image as object);
+      const uv = flatten(geometry, uvName(texture.channel), 2);
+      if (!image || !uv || texture.flipY) throw new Error(`The GLB ${slot} requires an embedded image and a supported UV channel.`);
+      if (texture.matrixAutoUpdate) texture.updateMatrix();
+      const m = texture.matrix.elements;
+      const uvTransform = [m[0], m[3], m[6], m[1], m[4], m[7]] as const;
+      if (slot === 'normalMap' && (!uvTransform.every((v, i) => v === Number(i === 0 || i === 4)) ||
+          !(material instanceof MeshStandardMaterial) || material.normalScale.x < 0 ||
+          Math.abs(material.normalScale.x + material.normalScale.y) > 1e-6)) {
+        throw new Error('The normal map requires identity sampling and a supported tangent-space scale.');
       }
-      sourceUv = maps[0]?.uv;
+      const data = slot === 'map' && currentColor ? currentColor : await decodeImage(image.blob);
+      maps.push({ slot, source: image.name || slot, mode: encoding(slot), width: data.width, height: data.height,
+        pixels: rgbaBytes(data), preserveAlpha: true, topDown: true, uv, uvTransform,
+        wrapS: samplerWrap(texture.wrapS), wrapT: samplerWrap(texture.wrapT) });
+    }
+    sourceUv = maps[0]?.uv;
+  }
+  if (scope) {
+    const select = (uv: Float32Array<ArrayBuffer>) => {
+      const selected = new Float32Array(scope.triangles.length * 6);
+      scope.triangles.forEach((face, i) => selected.set(uv.subarray(face * 6, face * 6 + 6), i * 6));
+      return selected;
+    };
+    if (sourceUv) sourceUv = select(sourceUv);
+    for (const map of maps) {
+      if (map.uv) map.uv = select(map.uv);
+      if (scope.clearUnused) map.preserveAlpha = true;
     }
   }
   if (!sourceUv || sourceUv.length !== layout.uv.length || !maps.some(map => map.slot === 'map')) {
@@ -107,7 +120,7 @@ export async function transfer(adapter: ModelAdapter, model: Model, catalog: Tex
   const bake = await bakeInWorker({ width: options.size, height: options.size, padding: options.padding,
     position: surface.positions.slice(), normals: surface.normals.slice(), sourceUv, targetUv: layout.uv.slice(), maps,
     direct: { sourceName: options.original ? 'Original import' : `Working revision ${revision}`,
-      filter: options.filter, topDown: model.format === 'glb', missing },
+      filter: options.filter, topDown: model.format === 'glb', missing, clearUnused: scope?.clearUnused },
   }, signal);
   return model.format === 'fbx' && !options.original && state.bake?.generated ? { ...bake, generated: true } : bake;
 }
@@ -122,8 +135,8 @@ function encoding(slot: string): BakeMap['mode'] {
   return slot === 'map' || slot === 'emissiveMap' ? 'srgb' : slot === 'normalMap' ? 'normal' : 'linear';
 }
 
-function glbMaps(mesh: Mesh) {
-  const material = mesh.material as unknown as Record<string, unknown>;
+function glbMaps(source: Material) {
+  const material = source as unknown as Record<string, unknown>;
   const known = new Set(['map', 'normalMap', 'emissiveMap', 'aoMap', 'metalnessMap', 'roughnessMap']);
   const unsupported = Object.entries(material).find(([name, value]) => value instanceof Texture && !known.has(name));
   if (unsupported) throw new Error(`Direct transfer does not support the GLB ${unsupported[0]} slot.`);

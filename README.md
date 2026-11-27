@@ -44,6 +44,10 @@ Open **UV Editor** to select a material, map, and UV channel. Pick UV vertices, 
 
 Choose **Change Mapping** to move UVs while keeping the images unchanged. Choose **Preserve Appearance** to transfer the current painted maps to the draft. You can also select **Original import** when the source corners still match. **Rebake and Apply** commits both the UVs and the new maps together. Use **Coverage** to inspect sampled texels and any repairs filled with neutral data. FBX exports put the baked layout in UV0 and retain the source layout in UV1. GLB exports bind the baked maps to the selected channel.
 
+Open **Extract** to select a whole static mesh, one or more connected components, or arbitrary faces. Use **Isolate selection** to review the result and check the count of newly exposed boundary edges. **Copy** is the default. **Separate Geometry** keeps the existing material bindings. **Make Independent Asset** creates separate maps so later paint edits affect only the new object.
+
+Choose **Keep UVs** to clear unused atlas regions, **Pack existing islands** to use the available tile space, or **Auto Unwrap** to build new charts. Set a pivot and any explicit rotation or scale before creating the asset. Turn on **Export pivot at world zero** to rebase only the standalone export. Use **Export selected asset** for an individual FBX ZIP or GLB and **Export checked assets ZIP** for a batch with a manifest.
+
 | Command | Purpose |
 | --- | --- |
 | `npm run typecheck` | Check the application with strict TypeScript settings. |
@@ -68,6 +72,7 @@ Choose **Change Mapping** to move UVs while keeping the images unchanged. Choose
 
 ## Verification
 
+- [E07 static asset extraction verification](Docs/E07_Report.md) covers component grouping, map ownership, pivot, scale, orientation, and batch export.
 - [E06 UV editing and direct bake verification](Docs/E06_Report.md) covers painted appearance, UV corner selection, cancellation, skinned export, and directional normals.
 - [E05 Basic Repair verification](Docs/E05_Report.md) covers protected openings, concave and non-planar contours, patch intersections, and skinned FBX repair.
 - [E04 Mesh Core verification](Docs/E04_Report.md) covers logical vertex edits, UV and normal seams, ordered face creation, and FBX skinning after a split and separation.

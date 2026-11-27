@@ -30,6 +30,7 @@ export interface Side { face: Face; corner: number }
 export const edgeKey = (a: number, b: number) => a < b ? `${a}/${b}` : `${b}/${a}`;
 export const point = (mesh: MeshData, id: number): Vec3 => [mesh.positions[3 * id], mesh.positions[3 * id + 1], mesh.positions[3 * id + 2]];
 export const verticesOf = (face: Face) => face.corners.map(corner => corner.vertex);
+export const usedVertices = (faces: readonly Face[]) => [...new Set(faces.flatMap(verticesOf))].sort((a, b) => a - b);
 export const edgeVertices = (key: string) => key.split('/').map(Number);
 export const next = (face: Face, index: number) => (index + 1) % face.corners.length;
 

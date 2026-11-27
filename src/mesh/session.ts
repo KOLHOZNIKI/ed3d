@@ -1,4 +1,4 @@
-import { Mesh, PropertyBinding, SkinnedMesh, type Object3D } from 'three';
+import { Euler, Matrix4, Mesh, PropertyBinding, Quaternion, SkinnedMesh, Vector3, type Object3D } from 'three';
 import type { Model } from '../project/adapter';
 import type { SceneEntry } from '../project/document';
 import type { Topology } from '../project/topology';
@@ -7,7 +7,7 @@ import { applyMeshEdit } from './edit';
 import type { MeshData } from './data';
 import { editableMesh, renderMesh, type RenderMesh } from './render';
 
-type State = { root: string; mesh: MeshData };
+type State = { root: string; mesh: MeshData; matrix?: Matrix4 };
 type Source = { entry: SceneEntry; node: Mesh; geometry: Mesh['geometry']; extensions: Mesh['userData']['gltfExtensions'] };
 type Render = { state: State; node: Mesh; render: RenderMesh };
 const noCommands: readonly Uint8Array<ArrayBuffer>[] = [];
@@ -60,6 +60,17 @@ export class MeshSession {
     this.#allowSeparate(this.#sources.get(root)!.node);
   }
 
+  validateExtract(id: string) {
+    const node = this.objects.get(id);
+    if (!(node instanceof Mesh) || node instanceof SkinnedMesh ||
+        Object.values(node.geometry.morphAttributes).some(layers => Array.isArray(layers) && layers.length)) {
+      throw new Error('Extraction requires a static mesh without skin or morph targets.');
+    }
+    for (let target: Object3D | null = node; target && target !== this.model.scene; target = target.parent) {
+      this.#allowSeparate(target);
+    }
+  }
+
   materialize(edits = noCommands) {
     if (edits === this.#commands) return;
     const prefix = this.#commands.length <= edits.length && this.#commands.every((edit, i) => edit === edits[i]);
@@ -70,13 +81,27 @@ export class MeshSession {
       if (!source) throw new Error('A mesh edit refers to an unknown source object.');
       const base = state?.mesh ?? this.#originalMesh(root);
       const result = applyMeshEdit(base, edit);
-      states.set(edit.object, { root, mesh: result.mesh });
-      if (edit.type === 'separate' && result.piece) {
+      if (result.mesh !== base) states.set(edit.object, { root, mesh: result.mesh, matrix: state?.matrix });
+      if ((edit.type === 'separate' || edit.type === 'extract') && result.piece) {
         this.#allowSeparate(source.node);
         if (this.#sources.has(edit.piece) || states.has(edit.piece) || this.objects.get(edit.piece) && !this.#renders.has(edit.piece)) {
           throw new Error('A saved separate operation reuses an object ID.');
         }
-        states.set(edit.piece, { root, mesh: result.piece });
+        let matrix = state?.matrix;
+        if (edit.type === 'extract') {
+          if (source.node instanceof SkinnedMesh || base.channels.some(channel => channel.name.startsWith('morph:'))) {
+            throw new Error('Extraction requires a static mesh without skin or morph targets.');
+          }
+          const baseMatrix = matrix ?? new Matrix4().fromArray(source.entry.transform);
+          const position = new Vector3(...edit.pivot).applyMatrix4(baseMatrix);
+          const rotation = new Quaternion(), scale = new Vector3();
+          baseMatrix.decompose(new Vector3(), rotation, scale);
+          const radians = edit.rotation.map(value => value * Math.PI / 180);
+          rotation.multiply(new Quaternion().setFromEuler(new Euler(radians[0], radians[1], radians[2])));
+          matrix = new Matrix4().compose(position, rotation, scale.multiplyScalar(edit.scale));
+          if (!matrix.elements.every(value => Number.isFinite(Math.fround(value)))) throw new Error('Invalid extracted transform.');
+        }
+        states.set(edit.piece, { root, mesh: result.piece, matrix });
       }
     }
     const built = new Map<string, Render>();
@@ -113,9 +138,13 @@ export class MeshSession {
         }
       }
       if (id !== state.root) {
+        if (state.matrix) {
+          state.matrix.decompose(node.position, node.quaternion, node.scale);
+          node.updateMatrix();
+        }
         if (!node.parent) source.node.parent!.add(node);
         this.objects.set(id, node);
-        pieces.push({ ...source.entry, id, name: node.name });
+        pieces.push({ ...source.entry, id, name: node.name, transform: state.matrix?.elements ?? source.entry.transform });
       }
     }
     this.#pieces = pieces;
@@ -164,7 +193,7 @@ export class MeshSession {
     return clone;
   }
 
-  #allowSeparate(node: Mesh) {
+  #allowSeparate(node: Object3D) {
     for (const track of this.model.scene.animations.flatMap(clip => clip.tracks)) {
       const binding = PropertyBinding.parseTrackName(track.name);
       if (PropertyBinding.findNode(this.model.scene, binding.nodeName) === node) {

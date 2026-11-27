@@ -5,6 +5,7 @@ export type MeshEdit = { object: string } & (
   { type: 'move' | 'rotate' | 'scale'; vertices: number[]; value: Vec3; pivot?: Vec3 } |
   { type: 'delete' | 'recalculate' | 'flipNormals'; faces: number[] } |
   { type: 'separate'; faces: number[]; piece: string } |
+  { type: 'extract'; faces: number[]; piece: string; cut: boolean; pivot: Vec3; rotation: Vec3; scale: number } |
   { type: 'create'; vertices: number[]; material: number; project: boolean } |
   { type: 'weld'; vertices: number[]; mode: 'first' | 'average' | 'tolerance'; tolerance: number } |
   { type: 'splitEdge'; edge: string; fraction: number } |
@@ -15,7 +16,7 @@ export type MeshEdit = { object: string } & (
 );
 
 const names = new Set(['move', 'rotate', 'scale', 'delete', 'recalculate', 'flipNormals', 'separate',
-  'create', 'weld', 'splitEdge', 'splitFace', 'dissolve', 'flipEdge', 'repair', 'uv']);
+  'create', 'weld', 'splitEdge', 'splitFace', 'dissolve', 'flipEdge', 'repair', 'uv', 'extract']);
 const encoder = new TextEncoder(), decoder = new TextDecoder('utf-8', { fatal: true });
 const id = (value: unknown) => typeof value === 'string' && /^object-(0|[1-9]\d{0,7})$/.test(value);
 const index = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= 0x7fffffff;
@@ -42,6 +43,9 @@ export function decodeEdit(data: Uint8Array) {
       valid = indices(o.faces, 1); break;
     case 'separate':
       valid = indices(o.faces, 1) && id(o.piece) && o.piece !== o.object; break;
+    case 'extract':
+      valid = indices(o.faces, 1) && id(o.piece) && o.piece !== o.object && typeof o.cut === 'boolean' &&
+        vec(o.pivot) && vec(o.rotation) && typeof o.scale === 'number' && Number.isFinite(o.scale) && o.scale > 0; break;
     case 'create':
       valid = indices(o.vertices, 3) && index(o.material) && typeof o.project === 'boolean'; break;
     case 'weld':

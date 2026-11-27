@@ -257,7 +257,7 @@ try {
   const originalHash = hash(await readFile(source));
   assert.equal(manifest.originals[0].hash, originalHash);
   assert.equal(hash(saved[`blobs/${originalHash}`]), originalHash);
-  assert.equal(manifest.schemaVersion, 6);
+  assert.equal(manifest.schemaVersion, 7);
   await browser.close();
 
   work = await start(true);

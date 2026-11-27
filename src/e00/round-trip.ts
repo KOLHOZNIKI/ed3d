@@ -128,7 +128,10 @@ export function moveControlPointY(asset: ImportedAsset, controlPoint: number, of
   return { ...asset, positionEdit: { geometry: mesh.geometry, positions, controlPoint, offsetY } };
 }
 
-export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMap<Texture, Uint8Array<ArrayBuffer>>): Promise<{ name: string; bytes: Uint8Array<ArrayBuffer> }> {
+export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMap<Texture, Uint8Array<ArrayBuffer>>,
+  extract?: { layout: string; originAtZero: boolean; pivot: number[];
+    auxiliary: { semantic: string; file: string; colorSpace: string; channel: string; png: Uint8Array<ArrayBuffer> }[] },
+): Promise<{ name: string; bytes: Uint8Array<ArrayBuffer> }> {
   if (asset.deformation.hasMorphTargets) {
     throw new Error('FBX export blocked. The current exporter cannot preserve source morph targets.');
   }
@@ -139,7 +142,7 @@ export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMa
   const repair = asset.repairPatch;
   const suffix = repair ? `_e00_${repair.metadata.method}` : paint ? '_e00_painted' : bake ? '_e00_baked'
     : atlas ? '_e00_atlas' : edit ? '_e00_edited' : '_e00';
-  const name = asset.name.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) + suffix;
+  const name = asset.name.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) + (extract ? '' : suffix);
   const files: Files = new Map();
   const linked: { semantic: string; file: string; source: string | null; rebaked?: true }[] = [];
   const assigned = new Set<string>();
@@ -221,6 +224,8 @@ export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMa
     unassigned.push({ source, file });
     files.set(file, bytes);
   }
+  const extractMetadata = extract && { layout: extract.layout, originAtZero: extract.originAtZero, pivot: extract.pivot,
+    auxiliaryMaps: extract.auxiliary.map(({ png, ...map }) => { files.set(map.file, png); return map; }) };
   const model = `${name}.fbx`;
   files.set(model, new Uint8Array(fbx));
   const cornerMap = repair ? 'repair-source-corners.bin' : 'uv-atlas-source-corners.bin';
@@ -233,11 +238,11 @@ export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMa
     files.set(cornerMap, bytes);
   }
   files.set('manifest.json', new TextEncoder().encode(JSON.stringify({
-    stage: 'E00', model, unitsInCentimeters: asset.unitScale, meshes: asset.stats,
+    stage: extract ? 'E07' : 'E00', model, unitsInCentimeters: asset.unitScale, meshes: asset.stats, extract: extractMetadata,
     skinInfluences: asset.deformation.pointsOverPreviewLimit > 0 ? {
       maxPerControlPoint: asset.deformation.maxSkinInfluences, pointsOverPreviewLimit: asset.deformation.pointsOverPreviewLimit, previewLimit: 4,
     } : undefined,
-    assetFixerMaterial: asset.alphaProfile && { ...asset.alphaProfile, uvTransform: bake ? undefined : asset.alphaProfile.uvTransform },
+    assetFixerMaterial: asset.alphaProfile && { ...asset.alphaProfile, uvTransform: bake || extract ? undefined : asset.alphaProfile.uvTransform },
     positionEdit: edit && { controlPoint: edit.controlPoint, offsetY: edit.offsetY },
     repair: repair && { ...repair.metadata, sourceCornerMap: cornerMap },
     uvAtlas: atlas && { channel: bake || !hadSourceUv ? 'uv0' : atlas.channel, sourceCornerMap: cornerMap, ...atlas.metrics },

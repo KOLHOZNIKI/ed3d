@@ -1,6 +1,6 @@
 import { Euler, Matrix3, Matrix4, Vector3 } from 'three';
 import type { MeshEdit } from './commands';
-import { edgeKey, edgesOf, edgeVertices, ensureUvChannel, next, point, verticesOf, type Corner, type Face, type MeshData, type Side, type Weight } from './data';
+import { edgeKey, edgesOf, edgeVertices, ensureUvChannel, next, point, usedVertices, verticesOf, type Corner, type Face, type MeshData, type Side, type Weight } from './data';
 import { faceNormal, polygon, vector } from './polygon';
 import { recalculate, tangentFrame } from './normals';
 import { applyRepairs } from '../repair/fill';
@@ -11,6 +11,20 @@ export function applyMeshEdit(mesh: MeshData, edit: MeshEdit): { mesh: MeshData;
   switch (edit.type) {
     case 'uv': return { mesh: applyUvLayout(mesh, edit) };
     case 'repair': return { mesh: applyRepairs(mesh, edit.patches) };
+    case 'extract': {
+      const ids = pickFaces(mesh, edit.faces);
+      const faces = mesh.faces.filter(face => ids.has(face.id));
+      if (!faces.length || edit.cut && faces.length === mesh.faces.length) throw new Error('Cut must leave at least one source face. Use Copy for the whole mesh.');
+      const vertices = usedVertices(faces), remap = new Map(vertices.map((id, i) => [id, i]));
+      const positions = Float64Array.from(vertices.flatMap(id => point(mesh, id).map((value, axis) => value - edit.pivot[axis])));
+      if (!positions.every(value => Number.isFinite(Math.fround(value)))) throw new Error('The extract pivot exceeds the geometry coordinate range.');
+      const selected = filterFaces(mesh, faces);
+      const corners = faces.map(face => ({ ...face, corners: face.corners.map(corner => ({ ...corner, vertex: remap.get(corner.vertex)! })) }));
+      const uvSeams = selected.uvSeams && Object.fromEntries(Object.entries(selected.uvSeams).map(([channel, edges]) =>
+        [channel, edges.map(key => { const [a, b] = edgeVertices(key); return edgeKey(remap.get(a)!, remap.get(b)!); })]));
+      return { mesh: edit.cut ? filterFaces(mesh, mesh.faces.filter(face => !ids.has(face.id))) : mesh,
+        piece: { ...selected, positions, faces: corners, uvSeams } };
+    }
     case 'move': case 'rotate': case 'scale': return { mesh: transform(mesh, edit) };
     case 'delete': case 'separate': {
       const faces = pickFaces(mesh, edit.faces);
@@ -27,6 +41,14 @@ export function applyMeshEdit(mesh: MeshData, edit: MeshEdit): { mesh: MeshData;
     case 'dissolve': case 'flipEdge': return { mesh: combine(mesh, requireEdge(mesh, edit.edge), edit.type === 'flipEdge') };
     case 'weld': return { mesh: weld(mesh, edit) };
   }
+}
+
+function filterFaces(mesh: MeshData, faces: readonly Face[]): MeshData {
+  const result = { ...mesh, faces };
+  if (!mesh.uvSeams) return result;
+  const edges = edgesOf(result);
+  return { ...result, uvSeams: Object.fromEntries(Object.entries(mesh.uvSeams).map(([channel, seams]) =>
+    [channel, seams.filter(seam => edges.has(seam))])) };
 }
 
 function pickFaces(mesh: MeshData, ids: readonly number[]) {

@@ -24,6 +24,9 @@ import { UvTool, type UvRequest } from './uv/tool';
 import { fbxAtlas, uvCommand } from './uv/surface';
 import { transfer } from './uv/transfer';
 import type { Layout } from './uv/layout';
+import { ExtractTool } from './extract/tool';
+import { buildExtraction } from './extract/build';
+import { exportBatch, exportExtract } from './extract/export';
 
 function element<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -41,6 +44,7 @@ const paintButton = element<HTMLButtonElement>('paint');
 const meshButton = element<HTMLButtonElement>('mesh-mode');
 const repairButton = element<HTMLButtonElement>('repair-mode');
 const uvButton = element<HTMLButtonElement>('uv-mode');
+const extractButton = element<HTMLButtonElement>('extract-mode');
 const paintUnwrap = element<HTMLButtonElement>('paint-unwrap');
 const undo = element<HTMLButtonElement>('undo-stroke'), redo = element<HTMLButtonElement>('redo');
 const cancel = element<HTMLButtonElement>('cancel-job');
@@ -73,6 +77,7 @@ let painting = false;
 let meshEditing = false;
 let repairing = false;
 let uvEditing = false;
+let extracting = false;
 let stroke: { pointer: number; gesture: Exclude<ReturnType<PaintTool['begin']>, string | undefined> } | undefined;
 let paintBinding = '';
 let picking: { pointer: number; x: number; y: number } | undefined;
@@ -175,6 +180,30 @@ const uvTool = new UvTool(viewer, canvas, {
   commit(request) { return commitUv(request); },
 });
 
+const extractTool = new ExtractTool(viewer, canvas, {
+  create(object, revision, candidates, options) {
+    return locked(async signal => {
+      const work = current!;
+      work.document.assertRevision(revision);
+      const { state, output } = await buildExtraction(work.adapter, work.model, work.textures, work.document.state,
+        revision, object, candidates, options, signal);
+      await edit(work, revision, state, options.independent ? 'Create independent assets' : 'Separate geometry', object, signal);
+      selectObject(output[0]);
+      status.textContent = `Created ${output.length} ${options.independent ? 'independent' : 'geometry'} ${output.length === 1 ? 'object' : 'objects'}.`;
+    }, 'Preparing extracted assets…', true);
+  },
+  export(ids, batch) {
+    return locked(async signal => {
+      const { model, adapter, textures, document } = current!;
+      const output = batch ? await exportBatch(model, adapter, textures, document.state, ids, signal)
+        : await exportExtract(model, adapter, textures, document.state, ids[0]);
+      signal?.throwIfAborted();
+      download(new Blob([output.bytes], { type: output.name.endsWith('.glb') ? 'model/gltf-binary' : 'application/zip' }), output.name);
+      status.textContent = `Exported ${output.name}.`;
+    }, 'Exporting independent assets…', true);
+  },
+});
+
 function commitUv(request: UvRequest) {
   return locked(async signal => {
     const work = current!, { object, revision, layout, channel, options } = request;
@@ -182,8 +211,21 @@ function commitUv(request: UvRequest) {
     const state = work.document.state, mesh = work.adapter.objects.get(object), model = work.model;
     if (!(mesh instanceof Mesh)) throw new Error('Select a UV mesh.');
     const oldAtlas = model.format === 'fbx' && channel === 1 && model.uvAtlas?.inputGeometry === mesh.geometry ? state.atlas : undefined;
+    const extracted = state.extracts?.[object];
     let next: WorkingState;
-    if (model.format === 'fbx' && (request.preserve || oldAtlas)) {
+    if (request.preserve && extracted) {
+      const slots = new Set(request.surface.slots);
+      const [slot] = slots;
+      if (slots.size !== 1 || model.format === 'fbx' && channel !== 0) {
+        throw new Error('Rebaking an extracted mesh requires a single used material. FBX exports the bake in UV0.');
+      }
+      const bake = await transfer(work.adapter, model, work.textures, state, revision, object, layout, request.surface,
+        { ...options, scope: { slot, triangles: Array.from(request.surface.faces.keys()), clearUnused: false } }, signal);
+      const textures = { ...state.textures };
+      delete textures[`slot/${object}/${slot}`];
+      const meshEdits = [...state.meshEdits ?? [], encodeEdit(uvCommand(object, channel, layout, true))];
+      next = { ...state, textures, meshEdits, extracts: { ...state.extracts, [object]: { ...extracted, bakes: { [slot]: { channel, bake } } } } };
+    } else if (model.format === 'fbx' && (request.preserve || oldAtlas)) {
       if (model.stats.meshes !== 1) throw new Error('FBX atlas transfer requires a single mesh. Change Mapping is available per mesh.');
       if (layout.uv.some(value => value < 0 || value > 1)) throw new Error('This FBX atlas requires UVs inside 0–1.');
       const atlas = fbxAtlas(mesh, request.surface, layout, request.preserve ? options.size : oldAtlas!.metrics.width,
@@ -208,7 +250,8 @@ function commitUv(request: UvRequest) {
       }
     }
     await edit(work, revision, next, request.preserve ? 'Rebake and apply UVs' : 'Change UV mapping', object, signal);
-    const baked = request.preserve && (next.bake ?? next.uvBakes?.[object]?.bake);
+    const baked = request.preserve && (next.bake ?? next.uvBakes?.[object]?.bake ??
+      Object.values(next.extracts?.[object]?.bakes ?? {})[0]?.bake);
     status.textContent = baked ? `UVs and ${baked.maps.length} maps applied from ${baked.direct!.sourceName}. ${baked.direct!.misses} occupied texels had no source.` :
       'UV mapping applied. Texture images are unchanged.';
   }, request.preserve ? 'Transferring maps from the frozen source…' : 'Applying UV mapping…', true);
@@ -223,6 +266,7 @@ function commitMesh(command: MeshEdit, revision: number, label: string) {
     let keepOpen = state.keepOpen;
     let uvBakes = state.uvBakes;
     if (command.type === 'separate') {
+      if (state.extracts?.[command.object]) throw new Error('Use Extract to separate an independent asset and retain its map ownership.');
       if (keepOpen?.[command.object]) keepOpen = { ...keepOpen, [command.piece]: keepOpen[command.object] };
       if (uvBakes?.[command.object]) uvBakes = { ...uvBakes, [command.piece]: uvBakes[command.object] };
       for (const target of work.textures.targets(state)) {
@@ -248,6 +292,7 @@ function controls() {
   if (!availablePaint) meshEditing = false;
   if (!availablePaint) repairing = false;
   if (!availablePaint) uvEditing = false;
+  if (!availablePaint) extracting = false;
   sources.disabled = locked;
   close.disabled = save.disabled = saveAs.disabled = exportButton.disabled = locked || !document;
   unwrap.disabled = locked || !fbx || editedMesh;
@@ -257,6 +302,7 @@ function controls() {
   meshButton.disabled = locked || !availablePaint;
   repairButton.disabled = locked || !availablePaint;
   uvButton.disabled = locked || !availablePaint;
+  extractButton.disabled = locked || !availablePaint;
   undo.disabled = locked || !document?.undoDepth;
   redo.disabled = locked || !document?.redoDepth;
   restore.disabled = locked;
@@ -266,9 +312,10 @@ function controls() {
   meshButton.setAttribute('aria-pressed', String(meshEditing));
   repairButton.setAttribute('aria-pressed', String(repairing));
   uvButton.setAttribute('aria-pressed', String(uvEditing));
+  extractButton.setAttribute('aria-pressed', String(extracting));
   canvas.style.cursor = painting && !busy ? 'crosshair' : '';
   canvas.style.touchAction = 'none';
-  viewer.setPainting(painting || meshEditing || repairing || uvEditing, busy || !!stroke || meshTool.dragging);
+  viewer.setPainting(painting || meshEditing || repairing || uvEditing || extracting, busy || !!stroke || meshTool.dragging);
   exportButton.textContent = model?.format === 'glb' ? 'Export GLB' : 'Export FBX ZIP';
   unwrap.textContent = fbx && model.uvAtlas ? 'Discard UV atlas' : 'Generate UV atlas';
   rebake.textContent = fbx && model.textureBake ? 'Discard texture bake' : 'Rebake textures';
@@ -300,6 +347,7 @@ function controls() {
     flags: document!.state.keepOpen?.[selected], blocked: !!document!.state.atlas } : undefined, locked);
   uvTool.configure(uvEditing && current ? { adapter: current.adapter, model: current.model, catalog: current.textures,
     state: document!.state, revision: document!.revision, object: selected } : undefined, locked);
+  extractTool.configure(extracting && current ? { adapter: current.adapter, state: document!.state, revision: document!.revision, object: selected } : undefined, locked);
   const pendingUv = fbx && document?.state.bake?.direct ? 0 : current?.adapter.mesh.pendingUv ?? 0;
   const notes = [current?.adapter.mesh.omittedPolygonMetadata ? 'GLB exports the edited topology as indexed triangles and omits incompatible private polygon metadata.' : '',
     pendingUv ? `${pendingUv} created faces require UV review or unwrapping.` : '',
@@ -360,6 +408,7 @@ function syncTextureEditor() {
 
 toggleTexture.addEventListener('click', () => {
   uvEditing = false;
+  extracting = false;
   if (editor.panel.hidden) {
     editor.open();
     syncTextureEditor();
@@ -462,6 +511,7 @@ function closeWorkspace() {
   meshEditing = false;
   repairing = false;
   uvEditing = false;
+  extracting = false;
   autosaveDue = undefined;
   window.clearTimeout(autosaveTimer);
   autosaveStatus.textContent = '';
@@ -675,7 +725,7 @@ async function applyWorking(work: Workspace, revision: number, state: WorkingSta
   const geometryChange = state.meshEdits !== previous.meshEdits;
   const piecesBefore = work.adapter.mesh.pieces.map(piece => piece.id).join(',');
   const visualChange = geometryChange || state.atlas !== previous.atlas || state.bake !== previous.bake ||
-    state.paint !== previous.paint || state.textures !== previous.textures || state.uvBakes !== previous.uvBakes;
+    state.paint !== previous.paint || state.textures !== previous.textures || state.uvBakes !== previous.uvBakes || state.extracts !== previous.extracts;
   let appearance: Appearance | undefined;
   try {
     const model = work.adapter.materialize(state);
@@ -829,6 +879,7 @@ window.addEventListener('keydown', event => {
 
 paintButton.addEventListener('click', () => {
   uvEditing = false;
+  extracting = false;
   repairing = false;
   meshEditing = false;
   painting = !painting;
@@ -838,6 +889,7 @@ paintButton.addEventListener('click', () => {
 
 meshButton.addEventListener('click', () => {
   uvEditing = false;
+  extracting = false;
   repairing = false;
   meshEditing = !meshEditing;
   if (meshEditing) painting = false;
@@ -847,6 +899,7 @@ meshButton.addEventListener('click', () => {
 
 repairButton.addEventListener('click', () => {
   uvEditing = false;
+  extracting = false;
   repairing = !repairing;
   if (repairing) painting = meshEditing = false;
   controls();
@@ -854,6 +907,7 @@ repairButton.addEventListener('click', () => {
 });
 
 uvButton.addEventListener('click', () => {
+  extracting = false;
   uvEditing = !uvEditing;
   if (uvEditing) {
     painting = meshEditing = repairing = false;
@@ -864,17 +918,28 @@ uvButton.addEventListener('click', () => {
   status.textContent = uvEditing ? 'UV Editor is active.' : 'UV Editor is off.';
 });
 
+extractButton.addEventListener('click', () => {
+  extracting = !extracting;
+  if (extracting) {
+    painting = meshEditing = repairing = uvEditing = false;
+    if (!editor.panel.hidden) editor.close();
+    if (!selected) selectObject(current?.adapter.viewEntries.find(entry => entry.mesh)?.id ?? '');
+  }
+  controls();
+  status.textContent = extracting ? 'Extract is active.' : 'Extract is off.';
+});
+
 function pointerPoint(event: PointerEvent): Point {
   const bounds = canvas.getBoundingClientRect();
   return { x: (event.clientX - bounds.left) * canvas.width / bounds.width, y: (event.clientY - bounds.top) * canvas.height / bounds.height };
 }
 
-canvas.addEventListener('contextmenu', event => { if (painting || meshEditing || repairing || uvEditing) event.preventDefault(); });
+canvas.addEventListener('contextmenu', event => { if (painting || meshEditing || repairing || uvEditing || extracting) event.preventDefault(); });
 canvas.addEventListener('pointerdown', event => {
   if (event.button !== 0 || busy || stroke || textureGesture || !current) return;
   if (!painting) {
     if (meshEditing && meshTool.gizmoHit) return;
-    if (meshEditing || repairing || uvEditing) canvas.focus({ preventScroll: true });
+    if (meshEditing || repairing || uvEditing || extracting) canvas.focus({ preventScroll: true });
     picking = { pointer: event.pointerId, x: event.clientX, y: event.clientY };
     return;
   }
@@ -910,6 +975,7 @@ canvas.addEventListener('pointerup', event => {
   if (picking?.pointer === event.pointerId) {
     picking = undefined;
     if (repairing && repairTool.pick(event)) return;
+    if (extracting) { extractTool.pick(event); return; }
     const list = [...work.adapter.objects].filter((pair): pair is [string, Mesh] => pair[1] instanceof Mesh);
     const model = viewer.pick(event, list.map(([, mesh]) => mesh));
     const id = list.find(([, mesh]) => mesh === model)?.[0];
