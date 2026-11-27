@@ -22,3 +22,4 @@
 | V1+ | §9.2 | Added Soft Selection to Mesh Edit with edge-distance falloff, transform previews, Undo and offline archive replay. [Report](Docs/V1_Plus.md) |
 | V1+ | §9.2 | Added Smooth Selection with adjustable strength and iterations, fixed boundary vertices, and verified static and skinned FBX exports. [Report](Docs/V1_Plus.md#smooth-selection) |
 | V1+ | §9.2 | Added Flatten Selection with best-fit, axis-aligned and custom planes and verified static and skinned FBX exports. [Report](Docs/V1_Plus.md#flatten-selection) |
+| V1+ | §9.2, UV-16 | Added UV Relax with draft pins, Mirror Move with pair diagnostics, and local Subdivide with shared-edge transitions. [Report](Docs/V1_Plus.md#uv-relax) |

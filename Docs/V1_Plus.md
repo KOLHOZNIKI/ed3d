@@ -8,10 +8,10 @@ The specification lists the following extensions after mandatory V1. The order i
 | Smooth Selection with fixed boundaries | [Verified](#smooth-selection) |
 | Flatten Selection to a selected or averaged plane | [Verified](#flatten-selection) |
 | Simple Extrude for a boundary or region | Planned |
-| Subdivide a selection with compatible adjacent faces | Planned |
-| Mirrored movement with a matching tolerance | Planned |
+| Subdivide a selection with compatible adjacent faces | [Implemented and checked](#mirror-move-and-subdivide) |
+| Mirrored movement with a matching tolerance | [Implemented and checked](#mirror-move-and-subdivide) |
 | UV Stitch / Weld (UV-12) | [Single-edge workflow verified](UV_Stitch.md) |
-| UV Relax (UV-16) with fixed boundaries and advanced pin constraints | Planned |
+| UV Relax (UV-16) with fixed boundaries and visible UV pins | [Implemented and checked](#uv-relax) |
 | Make the current pose the new base pose | Planned geometry and animation baking |
 
 The UV work is described in §11.2 and §11.6 of the specification. §16.6 reserves the base-pose command for a separate geometry and animation bake.
@@ -91,3 +91,30 @@ python -B tools/flatten-selection-verify.py 2022.3.62f2 6000.3.9f1
 ```
 
 Before running the Python verification, build the [ufbx inspector](E00_FBX_Round_Trip.md#reproduce-on-windows) and place `inspect_fbx.exe` under `test-results/flatten-selection/`. The verifier checks the exported control points and prepares both Unity projects. Run them in batch mode with `-executeMethod FbxProbe.Run`. Reports and FBX exports are under `test-results/flatten-selection/`.
+
+## UV Relax
+
+In **UV Editor**, select **UV Relax** and optionally pin vertices with **Pin selected**. Pins are scoped to the current object and UV channel within the draft. Select the region, set strength and 1–50 iterations, and click **Update draft**. The operation moves selected UV vertices toward their edge-connected neighbors, weighted by inverse 3D edge length. **Fix boundary** holds chart edges and the edges of the selection. The candidate is refused if affected triangles collapse, flip, or overlap another triangle. Packing holds any island with pins fixed. Clear pins before Auto Unwrap. Applying or cancelling the draft clears its pins. The applied UV coordinates are saved and can be undone. Use **Preserve Appearance** to rebake the current texture onto the revised layout.
+
+In Chrome, an FBX grid retained its 16 boundary UV vertices and one explicit interior pin in both the static and skinned cases. The displaced center went from `0.10198` to `0.01590` UV units from its regular position. ufbx read the same coordinates after offline project reopen. A separate Preserve Appearance run produced a 256² gradient Base Color map with zero missing occupied texels. The core checks refused both an overlapping UV edit and a collapsed triangle.
+
+## Mirror Move and Subdivide
+
+**Mirror Move** uses an object-local axis plane with a signed offset and a match tolerance. Select the source side and preview the translation. Opposite-side matches must be unique in both directions. Vertices matched to themselves move along the plane, and the preview lists unmatched, ambiguous, and two-sided selections. Those unresolved pairs stay in place. On the test grid, the offsets on the matched pair were `(+0.125, +0.0625, 0)` and `(-0.125, +0.0625, 0)` meters. The center vertex moved by `+0.0625 m` along Y. ufbx matched all other positions exactly, as well as UVs, polygon connectivity and skin weights.
+
+**Subdivide** splits each triangle in the selected faces into four, following the existing triangulation of n-gons. It inserts shared midpoints into adjoining polygons and updates their triangulation, preserving the original surface and avoiding T-junctions. Each midpoint retains its source edge and interpolates weights, morph deltas and corner attributes. The two sides of a UV seam keep independent corners. Affected non-manifold edges and unsupported GLB skin influence counts are refused.
+
+On the grid, one selected face became four. Three neighboring faces each acquired the same midpoint as the selected side. ufbx verified all three shared edges, 28 control points, 38 triangles, unchanged original positions, interpolated UVs and exact expected weights. A separate core case verified a subdivided GLB n-gon, a marked UV seam and interpolated morph deltas. Undo restored the originals and offline replay restored the changes for all three tools. The three skinned FBX exports matched their expected deformation over 21 clip samples in ufbx.
+
+### Reproduce
+
+```powershell
+$chrome = 'C:/Program Files/Google/Chrome/Application/chrome.exe'
+npm.cmd run build
+node tools/e03-fixture.mjs
+node tools/v1-plus-tools-core.mjs
+node tools/v1-plus-tools-browser.mjs $chrome
+python -B tools/v1-plus-tools-verify.py 2022.3.62f2 6000.3.9f1
+```
+
+Before running the Python verifier, compile the [ufbx inspector](E00_FBX_Round_Trip.md#reproduce-on-windows) and place `inspect_fbx.exe` under `test-results/v1-plus-tools/`. The browser runner serves the Release files through local Playwright responses. The verifier checks the exported geometry and builds the Unity comparison projects for `FbxProbe.Run`. Both reports and test assets are under `test-results/v1-plus-tools/`.

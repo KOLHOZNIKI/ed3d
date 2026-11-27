@@ -128,7 +128,7 @@ export function diagnose(uv: Float32Array, topDown: boolean) {
   return { ...result, overlaps: conflicts.size };
 }
 
-export function inspectLayout(uv: Float32Array, topDown: boolean) {
+export function inspectLayout(uv: Float32Array, topDown: boolean, affected?: ReadonlySet<number>) {
   const result = { outside: 0, degenerate: 0, flipped: 0 };
   const triangles: { box: Box; points: Pair[]; id: number }[] = [];
   for (let i = 0; i < uv.length / 2; i += 3) {
@@ -139,12 +139,12 @@ export function inspectLayout(uv: Float32Array, topDown: boolean) {
     if (topDown ? area > 0 : area < 0) result.flipped++;
     triangles.push({ box: bounds(uv, [i, i + 1, i + 2]), points: area < 0 ? points.reverse() : points, id: i / 3 });
   }
-  return { result, conflicts: findOverlaps(triangles) };
+  return { result, conflicts: findOverlaps(triangles, affected) };
 }
 
 type UvTriangle = { box: Box; points: Pair[]; id: number };
 
-function findOverlaps(triangles: UvTriangle[]) {
+function findOverlaps(triangles: UvTriangle[], affected?: ReadonlySet<number>) {
   const overlaps = new Set<number>();
   if (triangles.length < 2) return overlaps;
   const extent = triangles.reduce((box, entry) => mergeBox(box, entry.box), triangles[0].box);
@@ -178,7 +178,7 @@ function findOverlaps(triangles: UvTriangle[]) {
     }
   };
   for (const triangle of ordered) {
-    if (overlaps.has(triangle.id)) continue;
+    if (affected ? !affected.has(triangle.id) : overlaps.has(triangle.id)) continue;
     const other = visit(triangle, 1, 0, ordered.length);
     if (other !== undefined) { overlaps.add(triangle.id); overlaps.add(other); }
   }

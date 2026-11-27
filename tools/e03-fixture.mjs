@@ -27,7 +27,7 @@ function material(withMap) {
   return new MeshPhongMaterial({ name: 'Paintable', map });
 }
 
-function exportFixture(name, scene, withMap = true) {
+function exportFixture(name, scene, withMap = true, image = png) {
   let count = 0;
   scene.traverse(object => {
     for (const value of [object, object.geometry, object.material, object.material?.map].filter(Boolean)) {
@@ -40,7 +40,7 @@ function exportFixture(name, scene, withMap = true) {
     for (const entry of plan.textures?.textures.values() ?? []) entry.fileName = path;
   }).parseSync(scene, { preset: 'unity', axisForward: '-Z', unitScale: 100, embedTextures: false, bakeSpaceTransform: false });
   const files = { [`${name}.fbx`]: new Uint8Array(fbx) };
-  if (withMap) files[path] = png;
+  if (withMap) files[path] = image;
   return writeFile(`${directory}/${name}.zip`, zipSync(files, { mtime: new Date(2000, 0, 1) }));
 }
 
@@ -157,3 +157,53 @@ await exportFixture('flatten_selection_skinned', smoothRig);
 // A rigid rotation preserves the fitted plane of the symmetric raised-center grid.
 smoothSkin.geometry = projectedGrid(tilted, [-.8, .6, 0], .5 / flattenRegion.length);
 await exportFixture('flatten_reference_best', smoothRig);
+
+const gradient = pixels.slice();
+for (let row = 0; row < size; row++) for (let column = 0; column < size; column++) gradient[(row * size + column) * 4] = column * 2;
+const gradientPng = encode({ width: size, height: size, channels: 4, data: gradient });
+const relaxLayout = gridUvs.slice();
+relaxLayout.splice(14, 2, .49, .24);
+relaxLayout.splice(24, 2, .60, .52);
+
+function subdivideReference(source) {
+  const p = Array.from(source.getAttribute('position').array), uvs = Array.from(source.getAttribute('uv').array), indices = [];
+  const sourceTriangles = Array.from(source.index.array);
+  const edges = [[6, 11], [11, 7], [7, 6]];
+  for (const [a, b] of edges) {
+    for (let axis = 0; axis < 3; axis++) p.push((gridPoints[a * 3 + axis] + gridPoints[b * 3 + axis]) / 2);
+    for (let axis = 0; axis < 2; axis++) uvs.push((gridUvs[a * 2 + axis] + gridUvs[b * 2 + axis]) / 2);
+  }
+  for (let i = 0; i < sourceTriangles.length; i += 3) {
+    const triangle = sourceTriangles.slice(i, i + 3);
+    if (i / 3 === 10) { indices.push(6, 25, 27, 25, 11, 26, 27, 26, 7, 25, 26, 27); continue; }
+    const edge = edges.findIndex(pair => pair.every(id => triangle.includes(id)));
+    if (edge < 0) { indices.push(...triangle); continue; }
+    const j = triangle.findIndex((a, k) => edges[edge].includes(a) && edges[edge].includes(triangle[(k + 1) % 3]));
+    const first = triangle[j], second = triangle[(j + 1) % 3], opposite = triangle[(j + 2) % 3], middle = 25 + edge;
+    indices.push(first, middle, opposite, middle, second, opposite);
+  }
+  const result = geometry(p, indices, uvs);
+  if (source.hasAttribute('skinWeight')) {
+    const joints = gridJoints.slice(), weights = gridWeights.slice();
+    for (const [a, b] of edges) {
+      joints.push(0, 1, 0, 0);
+      weights.push(...[0, 1, 2, 3].map(k => (gridWeights[a * 4 + k] + gridWeights[b * 4 + k]) / 2));
+    }
+    result.setAttribute('skinIndex', new Uint16BufferAttribute(joints, 4));
+    result.setAttribute('skinWeight', new Float32BufferAttribute(weights, 4));
+  }
+  return result;
+}
+
+for (const [name, object, source] of [['static', smoothStatic, grid], ['skinned', smoothSkin, smoothGeometry]]) {
+  const scene = object.parent;
+  object.geometry = source.clone().setAttribute('uv', new Float32BufferAttribute(relaxLayout, 2));
+  await exportFixture(`relax_source_${name}`, scene, true, gradientPng);
+  object.geometry = source.clone();
+  const xyz = object.geometry.getAttribute('position');
+  for (const [id, offset] of [[11, .125], [12, 0], [13, -.125]]) xyz.setXYZ(id, xyz.getX(id) + offset, xyz.getY(id) + .0625, xyz.getZ(id));
+  object.geometry.computeVertexNormals();
+  await exportFixture(`mirror_reference_${name}`, scene);
+  object.geometry = subdivideReference(source);
+  await exportFixture(`subdivide_reference_${name}`, scene);
+}

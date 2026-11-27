@@ -56,6 +56,8 @@ In **Mesh Edit**, choose **Smooth Selection** and set the strength and iteration
 
 Use **Flatten Selection** to project the selected vertices onto a plane. Choose **Best Fit**, an object-local axis plane, or **Custom** with a normal and signed offset from the object origin. Edge and face selections use their vertices. [Flatten Selection workflow and checks](Docs/V1_Plus.md#flatten-selection)
 
+Use **Mirror Move** to translate one side while moving its matched partners along the reflected direction. Choose an object-local axis plane and match tolerance, then review the paired and skipped vertices in Preview. In Face mode, **Subdivide** refines the selected faces and updates neighboring edges to keep the surface joined. [Mirror Move and Subdivide workflows](Docs/V1_Plus.md#mirror-move-and-subdivide)
+
 Open **Repair** to inspect boundaries on the selected object. Mark intentional openings **Keep Open**. Choose **Planar Fill**, **Fan Fill**, or **Manual Face** for selected boundaries. **Auto Fill** previews a batch with edge, diameter, and planarity limits. Check the wireframe and the reason for each skipped contour before applying. The resulting faces can be selected for mesh editing or 3D Paint.
 
 Use **Smooth Fill** for a non-planar patch with a fixed rim. Set refinement passes and fairing iterations. **Grid Fill** creates quads between four automatically detected or entered corner vertex IDs. Opposite sides need the same segment counts. **Bridge** joins two boundaries or equal-length spans. The default pairing minimizes distance. Use offsets, twist, and segments to adjust the preview. **Edit new UVs** opens the UV Editor with the added faces selected.
@@ -63,6 +65,8 @@ Use **Smooth Fill** for a non-planar patch with a fixed rim. Set refinement pass
 Open **UV Editor** to select a material, map, and UV channel. Pick UV vertices, edges, faces, or islands in the grid or on the model. Drag to move the selection, use the transform handle for rotation and scaling, or enter numeric values. Use the wheel to zoom and middle-drag to pan. **Auto Unwrap** and **Pack Islands** write to the UV draft.
 
 To join a shared UV seam, choose **Edge** and **Stitch UV edge**. Click the side to keep fixed, then click **Update draft**. Review the result and apply it with **Change Mapping** or **Preserve Appearance**. The tool joins one shared edge at a time. [UV stitch workflow and results](Docs/UV_Stitch.md)
+
+Choose **UV Relax** to even out a selected UV region. Select UV vertices and click **Pin selected** to hold them in place, then select the region or island to relax. **Fix boundary** holds its outline. Use **Update draft** and apply the layout with **Preserve Appearance** to transfer the existing maps. [UV Relax workflow](Docs/V1_Plus.md#uv-relax)
 
 Choose **Change Mapping** to move UVs while keeping the images unchanged. Choose **Preserve Appearance** to transfer the current painted maps to the draft. You can also select **Original import** when the source corners still match. **Rebake and Apply** commits both the UVs and the new maps together. Use **Coverage** to inspect sampled texels and any repairs filled with neutral data. FBX exports put the baked layout in UV0 and retain the source layout in UV1. GLB exports bind the baked maps to the selected channel.
 

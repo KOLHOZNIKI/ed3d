@@ -10,6 +10,7 @@ import { applyWeightEdits } from '../weights/data';
 import { softWeights } from './soft-selection';
 import { smoothSelection } from './smooth-selection';
 import { flattenSelection } from './flatten-selection';
+import { mirrorMove, mirrorSummary } from './mirror';
 
 type VertexSource = readonly [vertex: number, factor: number];
 // Missing replacement entries keep their stable ID. Empty lists remove it from the source object.
@@ -29,6 +30,7 @@ interface MeshResult {
   topology?: TopologyChanges;
   influence?: ReadonlyMap<number, number>;
   smoothing?: { pinned: ReadonlySet<number>; changed: number };
+  mirror?: Pick<ReturnType<typeof mirrorMove>, 'pairs' | 'center' | 'skipped'>;
 }
 
 function topologyChange(source: MeshData, result: MeshResult, changes: Partial<TopologyChanges> = {}): MeshResult {
@@ -87,6 +89,12 @@ export function applyMeshEdit(mesh: MeshData, edit: MeshEdit): MeshResult {
       const { positions, changed } = flattenSelection(mesh, pickVertices(mesh, edit.vertices), edit.plane);
       return { mesh: deform(mesh, positions, changed) };
     }
+    case 'mirrorMove': {
+      const { positions, changed, ...mirror } = mirrorMove(mesh, pickVertices(mesh, edit.vertices), edit.value, edit.axis, edit.offset, edit.tolerance);
+      if (!changed.size) throw new Error(`Mirror Move has no vertices to move. ${mirrorSummary(mirror)}.`);
+      return { mesh: deform(mesh, positions, changed), mirror };
+    }
+    case 'subdivide': return subdivide(mesh, pickFaces(mesh, edit.faces));
     case 'delete': case 'separate': {
       const faces = pickFaces(mesh, edit.faces);
       if (faces.size === mesh.faces.length) throw new Error('Keep at least one face in the source object.');
@@ -154,7 +162,7 @@ function requireEdge(mesh: MeshData, key: string) {
   return sides;
 }
 
-function transform(mesh: MeshData, edit: Extract<MeshEdit, { vertices: number[]; value: readonly number[] }>): MeshResult {
+function transform(mesh: MeshData, edit: Extract<MeshEdit, { type: 'move' | 'rotate' | 'scale' | 'softTransform' }>): MeshResult {
   const vertices = pickVertices(mesh, edit.vertices);
   const mode = edit.type === 'softTransform' ? edit.mode : edit.type;
   const influence = edit.type === 'softTransform' ? softWeights(mesh, vertices, edit.soft) : undefined;
@@ -295,21 +303,102 @@ function splitEdge(mesh: MeshData, sides: Side[], fraction: number) {
     const other = next(face, corner), start = face.corners[corner], end = face.corners[other];
     if (affected.has(face.id)) throw new Error('An incident polygon uses this edge more than once.');
     const t = start.vertex === lo ? fraction : 1 - fraction;
-    const attributes = start.attributes.map((tuple, i) => {
-      const values = tuple.map((value, k) => value * (1 - t) + end.attributes[i][k] * t);
-      if (['normal', 'tangent'].includes(mesh.channels[i].name)) {
-        const normal = new Vector3(values[0], values[1], values[2]).normalize();
-        if (!normal.lengthSq()) return t < .5 ? tuple : end.attributes[i];
-        return values.length === 4 ? [...normal.toArray(), t < .5 ? tuple[3] : end.attributes[i][3]] : normal.toArray();
-      }
-      return values;
-    });
-    const insert = corner + 1;
-    const corners = [...face.corners.slice(0, insert), { vertex, attributes }, ...face.corners.slice(insert)];
-    const triangles = splitFanEdge(face, corner, other, insert);
-    affected.set(face.id, { ...face, corners, triangles });
+    affected.set(face.id, insertBoundaryCorner(mesh, face, corner, vertex, t));
   }
   return { ...mesh, positions, weights, faces: mesh.faces.map(face => affected.get(face.id) ?? face) };
+}
+
+function interpolateCorner(mesh: MeshData, a: Corner, b: Corner, vertex: number, t: number): Corner {
+  const attributes = a.attributes.map((tuple, i) => {
+    const end = b.attributes[i], values = tuple.map((value, k) => value * (1 - t) + end[k] * t);
+    if (mesh.channels[i].name !== 'normal' && mesh.channels[i].name !== 'tangent') return values;
+    const normal = new Vector3(values[0], values[1], values[2]).normalize();
+    if (!normal.lengthSq()) return t < .5 ? tuple : end;
+    return values.length === 4 ? [...normal.toArray(), t < .5 ? tuple[3] : end[3]] : normal.toArray();
+  });
+  return { vertex, attributes };
+}
+
+function insertBoundaryCorner(mesh: MeshData, face: Face, corner: number, vertex: number, t: number): Face {
+  const other = next(face, corner), insert = corner + 1;
+  const middle = interpolateCorner(mesh, face.corners[corner], face.corners[other], vertex, t);
+  return { ...face, corners: [...face.corners.slice(0, insert), middle, ...face.corners.slice(insert)],
+    triangles: splitFanEdge(face, corner, other, insert) };
+}
+
+function subdivide(mesh: MeshData, selected: ReadonlySet<number>): MeshResult {
+  if (!selected.size) throw new Error('Select faces to subdivide.');
+  const incident = edgesOf(mesh), midpoints = new Map<string, number>(), border = new Map<string, number>();
+  const vertexSources = new Map<number, readonly VertexSource[]>(), replacements = new Map<number, number[]>();
+  const splitSeams = new Map<string, string[]>(), firstVertex = mesh.positions.length / 3;
+  let nextFace = mesh.nextFace;
+  const middle = (a: Corner, b: Corner, face: Face, boundary: ReadonlySet<string>) => {
+    const edge = edgeKey(a.vertex, b.vertex), shared = boundary.has(edge);
+    const key = shared ? edge : `${face.id}:${edge}`;
+    let id = midpoints.get(key);
+    if (id === undefined) {
+      const sides = incident.get(edge);
+      if (shared && sides && (sides.length > 2 || new Set(sides.map(side => side.face.id)).size !== sides.length)) {
+        throw new Error('Subdivide cannot split an edge with invalid or non-manifold incidence.');
+      }
+      id = firstVertex + midpoints.size;
+      midpoints.set(key, id);
+      vertexSources.set(id, [[a.vertex, .5], [b.vertex, .5]]);
+      if (shared) border.set(edge, id);
+      const seams = splitSeams.get(edge) ?? [];
+      seams.push(edgeKey(a.vertex, id), edgeKey(b.vertex, id));
+      splitSeams.set(edge, seams);
+    }
+    return interpolateCorner(mesh, a, b, id, .5);
+  };
+  const children = new Map<number, Face[]>();
+  for (const face of mesh.faces) {
+    if (!selected.has(face.id)) continue;
+    const boundary = new Set(face.corners.map((corner, i) => edgeKey(corner.vertex, face.corners[next(face, i)].vertex)));
+    const refined: Face[] = [];
+    for (let i = 0; i < face.triangles.length; i += 3) {
+      const [a, b, c] = face.triangles.slice(i, i + 3).map(corner => face.corners[corner]);
+      const ab = middle(a, b, face, boundary), bc = middle(b, c, face, boundary), ca = middle(c, a, face, boundary);
+      for (const corners of [[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]]) {
+        refined.push({ ...face, id: refined.length ? nextFace++ : face.id, corners, triangles: [0, 1, 2] });
+      }
+    }
+    children.set(face.id, refined);
+    replacements.set(face.id, refined.map(child => child.id));
+  }
+
+  const transitions = new Map<number, Face>();
+  for (const [edge, id] of border) for (const side of incident.get(edge) ?? []) {
+    if (selected.has(side.face.id)) continue;
+    const face = transitions.get(side.face.id) ?? side.face;
+    const corner = face.corners.findIndex((a, i) => edgeKey(a.vertex, face.corners[next(face, i)].vertex) === edge);
+    if (corner < 0) throw new Error('Subdivide could not update a neighboring polygon.');
+    transitions.set(face.id, insertBoundaryCorner(mesh, face, corner, id, .5));
+  }
+  const positions = new Float64Array(mesh.positions.length + midpoints.size * 3);
+  positions.set(mesh.positions);
+  const weights = mesh.weights?.slice();
+  for (const [id, [[a], [b]]] of vertexSources) {
+    vector(mesh, a).lerp(vector(mesh, b), .5).toArray(positions, id * 3);
+    weights?.push(mixWeights(mesh, [a, b], [.5, .5]));
+  }
+  const faces = mesh.faces.flatMap(face => children.get(face.id) ?? [transitions.get(face.id) ?? face]);
+  const result = { ...mesh, positions, weights, faces, nextFace };
+  if (mesh.uvSeams) {
+    const remaining = new Set<string>();
+    for (const face of faces) for (const [i, corner] of face.triangles.entries()) {
+      const adjacent = face.triangles[i % 3 === 2 ? i - 2 : i + 1];
+      const edge = edgeKey(face.corners[corner].vertex, face.corners[adjacent].vertex);
+      if (splitSeams.has(edge)) remaining.add(edge);
+    }
+    result.uvSeams = Object.fromEntries(Object.entries(mesh.uvSeams).map(([channel, seams]) => [channel, [...new Set(seams.flatMap(edge => {
+      const split = splitSeams.get(edge);
+      return split ? remaining.has(edge) ? [edge, ...split] : split : [edge];
+    }))]]));
+  }
+  for (const face of [...children.values()].flat().concat([...transitions.values()])) requireTriangles(result, face);
+  const edges = new Map([...border].map(([key, vertex]) => [key, edgeVertices(key).map(end => edgeKey(end, vertex))]));
+  return topologyChange(mesh, { mesh: result }, { vertices: new Map(), edges, faces: replacements, vertexSources });
 }
 
 function splitFanEdge(face: Face, a: number, b: number, insert: number) {

@@ -9,13 +9,14 @@ import { falloffs, type SoftSelection } from './soft-selection';
 import { connected, edgesOf, edgeKey, edgeVertices, usedVertices, verticesOf, type Face, type Kind, type MeshData, type Vec3 } from './data';
 import { applyMeshEdit, center } from './edit';
 import { faceNormal, vector } from './polygon';
+import { mirrorSummary } from './mirror';
 
 const ui = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(`mesh-${id}`)! as T;
 const choice = (id: string) => ui<HTMLSelectElement>(id).value;
 const number = (id: string) => ui<HTMLInputElement>(id).valueAsNumber;
 const toggle = (id: string) => ui<HTMLInputElement>(id).checked;
 const xyz = ['x', 'y', 'z'] as const;
-const transforms = new Set<MeshEdit['type']>(['move', 'rotate', 'scale']);
+const transforms = new Set<MeshEdit['type']>(['move', 'rotate', 'scale', 'mirrorMove']);
 
 interface Context {
   adapter: ModelAdapter;
@@ -55,7 +56,8 @@ export class MeshTool {
       this.#syncFields();
     });
     for (const name of [...xyz, 'axis', 'pivot', 'material', 'project', 'weld-mode', 'tolerance', 'fraction', 'soft', 'soft-radius', 'soft-falloff',
-      'smooth-strength', 'smooth-iterations', 'smooth-boundary', 'flatten-plane', 'flatten-offset', 'flatten-nx', 'flatten-ny', 'flatten-nz']) {
+      'smooth-strength', 'smooth-iterations', 'smooth-boundary', 'flatten-plane', 'flatten-offset', 'flatten-nx', 'flatten-ny', 'flatten-nz',
+      'mirror-axis', 'mirror-offset', 'mirror-tolerance']) {
       ui(name).addEventListener('input', () => this.#cancel());
     }
     ui('connected').addEventListener('click', () => this.#selectConnected());
@@ -224,6 +226,8 @@ export class MeshTool {
         [0, 1, 2].some(k => data.positions[3 * vertex + k] !== geometry.mesh.positions[3 * vertex + k]))).length;
       const warning = edit.type === 'create' && !edit.project ? ' New face requires UV unwrapping.' : '';
       const detail = geometry.smoothing ? ` · ${geometry.smoothing.changed} moved · ${geometry.smoothing.pinned.size} pinned boundary vertices`
+        : geometry.mirror ? ` · ${mirrorSummary(geometry.mirror)}`
+        : edit.type === 'subdivide' ? ` · ${geometry.mesh.positions.length / 3 - data.positions.length / 3} new vertices`
         : edit.type === 'flattenSelection' ? ` · ${edit.vertices.length} vertices on the ${edit.plane.mode === 'bestFit' ? 'best-fit' : 'specified'} plane`
         : edit.type === 'softTransform' && geometry.influence ? ` · ${geometry.influence.size - edit.vertices.length} neighboring vertices in radius` : '';
       this.#say(`Preview · ${affected} existing faces affected · ${data.faces.length} → ${after} faces${geometry.piece ? ` + ${geometry.piece.faces.length} in the new object` : ''}${detail}.${warning}`);
@@ -262,13 +266,15 @@ export class MeshTool {
       return this.#selection.edge[0];
     };
     switch (type) {
-      case 'move': case 'rotate': case 'scale': {
+      case 'move': case 'rotate': case 'scale': case 'mirrorMove': {
         const vertices = this.#selectedVertices();
         if (!vertices.length) throw new Error('Select vertices, edges or faces to transform.');
         const axis = choice('axis').toLowerCase();
         const value = xyz.map(key => axis && key !== axis ? Number(type === 'scale') : number(key)) as unknown as Vec3;
         if (!value.every(Number.isFinite)) throw new Error('Enter finite values for all axes.');
         const input = { object, vertices, value, pivot: choice('pivot') ? [0, 0, 0] as const : undefined };
+        if (type === 'mirrorMove') return { type, object, vertices, value, axis: Number(choice('mirror-axis')),
+          offset: number('mirror-offset'), tolerance: number('mirror-tolerance') };
         if (!toggle('soft')) return { type, ...input };
         const radius = number('soft-radius'), falloff = choice('soft-falloff') as SoftSelection['falloff'];
         if (!(radius > 0) || !Number.isFinite(radius) || !falloffs.includes(falloff)) throw new Error('Choose a positive Soft Selection radius and a supported falloff.');
@@ -285,6 +291,9 @@ export class MeshTool {
         const normal = (plane === 'custom' ? xyz.map(axis => number(`flatten-n${axis}`)) : xyz.map(axis => Number(axis === plane))) as unknown as Vec3;
         return { type, object, vertices, plane: { mode: 'specified', normal, offset: number('flatten-offset') } };
       }
+      case 'subdivide':
+        if (this.#kind.value !== 'face' || !this.#selection.face.length) throw new Error('Select faces to subdivide.');
+        return { type, object, faces: [...this.#selection.face] };
       case 'create':
         if (vertices.length < 3) throw new Error('Select three or more vertices in contour order.');
         return { type, object, vertices: [...vertices], material: Number(choice('material')), project: toggle('project') };
@@ -315,7 +324,8 @@ export class MeshTool {
   #syncFields() {
     const type = choice('operation') as MeshEdit['type'];
     const plane = choice('flatten-plane');
-    const fields = { transform: transforms.has(type), 'soft-options': toggle('soft'), smooth: type === 'smoothSelection',
+    const fields = { transform: transforms.has(type), 'soft-toggle': type !== 'mirrorMove', 'soft-options': type !== 'mirrorMove' && toggle('soft'),
+      mirror: type === 'mirrorMove', smooth: type === 'smoothSelection',
       flatten: type === 'flattenSelection', 'flatten-custom': plane === 'custom', 'flatten-offset-field': plane !== 'bestFit',
       create: type === 'create', weld: type === 'weld', split: type === 'splitEdge' };
     for (const [id, show] of Object.entries(fields)) ui(id).hidden = !show;
@@ -507,7 +517,7 @@ export class MeshTool {
     this.#handle.position.copy(mesh.localToWorld(pivot));
     mesh.getWorldQuaternion(this.#handle.quaternion);
     this.#handle.scale.setScalar(1);
-    gizmo.setMode(mode === 'move' ? 'translate' : mode as 'rotate' | 'scale');
+    gizmo.setMode(mode === 'move' || mode === 'mirrorMove' ? 'translate' : mode as 'rotate' | 'scale');
     const axis = choice('axis');
     gizmo.showX = !axis || axis === 'X';
     gizmo.showY = !axis || axis === 'Y';
@@ -520,7 +530,7 @@ export class MeshTool {
     if (!mesh || !data) return;
     const type = this.#operation.value;
     const pivot = choice('pivot') ? new Vector3() : center(data, this.#selectedVertices());
-    const values = type === 'move' ? mesh.worldToLocal(this.#handle.position.clone()).sub(pivot).toArray()
+    const values = type === 'move' || type === 'mirrorMove' ? mesh.worldToLocal(this.#handle.position.clone()).sub(pivot).toArray()
       : type === 'scale' ? this.#handle.scale.toArray()
       : new Euler().setFromQuaternion(mesh.getWorldQuaternion(new Quaternion()).invert().multiply(this.#handle.quaternion))
         .toArray().slice(0, 3).map(value => Number(value) * 180 / Math.PI);

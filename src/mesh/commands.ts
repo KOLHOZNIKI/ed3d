@@ -12,6 +12,8 @@ export type MeshEdit = { object: string } & (
   (TransformInput & ({ type: TransformMode } | { type: 'softTransform'; mode: TransformMode; soft: SoftSelection })) |
   ({ type: 'smoothSelection'; settings: SmoothSelectionSettings } & ({ faces: number[]; vertices?: never } | { vertices: number[]; faces?: never })) |
   { type: 'flattenSelection'; vertices: number[]; plane: FlattenPlane } |
+  { type: 'mirrorMove'; vertices: number[]; value: Vec3; axis: number; offset: number; tolerance: number } |
+  { type: 'subdivide'; faces: number[] } |
   { type: 'delete' | 'recalculate' | 'flipNormals'; faces: number[] } |
   { type: 'separate'; faces: number[]; piece: string } |
   { type: 'extract'; faces: number[]; piece: string; cut: boolean; pivot: Vec3; rotation: Vec3; scale: number } |
@@ -25,7 +27,7 @@ export type MeshEdit = { object: string } & (
   { type: 'uv'; channel: number; coordinates: number[]; seams: string[]; suppliesTexture?: true }
 );
 
-const names = new Set(['move', 'rotate', 'scale', 'softTransform', 'smoothSelection', 'flattenSelection', 'delete', 'recalculate', 'flipNormals', 'separate',
+const names = new Set(['move', 'rotate', 'scale', 'softTransform', 'smoothSelection', 'flattenSelection', 'mirrorMove', 'subdivide', 'delete', 'recalculate', 'flipNormals', 'separate',
   'create', 'weld', 'splitEdge', 'splitFace', 'dissolve', 'flipEdge', 'repair', 'uv', 'extract', 'weights']);
 const encoder = new TextEncoder(), decoder = new TextDecoder('utf-8', { fatal: true });
 const types = new WeakMap<Uint8Array, MeshEdit['type']>();
@@ -71,7 +73,10 @@ export function decodeEdit(data: Uint8Array) {
         vec(plane.normal) && (plane.normal as number[]).some(value => value !== 0) && Number.isFinite(plane.offset));
       break;
     }
-    case 'delete': case 'recalculate': case 'flipNormals':
+    case 'mirrorMove':
+      valid = indices(o.vertices, 1) && vec(o.value) && index(o.axis) && Number(o.axis) <= 2 && Number.isFinite(o.offset) &&
+        Number.isFinite(o.tolerance) && Number(o.tolerance) > 1e-8; break;
+    case 'delete': case 'recalculate': case 'flipNormals': case 'subdivide':
       valid = indices(o.faces, 1); break;
     case 'separate':
       valid = indices(o.faces, 1) && id(o.piece) && o.piece !== o.object; break;

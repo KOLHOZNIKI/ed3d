@@ -1056,15 +1056,46 @@ static bool e05_mesh_report(char **paths)
 
 int main(int argc, char **argv)
 {
-    if (argc == 3 && strcmp(argv[1], "--points") == 0) {
+    const bool mesh_data = argc == 3 && strcmp(argv[1], "--mesh-data") == 0;
+    if (mesh_data || (argc == 3 && strcmp(argv[1], "--points") == 0)) {
         ufbx_scene *scene = load(argv[2], 1);
         const ufbx_mesh *mesh = scene->meshes.data[0];
+        if (mesh_data) fputs("{\"points\":", stdout);
         putchar('[');
         for (size_t i = 0; i < mesh->num_vertices; i++) {
             const ufbx_vec3 p = mesh->vertices.data[i];
             printf("%s[%.17g,%.17g,%.17g]", i ? "," : "", p.x, p.y, p.z);
         }
-        puts("]");
+        putchar(']');
+        if (mesh_data) {
+            fputs(",\"polygons\":[", stdout);
+            for (size_t i = 0; i < mesh->num_faces; i++) {
+                const ufbx_face face = mesh->faces.data[i];
+                printf("%s[", i ? "," : "");
+                for (size_t c = 0; c < face.num_indices; c++) printf("%s%u", c ? "," : "", mesh->vertex_indices.data[face.index_begin + c]);
+                putchar(']');
+            }
+            fputs("],\"uv\":[", stdout);
+            if (mesh->vertex_uv.exists) for (size_t i = 0; i < mesh->num_indices; i++) {
+                const ufbx_vec2 uv = ufbx_get_vertex_vec2(&mesh->vertex_uv, i);
+                printf("%s[%.17g,%.17g]", i ? "," : "", uv.x, uv.y);
+            }
+            fputs("],\"weights\":[", stdout);
+            if (mesh->skin_deformers.count) {
+                const ufbx_skin_deformer *skin = mesh->skin_deformers.data[0];
+                for (size_t i = 0; i < skin->vertices.count; i++) {
+                    const ufbx_skin_vertex vertex = skin->vertices.data[i];
+                    printf("%s[", i ? "," : "");
+                    for (size_t w = 0; w < vertex.num_weights; w++) {
+                        const ufbx_skin_weight weight = skin->weights.data[vertex.weight_begin + w];
+                        printf("%s[%u,%.17g]", w ? "," : "", weight.cluster_index, weight.weight);
+                    }
+                    putchar(']');
+                }
+            }
+            fputs("]}", stdout);
+        }
+        putchar('\n');
         ufbx_free_scene(scene);
         return 0;
     }
@@ -1090,7 +1121,8 @@ int main(int argc, char **argv)
     const bool rig = argc == 4 && (!strcmp(argv[3], "--rig-moved") || !strcmp(argv[3], "--rig-renamed") || !strcmp(argv[3], "--rig-deleted"));
     const bool weight = argc == 4 && (!strcmp(argv[3], "--weight-stroke") || !strcmp(argv[3], "--weight-wide"));
     const bool stitch = argc == 4 && strcmp(argv[3], "--uv-stitch") == 0;
-    if (argc != 3 && argc != 5 && !shared && !rig && !weight && !stitch && !check_clip_extrema) {
+    const bool points_only = argc == 4 && strcmp(argv[3], "--same-points") == 0;
+    if (argc != 3 && argc != 5 && !shared && !rig && !weight && !stitch && !check_clip_extrema && !points_only) {
         fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx [--shared-skin | --selected-skin | --clip-extrema | --rig-moved | --rig-renamed | --rig-deleted | --weight-stroke | --weight-wide | --uv-stitch | control-point offset-y | --seams offset-y | --atlas source-corners.bin | --baked source-corners.bin | --smooth center | --grid center | --soft-move radius]\n");
         return 2;
     }
@@ -1132,6 +1164,20 @@ int main(int argc, char **argv)
     stats(exported);
 
     const ufbx_mesh *a = original->meshes.data[0], *b = exported->meshes.data[0];
+    if (points_only) {
+        double max_error = 0;
+        const bool same_count = a->num_vertices == b->num_vertices;
+        if (same_count) for (size_t i = 0; i < a->num_vertices; i++) {
+            max_error = fmax(max_error, point_distance(a->vertices.data[i], b->vertices.data[i]));
+        }
+        const bool weights_match = same_count && same_skin_weights(a, b);
+        printf(",\"maxPointError\":%.9g,\"sameSourceSkinWeights\":%s", max_error, weights_match ? "true" : "false");
+        const bool animation = weights_match && compare_clips(original, exported, a, b);
+        puts("}");
+        ufbx_free_scene(exported);
+        ufbx_free_scene(original);
+        return same_count && max_error <= 1e-9 && weights_match && animation ? 0 : 1;
+    }
     if (soft) {
         char *end;
         const double radius = strtod(argv[4], &end);

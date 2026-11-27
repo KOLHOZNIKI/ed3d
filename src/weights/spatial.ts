@@ -1,6 +1,7 @@
 import { Matrix4, Triangle, Vector3 } from 'three';
 import { spatialProjection } from '../e00/projection-rays';
 import { point, usedVertices, type MeshData } from '../mesh/data';
+import { matchMirroredPoints } from '../mesh/mirror';
 import { jointId, type Row } from './data';
 import { blend } from './operations';
 
@@ -33,33 +34,7 @@ function points(data: MeshData, matrix: Matrix4) {
 }
 
 export function mirrorMatches(data: MeshData, matrix: Matrix4, axis: number, offset: number, tolerance: number) {
-  if (!Number.isFinite(offset) || !Number.isInteger(axis) || axis < 0 || axis > 2 || !(tolerance > 1e-8 && Number.isFinite(tolerance))) {
-    throw new Error('Choose a finite plane offset and a tolerance greater than 0.00000001.');
-  }
-  const world = points(data, matrix), cells = new Map<string, number[]>();
-  const cell = (p: Vector3) => p.toArray().map(v => Math.floor(v / tolerance));
-  for (const [id, p] of world) {
-    const key = cell(p).join('/'), list = cells.get(key) ?? [];
-    list.push(id); cells.set(key, list);
-  }
-  const matches = new Map<number, number[]>();
-  for (const [id, p] of world) {
-    const reflected = p.clone().setComponent(axis, 2 * offset - p.getComponent(axis));
-    const [x, y, z] = cell(reflected), candidates: number[] = [];
-    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
-      for (const peer of cells.get(`${x + dx}/${y + dy}/${z + dz}`) ?? []) {
-        if (reflected.distanceToSquared(world.get(peer)!) <= tolerance ** 2) candidates.push(peer);
-      }
-    }
-    matches.set(id, candidates);
-  }
-  return (id: number) => {
-    const candidates = matches.get(id)!;
-    if (!candidates.length) return { issue: 'No mirror match' } as const;
-    const [other] = candidates, back = matches.get(other)!;
-    if (candidates.length !== 1 || back.length !== 1 || back[0] !== id) return { issue: 'Ambiguous mirror match' } as const;
-    return { other } as const;
-  };
+  return matchMirroredPoints(points(data, matrix), axis, offset, tolerance);
 }
 
 export interface Snapshot {

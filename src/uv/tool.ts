@@ -9,6 +9,7 @@ import { bounds, cross, density, diagnose, editUv, groups, planar, read, type La
 import { pack, type PackOptions } from './pack';
 import { autoUnwrap, currentLayout, uvName, uvSurface } from './surface';
 import { stitchEdge, type EdgeSide } from './stitch';
+import { relaxUv } from './relax';
 import type { TransferOptions } from './transfer';
 import { faceComponents } from '../e00/topology-components';
 import type { SpatialOptions } from './spatial';
@@ -62,6 +63,7 @@ export class UvTool {
   #surface?: Surface;
   #base = new Map<number, Layout>();
   #draft = new Map<number, Layout>();
+  #pins = new Map<number, Set<number>>();
   #target?: TextureTarget;
   #map?: HTMLCanvasElement;
   #coverage?: HTMLCanvasElement;
@@ -104,6 +106,9 @@ export class UvTool {
     });
     ui('clear-selection').addEventListener('click', () => { this.#selection.clear(); this.#edge = undefined; this.#update(); });
     ui('run').addEventListener('click', () => this.#operation());
+    ui('pin').addEventListener('click', () => this.#changePins(true));
+    ui('unpin').addEventListener('click', () => this.#changePins(false));
+    ui('clear-pins').addEventListener('click', () => { this.#pins.delete(this.#channel); this.#update(); });
     ui('pack').addEventListener('click', () => this.#pack());
     ui('unwrap').addEventListener('click', () => void this.#unwrap());
     ui('apply').addEventListener('click', () => void this.#apply());
@@ -158,6 +163,7 @@ export class UvTool {
     if (old?.adapter === context?.adapter && old?.object === context?.object && old?.revision === context?.revision) return;
     this.#base.clear();
     this.#draft.clear();
+    this.#pins.clear();
     this.#lastLayout = undefined;
     this.#selection.clear();
     this.#edge = undefined;
@@ -347,6 +353,27 @@ export class UvTool {
     }
     ui<HTMLSelectElement>('plane').disabled = operation !== 'planar';
     ui('stitch-hint').hidden = operation !== 'stitch';
+    ui('relax-options').hidden = operation !== 'relax';
+    const pins = this.#pins.get(this.#channel);
+    ui<HTMLButtonElement>('pin').disabled = !this.#groups || !this.#selection.size;
+    ui<HTMLButtonElement>('unpin').disabled = !pins?.size || ![...this.#selection].some(i => pins.has(i));
+    ui<HTMLButtonElement>('clear-pins').disabled = !pins?.size;
+    ui('pin-controls').hidden = !pins?.size;
+    const notice = ui('pin-status');
+    notice.hidden = !pins?.size;
+    const count = pins?.size && this.#groups ? new Set([...pins].map(this.#groups.vertexOf)).size : 0;
+    notice.textContent = count ? `${count} pinned UV vertices. Packing keeps their islands fixed. Clear pins before Auto Unwrap.` : '';
+  }
+
+  #changePins(add: boolean) {
+    if (!this.#groups) return;
+    const pins = this.#pins.get(this.#channel) ?? new Set<number>();
+    for (const id of new Set([...this.#selection].map(this.#groups.vertexOf))) for (const i of this.#groups.vertices.get(id) ?? []) {
+      if (add) pins.add(i);
+      else pins.delete(i);
+    }
+    this.#pins.set(this.#channel, pins);
+    this.#update();
   }
 
   #operation() {
@@ -355,6 +382,13 @@ export class UvTool {
     try {
       if (!this.#selection.size) throw new Error('Select UV vertices, edges, faces or islands.');
       const op = choice('operation');
+      if (op === 'relax') {
+        const result = relaxUv(surface, layout, this.#groups!, this.#selection, this.#pins.get(this.#channel) ?? new Set(),
+          { strength: number('relax-strength'), iterations: number('relax-iterations'), fixBoundary: checked('relax-boundary') });
+        this.#set(result.layout);
+        this.#say(`UV draft. Relaxed ${result.moved} UV vertices. ${result.fixed} fixed vertices.`);
+        return;
+      }
       if (op === 'stitch') {
         const edge = this.#edge, grouping = this.#groups;
         if (choice('kind') !== 'edge' || !edge || !grouping) throw new Error('Select one UV edge on the side to keep fixed.');
@@ -422,7 +456,14 @@ export class UvTool {
     const layout = this.#layout, surface = this.#surface;
     if (!layout || !surface) return;
     try {
-      const selected = checked('selected-only') ? new Set([...this.#selection].map(i => this.#groups!.islandOf(i))) : undefined;
+      const pins = this.#pins.get(this.#channel);
+      const pinnedIslands = pins?.size ? new Set([...pins].map(this.#groups!.islandOf)) : undefined;
+      const selected = checked('selected-only') ? new Set([...this.#selection].map(i => this.#groups!.islandOf(i)))
+        : pinnedIslands ? new Set(this.#groups!.islands.keys()) : undefined;
+      if (pinnedIslands && selected) {
+        for (const id of pinnedIslands) selected.delete(id);
+        if (!selected.size) throw new Error('Select an unpinned island to pack or clear pins.');
+      }
       this.#set(pack(surface, layout, this.#options(), selected));
       this.#fit(false);
     } catch (error) { this.#say(error); }
@@ -432,6 +473,7 @@ export class UvTool {
     const layout = this.#layout, surface = this.#surface, context = this.#context;
     if (!layout || !surface || !context) return;
     try {
+      if (this.#pins.get(this.#channel)?.size) throw new Error('Auto Unwrap cannot respect pins. Clear pins first.');
       const options = this.#options(), scope = checked('selected-only') ? this.#faces(this.#selection) : undefined;
       const next = await this.actions.run(signal => autoUnwrap(surface, layout, options, this.#topDown, scope, signal));
       if (next && this.#context?.revision === context.revision && this.#context?.object === context.object) {
@@ -479,6 +521,7 @@ export class UvTool {
 
   #cancel() {
     this.#draft.delete(this.#channel);
+    this.#pins.delete(this.#channel);
     this.#selection.clear();
     this.#edge = undefined;
     this.#update();
@@ -769,6 +812,14 @@ export class UvTool {
       for (const i of this.#selection) {
         const [x, y] = this.#project(read(layout.uv, i));
         if (x >= -2 && x <= width + 2 && y >= -2 && y <= height + 2) ctx.fillRect(x - 2, y - 2, 4, 4);
+      }
+    }
+    const pins = this.#pins.get(this.#channel);
+    if (pins?.size && this.#groups) {
+      ctx.fillStyle = '#ffbe57';
+      for (const id of new Set([...pins].map(this.#groups.vertexOf))) {
+        const [x, y] = this.#project(read(layout.uv, id));
+        if (x >= -4 && x <= width + 4 && y >= -4 && y <= height + 4) ctx.fillRect(x - 3, y - 3, 6, 6);
       }
     }
     const control = this.#handle(this.#gesture?.base ?? layout);

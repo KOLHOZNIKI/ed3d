@@ -241,6 +241,7 @@
                   <option value="pixel">Snap to pixels</option><option value="vertex">Snap to nearest vertex</option><option value="boundary">Snap to tile edge</option>
                   <option value="cut">Mark seam</option><option value="uncut">Clear seam</option>
                   <option value="stitch">Stitch UV edge</option><option value="planar">Planar projection</option>
+                  <option value="relax">UV Relax</option>
                 </select>
                 <label for="uv-u" id="uv-u-label">U</label><input id="uv-u" type="number" value="0" step="any" />
                 <label for="uv-v" id="uv-v-label">V</label><input id="uv-v" type="number" value="0" step="any" />
@@ -249,6 +250,15 @@
                 <button id="uv-run" type="button">Update draft</button>
               </div>
               <p id="uv-stitch-hint" hidden>In Edge mode, pick the side of the seam you want to keep fixed.</p>
+              <div id="uv-relax-options" class="actions" hidden>
+                <label>Strength <input id="uv-relax-strength" type="number" min="0" max="1" step="0.05" value="0.5" /></label>
+                <label>Iterations <input id="uv-relax-iterations" type="number" min="1" max="50" value="5" /></label>
+                <label><input id="uv-relax-boundary" type="checkbox" checked /> Fix boundary</label>
+                <button id="uv-pin" type="button">Pin selected</button><button id="uv-unpin" type="button">Unpin selected</button>
+              </div>
+              <div class="actions" id="uv-pin-controls" hidden>
+                <span id="uv-pin-status"></span><button id="uv-clear-pins" type="button">Clear pins</button>
+              </div>
               <div class="actions">
                 <label for="uv-size">Atlas size</label><select id="uv-size"><option>256</option><option>512</option><option selected>1024</option><option>2048</option><option>4096</option></select>
                 <label for="uv-padding">Padding (px)</label><input id="uv-padding" type="number" value="4" min="0" max="64" />
@@ -489,6 +499,7 @@
                   <option value="move">Move</option><option value="rotate">Rotate</option><option value="scale">Scale</option>
                   <option value="smoothSelection">Smooth Selection</option>
                   <option value="flattenSelection">Flatten Selection</option>
+                  <option value="mirrorMove">Mirror Move</option><option value="subdivide">Subdivide</option>
                   <option value="create">Create Face</option><option value="splitEdge">Split Edge</option><option value="splitFace">Split Face</option>
                   <option value="weld">Weld</option><option value="flipEdge">Flip Edge</option><option value="dissolve">Dissolve Edge</option>
                   <option value="flipNormals">Flip Normals</option><option value="recalculate">Recalculate Normals</option>
@@ -501,7 +512,7 @@
                 <label for="mesh-z">Z</label><input id="mesh-z" type="number" value="0" step="any" />
                 <label for="mesh-axis">Axis</label><select id="mesh-axis"><option value="">All</option><option>X</option><option>Y</option><option>Z</option></select>
                 <label for="mesh-pivot">Pivot</label><select id="mesh-pivot"><option value="">Selection center</option><option value="origin">Object origin</option></select>
-                <label><input id="mesh-soft" type="checkbox" /> Soft Selection</label>
+                <label id="mesh-soft-toggle"><input id="mesh-soft" type="checkbox" /> Soft Selection</label>
                 <span class="actions" id="mesh-soft-options" hidden>
                   <label for="mesh-soft-radius">Radius (local units)</label><input id="mesh-soft-radius" type="number" value="1" min="0" step="any" />
                   <label for="mesh-soft-falloff">Falloff</label><select id="mesh-soft-falloff"><option value="smooth">Smooth</option><option value="linear">Linear</option><option value="sharp">Sharp</option></select>
@@ -511,6 +522,11 @@
                 <label for="mesh-smooth-strength">Strength</label><input id="mesh-smooth-strength" type="number" min="0" max="1" step="0.05" value="0.5" />
                 <label for="mesh-smooth-iterations">Iterations</label><input id="mesh-smooth-iterations" type="number" min="1" max="50" step="1" value="1" />
                 <label><input id="mesh-smooth-boundary" type="checkbox" checked /> Fix boundary</label>
+              </div>
+              <div class="actions" id="mesh-mirror" hidden>
+                <label>Plane normal <select id="mesh-mirror-axis"><option value="0">X</option><option value="1">Y</option><option value="2">Z</option></select></label>
+                <label>Plane offset <input id="mesh-mirror-offset" type="number" value="0" step="any" /></label>
+                <label>Match tolerance <input id="mesh-mirror-tolerance" type="number" min="0" value="0.001" step="any" /></label>
               </div>
               <div class="actions" id="mesh-flatten" hidden>
                 <label for="mesh-flatten-plane">Plane</label>
