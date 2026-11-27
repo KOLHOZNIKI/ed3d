@@ -4,7 +4,7 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import type { Viewer } from '../project/viewer';
 import type { ModelAdapter } from '../project/adapter';
 import type { MeshEdit } from './commands';
-import { connected, edgesOf, edgeKey, edgeVertices, verticesOf, type Face, type Kind, type MeshData, type Vec3 } from './data';
+import { connected, edgesOf, edgeKey, edgeVertices, usedVertices, verticesOf, type Face, type Kind, type MeshData, type Vec3 } from './data';
 import { applyMeshEdit, center } from './edit';
 import { faceNormal, vector } from './polygon';
 
@@ -55,6 +55,20 @@ export class MeshTool {
       ui(name).addEventListener('input', () => this.#cancel());
     }
     ui('connected').addEventListener('click', () => this.#selectConnected());
+    for (const mode of ['all', 'none', 'invert'] as const) {
+      ui(`select-${mode}`).addEventListener('click', () => this.#selectElements(mode));
+    }
+    ui('select-boundary').addEventListener('click', () => {
+      if (!this.#data) return;
+      this.#kind.value = 'edge';
+      this.#selection.edge = [...edgesOf(this.#data)].filter(([, sides]) => sides.length === 1).map(([key]) => key);
+      this.#selectionChanged();
+    });
+    ui('select-material').addEventListener('click', () => {
+      if (!this.#data) return;
+      const slot = Number(choice('selection-material'));
+      this.selectFaces(this.#data.faces.filter(face => face.material === slot).map(face => face.id));
+    });
     ui('winding').addEventListener('click', () => {
       this.#selection.vertex.reverse();
       this.#selectionChanged();
@@ -120,10 +134,11 @@ export class MeshTool {
           this.#selection = { vertex: this.#selection.vertex.filter(id => live.has(id)), edge: this.#selection.edge.filter(id => edge.has(id)),
             face: this.#selection.face.filter(id => faces.has(id)) };
           const materials = Array.isArray(node.material) ? node.material : [node.material];
-          const picker = ui<HTMLSelectElement>('material');
-          const previous = picker.value;
-          picker.replaceChildren(...materials.map((material, i) => new Option(material.name || `Material ${i + 1}`, String(i))));
-          if ([...picker.options].some(option => option.value === previous)) picker.value = previous;
+          for (const name of ['material', 'selection-material']) {
+            const picker = ui<HTMLSelectElement>(name), previous = picker.value;
+            picker.replaceChildren(...materials.map((material, i) => new Option(material.name || `Material ${i + 1}`, String(i))));
+            if ([...picker.options].some(option => option.value === previous)) picker.value = previous;
+          }
           this.#summary();
         } catch (error) { this.#say(error instanceof Error ? error.message : String(error)); }
       }
@@ -262,6 +277,8 @@ export class MeshTool {
     const ok = !!this.#data && !this.#locked;
     ui<HTMLButtonElement>('preview').disabled = !ok;
     ui<HTMLButtonElement>('connected').disabled = !ok;
+    for (const name of ['select-all', 'select-none', 'select-invert', 'select-boundary', 'select-material']) ui<HTMLButtonElement>(name).disabled = !ok;
+    ui<HTMLSelectElement>('selection-material').disabled = !ok;
     ui<HTMLButtonElement>('apply').disabled = !ok || !this.#preview;
     ui<HTMLButtonElement>('cancel').disabled = !ok || !this.#preview;
     this.#ids.disabled = !ok;
@@ -288,6 +305,18 @@ export class MeshTool {
     const faces = connected(this.#data, this.#selectedFaces());
     this.#kind.value = 'face';
     this.#selection.face = [...faces];
+    this.#selectionChanged();
+  }
+
+  #selectElements(mode: 'all' | 'none' | 'invert') {
+    const data = this.#data;
+    if (!data) return;
+    const omitted = new Set<number | string>(mode === 'invert' ? this.#currentSelection() : []);
+    const select = <T extends number | string>(ids: Iterable<T>) => mode === 'none' ? [] : [...ids].filter(id => !omitted.has(id));
+    const kind = this.#kind.value;
+    if (kind === 'vertex') this.#selection.vertex = select(usedVertices(data.faces));
+    else if (kind === 'edge') this.#selection.edge = select(edgesOf(data).keys());
+    else this.#selection.face = select(data.faces.map(face => face.id));
     this.#selectionChanged();
   }
 

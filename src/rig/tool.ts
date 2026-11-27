@@ -40,7 +40,7 @@ export class RigTool {
 
   constructor(readonly viewer: Viewer, readonly canvas: HTMLCanvasElement, readonly actions: Actions) {
     viewer.scene.add(this.#overlay, this.#handle);
-    viewer.onCameraChange = () => this.#positionLabel();
+    viewer.onCameraChange(() => this.#positionLabel());
     for (const id of ['joint', 'edit-mode', 'operation', 'space', 'xray', 'compare', 'clip', 'preview-clip', 'time']) {
       ui(id).addEventListener('change', () => {
         this.#preview = undefined;

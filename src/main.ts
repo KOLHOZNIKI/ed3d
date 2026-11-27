@@ -12,7 +12,7 @@ import { autosaveDelay, latestCheckpoint, saveCheckpoint } from './project/autos
 import { AssetDocument, defaultHistoryBudget } from './project/document';
 import { atlasColor, type WorkingState, workingBuffers } from './project/state';
 import { elementId } from './project/topology';
-import { prepareAppearance, Viewer } from './project/viewer';
+import { prepareAppearance, Viewer, type CompareMode, type DisplayMode } from './project/viewer';
 import { disposeModel } from './project/resources';
 import { applyViews, disposeAppearance, sourceAppearance, type Appearance } from './texture/appearance';
 import { projectedModel, TextureCatalog, withoutAtlasEdits, type TextureTarget } from './texture/bindings';
@@ -37,6 +37,8 @@ import { exportBatch, exportExtract } from './extract/export';
 import { AssetPanel } from './diagnostics/panel';
 import { exportReport, extractedReport, reportText, scanAsset } from './diagnostics/report';
 import { offlineSetup } from './project/offline';
+import { WorkspaceLayout, type LayoutChoice } from './project/workspace';
+import { SceneHierarchy } from './project/hierarchy';
 import { pack } from './e00/zip';
 
 function element<T extends HTMLElement>(id: string): T {
@@ -56,6 +58,7 @@ const close = element<HTMLButtonElement>('close-model'), save = element<HTMLButt
 const saveAs = element<HTMLButtonElement>('save-copy'), exportButton = element<HTMLButtonElement>('export');
 const unwrap = element<HTMLButtonElement>('unwrap'), rebake = element<HTMLButtonElement>('rebake');
 const paintButton = element<HTMLButtonElement>('paint');
+const objectButton = element<HTMLButtonElement>('object-mode');
 const meshButton = element<HTMLButtonElement>('mesh-mode');
 const repairButton = element<HTMLButtonElement>('repair-mode');
 const uvButton = element<HTMLButtonElement>('uv-mode');
@@ -70,7 +73,14 @@ const autosaveStatus = element('autosave-status'), restore = element<HTMLButtonE
 const recovery = element('recovery');
 const objects = element<HTMLSelectElement>('object-selection'), objectLabel = element<HTMLInputElement>('object-label');
 const rename = element<HTMLButtonElement>('rename-object'), visibility = element<HTMLButtonElement>('object-visibility');
+const isolate = element<HTMLButtonElement>('object-isolate');
 const projection = element<HTMLSelectElement>('projection'), viewDirection = element<HTMLSelectElement>('view-direction');
+const viewDisplay = element<HTMLSelectElement>('view-display');
+const viewGrid = element<HTMLInputElement>('view-grid'), viewAxes = element<HTMLInputElement>('view-axes');
+const viewBounds = element<HTMLInputElement>('view-bounds'), viewExposure = element<HTMLInputElement>('view-exposure');
+const viewBackground = element<HTMLInputElement>('view-background');
+const viewReference = element<HTMLSelectElement>('view-reference'), viewCompare = element<HTMLSelectElement>('view-compare');
+const viewCapture = element<HTMLButtonElement>('view-capture');
 const frameSelection = element<HTMLButtonElement>('frame-selection');
 const frameAll = element<HTMLButtonElement>('frame-all');
 const historyBudget = element<HTMLInputElement>('history-budget');
@@ -84,6 +94,19 @@ const viewer = new Viewer(canvas, lost => {
   resumeAutosave();
 });
 const assetPanel = new AssetPanel(viewer, selectObject);
+const workspaceLayout = new WorkspaceLayout(chooseLayout);
+const rigJoint = element<HTMLSelectElement>('rig-joint');
+const sceneHierarchy = new SceneHierarchy(selectObject, id => {
+  chooseLayout('texture');
+  selectBinding(id);
+}, id => {
+  if (!rigging) rigButton.click();
+  if (!rigging) return;
+  rigJoint.value = id;
+  rigJoint.dispatchEvent(new Event('change'));
+});
+rigJoint.addEventListener('change', () => queueMicrotask(refreshHierarchy));
+element('workspace-open').addEventListener('click', () => sources.click());
 offlineSetup(element('offline-cache'), element('offline-status'));
 
 interface Workspace {
@@ -94,6 +117,9 @@ interface Workspace {
 }
 
 let current: Workspace | undefined;
+let comparisonSnapshot: ProjectData | undefined;
+let comparison: { model: Model; adapter?: ModelAdapter; appearance?: Appearance; snapshot?: ProjectData } | undefined;
+let displayMode: DisplayMode = 'textured';
 let selected = '';
 let painting = false;
 let meshEditing = false;
@@ -402,6 +428,7 @@ function controls() {
   const canCreatePaintAtlas = !!(fbx && !model.textureBake && painting && !editedMesh && blankPaintMesh(model));
   rebake.disabled = locked || !fbx || !model.uvAtlas || canCreatePaintAtlas;
   paintButton.disabled = locked || !availablePaint;
+  objectButton.disabled = locked || !document;
   meshButton.disabled = locked || !availablePaint;
   repairButton.disabled = locked || !availablePaint;
   uvButton.disabled = locked || !availablePaint;
@@ -409,6 +436,12 @@ function controls() {
   rigButton.disabled = locked || !availablePaint || !current?.adapter.rig.available;
   weightsButton.disabled = locked || !availableWeights;
   diagnosticButton.disabled = locked || !availablePaint || !current?.adapter.rig.available;
+  for (const item of [viewDisplay, viewGrid, viewAxes, viewBounds, viewExposure, viewBackground, viewCompare, viewReference, viewCapture]) {
+    item.disabled = locked || !availablePaint;
+  }
+  viewDisplay.value = weighting ? 'weights' : displayMode;
+  viewDisplay.querySelector<HTMLOptionElement>('option[value=weights]')!.disabled = !availableWeights;
+  viewReference.querySelector<HTMLOptionElement>('option[value=snapshot]')!.disabled = !comparisonSnapshot;
   undo.disabled = locked || !document?.undoDepth;
   redo.disabled = locked || !document?.redoDepth;
   restore.disabled = locked;
@@ -422,6 +455,7 @@ function controls() {
   rigButton.setAttribute('aria-pressed', String(rigging));
   weightsButton.setAttribute('aria-pressed', String(weighting));
   diagnosticButton.setAttribute('aria-pressed', String(diagnostic));
+  objectButton.setAttribute('aria-pressed', String(!(painting || meshEditing || repairing || uvEditing || extracting || rigging || weighting || diagnostic)));
   canvas.style.cursor = painting && !busy ? 'crosshair' : '';
   canvas.style.touchAction = 'none';
   viewer.setPainting(painting || meshEditing || repairing || uvEditing || extracting || rigging || weighting,
@@ -442,10 +476,16 @@ function controls() {
   element('object-tools').hidden = !document;
   objects.disabled = locked;
   objectLabel.disabled = rename.disabled = visibility.disabled = locked || !selected;
+  isolate.disabled = locked || !availablePaint || !selected && !viewer.isolated;
+  isolate.textContent = viewer.isolated ? 'Exit isolation' : 'Isolate object';
+  isolate.setAttribute('aria-pressed', String(!!viewer.isolated));
   frameSelection.disabled = !selected || locked;
   const targets = current?.textures.targets(document!.state) ?? [];
   toggleTexture.disabled = locked || !targets.length;
   toggleTexture.setAttribute('aria-expanded', String(!editor.panel.hidden));
+  workspaceLayout.sync(!!document, viewer.available && !!viewer.camera, locked,
+    uvEditing && selected ? 'uv' : editor.panel.hidden ? undefined : 'texture', !!targets.length);
+  refreshHierarchy();
   editor.lock(busy || !!stroke);
   if (!diagnostic) diagnosticTool.configure(undefined, locked);
   if (!weighting) weightsTool.configure(undefined, locked);
@@ -470,6 +510,11 @@ function controls() {
     editedMesh && fbx && model.deformation.pointsOverPreviewLimit ? 'Some vertices have more than four influences. FBX retains the full weights.' : ''].filter(Boolean);
   element('mesh-export-note').hidden = !notes.length;
   element('mesh-export-note').textContent = notes.join(' ');
+}
+
+function refreshHierarchy() {
+  sceneHierarchy.configure(current && { adapter: current.adapter, state: current.document.state, textures: current.textures }, selected,
+    rigging ? rigJoint.value : '', busy || !!stroke || weightsStroke !== undefined || textureGesture);
 }
 
 function renderObjects() {
@@ -501,7 +546,10 @@ function selectObject(id: string) {
   element('selection-details').textContent = topology
     ? `${selected} · ${render ? new Set(topology.corners).size : topology.positions.length / 3} vertices · ${topology.faceEnds.length} faces · First face ID ${elementId(selected, 'face', render?.render.faceIds[0] ?? 0)}`
     : '';
-  viewer.select(current?.adapter.objects.get(selected));
+  const node = current?.adapter.objects.get(selected);
+  if (viewer.isolated && viewer.isolated !== node) viewer.isolate();
+  viewer.measureGuides();
+  viewer.select(node);
   syncTextureEditor();
   controls();
 }
@@ -520,6 +568,32 @@ function syncTextureEditor() {
   editor.setSession({ targets: work.textures.targets(state), atlas: work.model.format === 'fbx' ? work.model.uvAtlas?.geometry : undefined,
     load: target => work.textures.load(target, state) }, paintBinding);
 }
+
+function chooseLayout(layout: LayoutChoice) {
+  const work = current;
+  if (!work) return;
+  workspaceLayout.setEditorOnly(layout.endsWith('-only'));
+  if (layout.startsWith('uv') && viewer.available) {
+    painting = meshEditing = repairing = extracting = rigging = weighting = diagnostic = false;
+    editor.close();
+    uvEditing = true;
+    if (!selected) selectObject(work.adapter.viewEntries.find(entry => entry.mesh)?.id ?? '');
+  } else if (layout.startsWith('texture') && work.textures.targets(work.document.state).length) {
+    uvEditing = extracting = rigging = weighting = diagnostic = false;
+    editor.open();
+    syncTextureEditor();
+  } else {
+    editor.close();
+    uvEditing = false;
+  }
+  controls();
+}
+
+objectButton.addEventListener('click', () => {
+  painting = meshEditing = repairing = uvEditing = extracting = rigging = weighting = diagnostic = false;
+  editor.close();
+  controls();
+});
 
 toggleTexture.addEventListener('click', () => {
   diagnostic = false;
@@ -616,6 +690,10 @@ function canReplace() {
 
 function closeWorkspace() {
   diagnosticTool.reset();
+  releaseComparison();
+  comparisonSnapshot = undefined;
+  viewCompare.value = 'working';
+  viewReference.value = 'original';
   viewer.close();
   if (current) {
     current.adapter.dispose();
@@ -642,6 +720,7 @@ function closeWorkspace() {
 }
 
 function install(workspace: Workspace, appearance?: Appearance) {
+  const layout = workspaceLayout.initialLayout();
   closeWorkspace();
   current = workspace;
   workspace.adapter.applyVisibility(workspace.document.state);
@@ -649,6 +728,7 @@ function install(workspace: Workspace, appearance?: Appearance) {
   viewer.install(workspace.model.scene, appearance);
   projection.selectedIndex = viewDirection.selectedIndex = 0;
   renderObjects();
+  if (layout !== 'model') chooseLayout(layout);
   status.textContent = modelStatus(workspace.model);
   pendingRecovery = undefined;
   recovery.hidden = true;
@@ -1092,6 +1172,10 @@ function changeObject(label: string, update: (state: { name: string; visible: bo
 objects.addEventListener('change', () => selectObject(objects.value));
 rename.addEventListener('click', () => changeObject('Object label', state => ({ ...state, name: objectLabel.value.trim() || state.name })));
 visibility.addEventListener('click', () => changeObject('Object visibility', state => ({ name: state.name, visible: !state.visible })));
+isolate.addEventListener('click', () => {
+  viewer.isolate(viewer.isolated ? undefined : current?.adapter.objects.get(selected));
+  controls();
+});
 
 function frame(selection = false) {
   const direction = [new Vector3(.6, .45, 1), new Vector3(0, 0, 1), new Vector3(0, 0, -1), new Vector3(-1, 0, 0),
@@ -1103,10 +1187,89 @@ projection.addEventListener('change', () => frame());
 viewDirection.addEventListener('change', () => frame());
 frameAll.addEventListener('click', () => frame());
 frameSelection.addEventListener('click', () => frame(true));
+viewDisplay.addEventListener('change', () => {
+  if (viewDisplay.value === 'weights') openWeights();
+  else {
+    weighting = false;
+    displayMode = viewDisplay.value as DisplayMode;
+    viewer.setDisplay(displayMode);
+    controls();
+  }
+});
+for (const setting of [viewGrid, viewAxes, viewBounds]) setting.addEventListener('change', () =>
+  viewer.setGuides(viewGrid.checked, viewAxes.checked, viewBounds.checked));
+for (const setting of [viewExposure, viewBackground]) setting.addEventListener('input', () => {
+  if (Number.isFinite(viewExposure.valueAsNumber)) viewer.setLighting(viewExposure.valueAsNumber, viewBackground.value);
+});
+
+function releaseComparison() {
+  viewer.compare('working');
+  element('view-compare-labels').hidden = true;
+  if (!comparison) return;
+  if (comparison.appearance) disposeAppearance(comparison.appearance);
+  comparison.adapter?.dispose();
+  disposeModel(comparison.model);
+  comparison = undefined;
+}
+
+function showComparison() {
+  const work = current, mode = viewCompare.value as CompareMode;
+  if (!work || mode === 'working') {
+    releaseComparison();
+    return;
+  }
+  const snapshot = viewReference.value === 'snapshot' ? comparisonSnapshot : undefined;
+  void locked(async () => {
+    if (!comparison || comparison.snapshot !== snapshot) {
+      const model = await importOriginals(work.document.originals, work.document.textureAssignments);
+      const copy = snapshot && await makeWorkspace(model, snapshot);
+      if (copy) copy.workspace.adapter.applyVisibility(snapshot.state);
+      releaseComparison();
+      comparison = { model: copy ? copy.workspace.model : model, adapter: copy ? copy.workspace.adapter : undefined,
+        appearance: copy ? copy.appearance : undefined, snapshot };
+    }
+    viewer.compare(mode, { root: comparison.model.scene, appearance: comparison.appearance });
+    element('view-reference-label').textContent = snapshot ? `Snapshot · revision ${snapshot.revision}` : 'Original';
+    element('view-compare-labels').hidden = false;
+    status.textContent = mode === 'split' ? 'Comparing the reference and working model with the same camera.' : 'Showing the reference model.';
+  }, 'Loading the local comparison reference…').then(ok => {
+    if (ok) return;
+    viewCompare.value = 'working';
+    releaseComparison();
+  });
+}
+
+viewCompare.addEventListener('change', showComparison);
+viewReference.addEventListener('change', showComparison);
+viewCapture.addEventListener('click', () => {
+  if (!current) return;
+  const { id, name, revision, originals, textureAssignments, scene, historyBudget, state } = current.document;
+  comparisonSnapshot = { id, name, revision, originals, textureAssignments, scene, historyBudget, state };
+  controls();
+  viewReference.value = 'snapshot';
+  if (viewer.comparing) showComparison();
+  else status.textContent = `Captured comparison snapshot at revision ${revision}.`;
+});
 
 window.addEventListener('keydown', event => {
   if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement || event.target instanceof HTMLButtonElement ||
-      busy || stroke || weightsStroke !== undefined || textureGesture || meshTool.dragging || rigTool.dragging) return;
+      event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLElement && event.target.isContentEditable ||
+      event.defaultPrevented || busy || stroke || weightsStroke !== undefined || textureGesture || meshTool.dragging || rigTool.dragging) return;
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's' && !save.disabled) {
+    event.preventDefault();
+    save.click();
+    return;
+  }
+  if (event.code === 'Space' && diagnostic && event.target === canvas) {
+    event.preventDefault();
+    element<HTMLButtonElement>('diag-play').click();
+    return;
+  }
+  if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === 'q' && event.target === canvas) {
+    event.preventDefault();
+    objectButton.click();
+    return;
+  }
   if (!event.ctrlKey && !event.metaKey && (uvTool.keyboard(event.key) || repairTool.keyboard(event.key) ||
       meshTool.keyboard(event.key.length === 1 ? event.key.toLowerCase() : event.key))) {
     event.preventDefault();
@@ -1232,9 +1395,9 @@ function pointerPoint(event: PointerEvent): Point {
   return { x: (event.clientX - bounds.left) * canvas.width / bounds.width, y: (event.clientY - bounds.top) * canvas.height / bounds.height };
 }
 
-canvas.addEventListener('contextmenu', event => { if (painting || meshEditing || repairing || uvEditing || extracting || rigging || weighting) event.preventDefault(); });
+canvas.addEventListener('contextmenu', event => event.preventDefault());
 canvas.addEventListener('pointerdown', event => {
-  if (event.button !== 0 || busy || stroke || weightsStroke !== undefined || textureGesture || !current) return;
+  if (event.button !== 0 || busy || stroke || weightsStroke !== undefined || textureGesture || !current || viewer.comparing) return;
   if (weighting) {
     canvas.focus({ preventScroll: true });
     if (weightsTool.begin(event)) {
@@ -1262,6 +1425,7 @@ canvas.addEventListener('pointerdown', event => {
 });
 
 canvas.addEventListener('pointermove', event => {
+  if (viewer.comparing) return;
   if (weighting) {
     if (!busy && (weightsStroke === event.pointerId || !event.buttons)) weightsTool.move(event);
     return;
@@ -1285,7 +1449,7 @@ canvas.addEventListener('pointercancel', () => {
 
 canvas.addEventListener('pointerup', event => {
   const work = current;
-  if (!work) return;
+  if (!work || viewer.comparing) return;
   if (weightsStroke === event.pointerId) {
     weightsStroke = undefined;
     void weightsTool.finish(event).finally(() => { controls(); resumeAutosave(); });

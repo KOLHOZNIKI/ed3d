@@ -28,7 +28,9 @@ Use **Save Project** to download a self-contained `.assetfixer` file. **Save As*
 
 In a Release or Debug build served on HTTPS or localhost, open **Offline launch** and click **Save application for offline launch**. Return to the same browser profile and URL to launch from the cache without a connection. Use **Asset diagnostics and export report** to review material bindings, run the geometry, UV and weight scan, focus a finding and save a text or JSON report. GLB export keeps its report available through this panel.
 
-Drag the viewport to orbit, use the right mouse button to pan, and scroll to zoom. Click a mesh or choose one in **Objects**, then use **Frame selection** or `F`. The viewport also offers orthographic projection and axis views. Project labels and viewport visibility are saved as project state. Format export uses the source object names and complete scene.
+Right-drag to orbit, middle-drag to pan, and scroll to zoom. Click a mesh in the viewport or the **Scene** panel, then use **Frame selection** or `F`. Use the layout picker to place the 3D view next to **Texture** or **UV**, or work with either editor on its own. Drag the dividers or focus one and press the arrow keys to resize the panels. The browser remembers the layout.
+
+Use **Display** for textured, unlit, solid, wireframe, wire overlay, checker, normals or bone weights. **Guides and lighting** controls the floor grid, axes, bounds, light exposure and background. **Compare** shows the original import or a captured working revision with the same camera. **Isolate object** scopes the 3D preview to the selected mesh. [Workspace guide and verification](Docs/Workspace_Report.md)
 
 For a single FBX mesh with one UV set, use **Generate UV atlas** to add UV1. **Rebake textures** transfers the maps from the original import. The baked FBX promotes the atlas to the primary UV channel for Unity and retains the original coordinates in the second channel.
 
@@ -94,6 +96,7 @@ The static distribution includes notices for xatlas and its WASM wrapper, iobuff
 
 ## Verification
 
+- [Workspace and rendering verification](Docs/Workspace_Report.md) covers §8 layout, viewing, comparison and keyboard behavior.
 - [E12 full acceptance](Docs/E12_Report.md) records the V1 workflows, Unity Generic and Humanoid checks, independent reads and performance measurements.
 - [Format and project support](Docs/Formats_and_Projects.md) describes the supported import and export profiles and the `.assetfixer` schema and migrations.
 - [E11 humanoid diagnostics verification](Docs/E11_Report.md) covers mapping, calibration, all ten clips, frozen weight painting, and FBX and GLB export.

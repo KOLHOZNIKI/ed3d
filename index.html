@@ -4,41 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AssetFixer</title>
+    <link rel="stylesheet" href="/src/workspace.css" />
     <style>
-      :root {
-        color-scheme: light dark;
-        font-family: system-ui, sans-serif;
-      }
-
-      main {
-        max-width: 40rem;
-        margin: 2rem auto;
-        padding: 0 1rem;
-      }
-
-      h1 { margin-bottom: 1rem; }
-      [hidden] { display: none !important; }
-      fieldset { border: 1px solid #80808050; border-radius: 8px; margin: 0.8rem 0; padding: 0.75rem; }
-      button, select, input { font: inherit; }
-      button { min-height: 2rem; }
-      #project-status, #autosave-status, #history-status, #selection-details { font-size: 0.875rem; }
-
-      canvas {
-        max-width: 100%;
-        height: auto;
-        border-radius: 8px;
-      }
-
-      .actions {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 0.75rem;
-      }
-
-      .model-view { position: relative; }
-      #viewport { display: block; width: 100%; }
-      #paint-cursor { width: 100%; position: absolute; inset: 0; pointer-events: none; }
       #rig-label { position: absolute; transform: translate(.55rem, -100%); pointer-events: none; color: #fdf7ce;
         background: #1c242cee; border-radius: .25rem; padding: .15rem .35rem; font-size: .8125rem; white-space: nowrap; }
       #rig-tools input[type=number] { width: 5.5rem; }
@@ -73,19 +40,9 @@
       .contours th, .contours td { padding: .35rem .4rem; text-align: left; border-bottom: 1px solid #80808042; }
       .contours th { white-space: nowrap; }
       #repair-info { font-size: .875rem; margin: .5rem 0 0; }
-      main:has(#uv-tools:not([hidden])) { max-width: 84rem; }
-      .work-area:has(#uv-tools:not([hidden])) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 1rem; align-items: start; }
-      #uv-tools { min-width: 0; }
       #uv-tools input[type=number] { width: 5rem; }
       #uv-canvas { width: 100%; aspect-ratio: 1.38; touch-action: none; display: block; margin: .65rem 0; }
       #uv-info, #uv-diagnostics { font-size: .875rem; margin: .5rem 0; }
-      @media (max-width: 900px) { .work-area:has(#uv-tools:not([hidden])) { grid-template-columns: minmax(0,1fr); } }
-
-      main:has(#texture-panel:not([hidden])) { max-width: 83rem; }
-      .work-area:has(#texture-panel:not([hidden])) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.08fr); gap: 1rem; align-items: start; }
-      #texture-panel { min-width: 0; }
-      #texture-panel fieldset { min-width: 0; }
-      #texture-panel .actions { gap: 0.45rem 0.75rem; }
       #texture-panel select { max-width: 100%; }
       #texture-panel input[type=number] { width: 4.25rem; }
       #texture-target { width: 100%; margin: .35rem 0; }
@@ -101,628 +58,719 @@
     </style>
   </head>
   <body>
-    <main>
-      <h1>AssetFixer</h1>
-      <fieldset>
-        <legend>Project</legend>
-        <label for="sources">Open project, GLB, or FBX with its maps</label>
-        <div class="actions">
-          <input type="file" id="sources" accept=".assetfixer,.glb,.zip,.fbx,.png,.jpg,.jpeg" multiple />
-          <label>Open folder <input type="file" id="sources-folder" webkitdirectory multiple /></label>
+    <main id="workspace" data-layout="model">
+      <header class="toolbar">
+        <div class="brand"><span class="brand-mark" aria-hidden="true">A</span><h1>AssetFixer</h1></div>
+        <div class="file-actions actions" aria-label="Project files">
+          <label class="file-action"><input type="file" id="sources" accept=".assetfixer,.glb,.zip,.fbx,.png,.jpg,.jpeg" multiple /><span>Open files</span></label>
+          <label class="file-action"><input type="file" id="sources-folder" webkitdirectory multiple /><span>Open folder</span></label>
           <button id="save-project" type="button" disabled>Save Project</button>
           <button id="save-copy" type="button" disabled>Save As</button>
           <button id="close-model" type="button" disabled>Close model</button>
+          <button id="undo-stroke" type="button" disabled>Undo</button>
+          <button id="redo" type="button" disabled>Redo</button>
+          <button id="export" type="button" disabled>Export FBX ZIP</button>
+          <button id="export-original" type="button" disabled>Export Original</button>
         </div>
-        <fieldset id="texture-assignment" hidden>
-          <legend>Assign local FBX textures</legend>
-          <div id="texture-assignment-rows"></div>
-          <div class="actions">
-            <button id="texture-assignment-retry" type="button">Open with assignments</button>
-            <button id="texture-assignment-cancel" type="button">Cancel import</button>
+      </header>
+      <div class="toolstrip">
+        <nav class="mode-tabs actions" aria-label="Editor modes">
+          <button id="object-mode" type="button" aria-pressed="true" disabled>Object</button>
+          <button id="mesh-mode" type="button" aria-pressed="false" disabled>Mesh Edit</button>
+          <button id="repair-mode" type="button" aria-pressed="false" disabled>Repair</button>
+          <button id="uv-mode" type="button" aria-pressed="false" disabled>UV Editor</button>
+          <button id="paint" type="button" aria-pressed="false" disabled>3D Paint</button>
+          <button id="toggle-texture" type="button" aria-expanded="false" disabled>Texture editor</button>
+          <button id="extract-mode" type="button" aria-pressed="false" disabled>Extract</button>
+          <button id="rig-mode" type="button" aria-pressed="false" disabled>Rig &amp; Pose</button>
+          <button id="weights-mode" type="button" aria-pressed="false" disabled>Weight Paint</button>
+          <button id="diag-mode" type="button" aria-pressed="false" disabled>Humanoid Tests</button>
+        </nav>
+        <div class="layout-actions actions">
+          <button id="workspace-scene-toggle" type="button" aria-pressed="true" aria-controls="scene-panel">Scene</button>
+          <button id="workspace-tools-toggle" type="button" aria-pressed="true" aria-controls="tools-panel">Tools</button>
+          <select id="workspace-layout" aria-label="Workspace layout" disabled>
+            <option value="model">3D only</option>
+            <option value="texture">3D + Texture</option>
+            <option value="uv">3D + UV</option>
+            <option value="texture-only">Texture only</option>
+            <option value="uv-only">UV only</option>
+          </select>
+        </div>
+      </div>
+      <div class="workspace-body">
+        <aside id="scene-panel" class="workspace-panel" aria-label="Scene">
+          <h2 class="panel-title">Scene</h2>
+          <div class="panel-content">
+            <ul id="scene-hierarchy" class="scene-list" aria-label="Object hierarchy" hidden></ul>
+            <fieldset id="object-tools" hidden>
+              <legend>Objects</legend>
+              <div class="actions">
+                <label for="object-selection">Select object</label>
+                <select id="object-selection"></select>
+                <button id="object-visibility" type="button" disabled>Hide object</button>
+              <button id="object-isolate" type="button" aria-pressed="false" disabled>Isolate object</button>
+                <label for="object-label">Project label</label>
+                <input id="object-label" maxlength="160" disabled />
+                <button id="rename-object" type="button" disabled>Apply label</button>
+              </div>
+            </fieldset>
+            <section id="scene-materials" hidden>
+              <h3>Materials</h3>
+              <ul id="scene-material-list" class="scene-list"></ul>
+            </section>
+            <details id="scene-bones" hidden>
+              <summary>Skeleton</summary>
+              <ul id="scene-bone-list" class="scene-list"></ul>
+            </details>
+            <fieldset id="texture-assignment" hidden>
+              <legend>Assign local FBX textures</legend>
+              <div id="texture-assignment-rows"></div>
+              <div class="actions">
+                <button id="texture-assignment-retry" type="button">Open with assignments</button>
+                <button id="texture-assignment-cancel" type="button">Cancel import</button>
+              </div>
+            </fieldset>
+            <div class="actions" id="recovery" hidden>
+              <button id="restore-autosave" type="button">Restore autosave</button>
+              <button id="dismiss-autosave" type="button">Dismiss</button>
+            </div>
+            <details id="asset-review" hidden>
+              <summary>Asset diagnostics and export report</summary>
+              <p id="asset-summary"></p>
+              <details><summary>Materials and UV channels</summary><ul id="asset-material-list"></ul></details>
+              <fieldset id="asset-review-actions">
+                <div class="actions">
+                  <button id="asset-scan" type="button">Scan mesh</button>
+                  <button id="asset-intersections" type="button">Check self-intersections</button>
+                  <button id="asset-report-text" type="button">Save report text</button>
+                  <button id="asset-report-json" type="button">Save report JSON</button>
+                </div>
+              </fieldset>
+              <p id="asset-scan-status" aria-live="polite"></p>
+              <ul id="asset-findings"></ul>
+            </details>
           </div>
-        </fieldset>
-        <p id="project-status">No open project</p>
-        <div class="actions" id="recovery" hidden>
-          <button id="restore-autosave" type="button">Restore autosave</button>
-          <button id="dismiss-autosave" type="button">Dismiss</button>
+        </aside>
+        <div id="workspace-scene-resize" class="panel-divider" role="separator" aria-label="Resize scene panel" aria-controls="scene-panel" aria-orientation="vertical" tabindex="0"></div>
+        <div class="work-area">
+          <section id="viewport-panel" class="viewport-panel" aria-label="3D viewport">
+            <fieldset id="viewer-tools" hidden>
+              <legend>Viewport</legend>
+              <div class="actions">
+                  <label for="view-display">Display</label>
+                  <select id="view-display">
+                    <option value="textured">Textured</option><option value="unlit">Unlit Base Color</option><option value="solid">Solid</option>
+                    <option value="wire">Wireframe</option><option value="edges">Wireframe Overlay</option>
+                    <option value="checker">UV Checker</option><option value="normals">Normals</option><option value="weights">Weight Heatmap</option>
+                  </select>
+                <label for="projection">Projection</label>
+                <select id="projection"><option>Perspective</option><option>Orthographic</option></select>
+                <label for="view-direction">View</label>
+                <select id="view-direction"><option>Oblique</option><option>Front</option><option>Back</option><option>Left</option><option>Right</option><option>Top</option><option>Bottom</option></select>
+                <button id="frame-all" type="button">Frame all</button>
+                <button id="frame-selection" type="button" disabled>Frame selection</button>
+              </div>
+                <details id="view-options">
+                  <summary>Guides and lighting</summary>
+                  <div class="actions">
+                    <label><input id="view-grid" type="checkbox" checked /> Floor grid</label>
+                    <label><input id="view-axes" type="checkbox" /> Axes</label>
+                    <label><input id="view-bounds" type="checkbox" /> Bounds</label>
+                    <label>Exposure <input id="view-exposure" type="number" value="0" min="-4" max="4" step=".25" /> EV</label>
+                    <label>Background <input id="view-background" type="color" value="#19232e" /></label>
+                  </div>
+                </details>
+                <details id="view-comparison">
+                  <summary>Compare</summary>
+                  <div class="actions">
+                    <label>Reference <select id="view-reference"><option value="original">Original import</option><option value="snapshot" disabled>Captured snapshot</option></select></label>
+                    <label>View <select id="view-compare"><option value="working">Working</option><option value="reference">Reference</option><option value="split">Side by side</option></select></label>
+                    <button id="view-capture" type="button">Capture snapshot</button>
+                  </div>
+                </details>
+            </fieldset>
+            <div class="model-stage">
+              <div class="empty-view" id="workspace-empty">
+                <p id="workspace-empty-title">Open a 3D asset</p>
+                <span id="workspace-empty-copy">Drop an FBX ZIP, GLB, or AssetFixer project here.</span>
+                <button id="workspace-open" type="button">Open files</button>
+              </div>
+              <div class="model-view" id="model-view" hidden>
+                <canvas id="viewport" width="640" height="480" tabindex="0" role="img" aria-label="Imported model preview" hidden></canvas>
+                <canvas id="paint-cursor" width="640" height="480" aria-hidden="true" hidden></canvas>
+                <span id="rig-label" aria-hidden="true" hidden></span>
+                <span id="weights-cursor" aria-hidden="true" hidden></span>
+                <div id="view-compare-labels" hidden><span id="view-reference-label"></span><span>Working</span></div>
+              </div>
+            </div>
+          </section>
+          <div id="workspace-editor-resize" class="panel-divider" role="separator" aria-label="Resize 2D editor" aria-controls="workspace-editor" aria-orientation="vertical" tabindex="0" hidden></div>
+          <section id="workspace-editor" class="editor-panel" aria-label="2D editor" hidden>
+            <fieldset id="uv-tools" hidden>
+              <legend>UV Editor</legend>
+              <div class="actions">
+                <label for="uv-material">Material</label><select id="uv-material"></select>
+                <label for="uv-map">Map</label><select id="uv-map"></select>
+                <label for="uv-channel">Channel</label><select id="uv-channel"></select>
+                <label for="uv-background">Background</label><select id="uv-background"><option value="texture">Texture</option><option value="checker">Checker</option><option value="solid">Solid</option><option value="coverage">Coverage</option></select>
+                <label for="uv-kind">Select</label><select id="uv-kind"><option value="vertex">UV vertex</option><option value="edge">Edge</option><option value="face">Face</option><option value="island">Island</option></select>
+              </div>
+              <canvas id="uv-canvas" width="768" height="556" tabindex="0" aria-label="UV grid and islands"></canvas>
+              <div class="actions">
+                <button id="uv-fit" type="button">Fit all</button><button id="uv-fit-selection" type="button">Fit selection</button>
+                <button id="uv-select-all" type="button">Select all</button>
+                <button id="uv-clear-selection" type="button">Clear selection</button>
+                <span id="uv-coordinate"></span>
+              </div>
+              <p id="uv-diagnostics"></p>
+              <div class="actions">
+                <label for="uv-operation">Operation</label>
+                <select id="uv-operation">
+                  <option value="move">Move</option><option value="rotate">Rotate</option><option value="scale">Scale</option>
+                  <option value="alignU">Align U</option><option value="alignV">Align V</option>
+                  <option value="pixel">Snap to pixels</option><option value="vertex">Snap to nearest vertex</option><option value="boundary">Snap to tile edge</option>
+                  <option value="cut">Mark seam</option><option value="uncut">Clear seam</option>
+                  <option value="stitch">Stitch UV edge</option><option value="planar">Planar projection</option>
+                </select>
+                <label for="uv-u" id="uv-u-label">U</label><input id="uv-u" type="number" value="0" step="any" />
+                <label for="uv-v" id="uv-v-label">V</label><input id="uv-v" type="number" value="0" step="any" />
+                <label for="uv-pivot">Pivot</label><select id="uv-pivot"><option value="selection">Selection center</option><option value="origin">Origin</option><option value="tile">Tile center</option></select>
+                <label for="uv-plane">Plane</label><select id="uv-plane"><option value="">Estimated plane</option><option value="xy">XY</option><option value="xz">XZ</option><option value="yz">YZ</option></select>
+                <button id="uv-run" type="button">Update draft</button>
+              </div>
+              <p id="uv-stitch-hint" hidden>In Edge mode, pick the side of the seam you want to keep fixed.</p>
+              <div class="actions">
+                <label for="uv-size">Atlas size</label><select id="uv-size"><option>256</option><option>512</option><option selected>1024</option><option>2048</option><option>4096</option></select>
+                <label for="uv-padding">Padding (px)</label><input id="uv-padding" type="number" value="4" min="0" max="64" />
+                <label><input id="uv-allow-rotate" type="checkbox" checked /> Allow rotation</label>
+                <label><input id="uv-equalize" type="checkbox" /> Equalize texel density</label>
+                <label><input id="uv-selected-only" type="checkbox" /> Selected only</label>
+                <button id="uv-pack" type="button">Pack islands</button><button id="uv-unwrap" type="button">Auto Unwrap</button>
+              </div>
+              <div class="actions">
+                <label for="uv-mode-select">Apply mode</label><select id="uv-mode-select"><option value="preserve">Preserve Appearance</option><option value="mapping">Change Mapping</option><option value="projection">Spatial Projection</option></select>
+                <label for="uv-source">Bake source</label><select id="uv-source"><option value="working">Working snapshot</option><option value="original">Original import</option></select>
+                <label for="uv-filter">Sampling</label><select id="uv-filter"><option value="linear">Bilinear</option><option value="nearest">Nearest</option></select>
+                <label><input id="uv-missing" type="checkbox" /> Neutral fill for repairs</label>
+                <button id="uv-apply" type="button">Rebake and Apply</button><button id="uv-cancel" type="button">Cancel draft</button>
+              </div>
+              <div id="uv-projection-settings" hidden>
+                <div class="actions">
+                  <label for="uv-projection-object">Source mesh</label><select id="uv-projection-object"></select>
+                  <label for="uv-projection-pairs">Target = source</label><input id="uv-projection-pairs" placeholder="1=2, 2=1" />
+                  <label>Max distance <input id="uv-projection-distance" type="number" min="0" value="0.1" step="any" /></label>
+                  <label>Max normal angle <input id="uv-projection-angle" type="number" min="0" max="90" value="45" step="any" /></label>
+                  <label>Ray offset <input id="uv-projection-offset" type="number" min="0" value="0" step="any" /></label>
+                </div>
+                <div class="actions">
+                  <label for="uv-projection-direction">Ray direction</label><select id="uv-projection-direction"><option value="both">Both</option><option value="forward">Along normal</option><option value="backward">Against normal</option></select>
+                  <label for="uv-projection-fallback">On a miss</label><select id="uv-projection-fallback"><option value="empty">Empty texel</option><option value="color">Fill color</option><option value="nearest">Nearest eligible surface</option></select>
+                  <label for="uv-projection-color">Base Color fill</label><input id="uv-projection-color" type="color" value="#ff00ff" />
+                </div>
+                <p id="uv-projection-components"></p>
+              </div>
+              <p id="uv-info" aria-live="polite"></p>
+            </fieldset>
+            <section id="texture-panel" aria-label="Texture editor" hidden>
+              <fieldset>
+                <legend>Texture editor</legend>
+                <label for="texture-target">Object and material</label>
+                <select id="texture-target"></select>
+                <div class="actions" id="texture-sharing" hidden>
+                  <button id="texture-edit-shared" type="button">Edit shared map</button>
+                  <button id="texture-copy" type="button">Copy for this binding</button>
+                </div>
+                <p id="texture-info"></p>
+                <div class="actions">
+                  <label for="texture-tool">Tool</label>
+                  <select id="texture-tool"><option value="brush">Brush</option><option value="stamp">Clone Stamp</option><option value="eyedropper">Eyedropper</option><option value="pixel">Pixel Brush</option><option value="select">Rectangle</option><option value="pan">Pan</option></select>
+                  <label for="texture-color">Color</label><input id="texture-color" type="color" value="#15e4f2" />
+                  <label for="texture-size">Size (px)</label><input id="texture-size" type="number" min="1" max="512" value="24" />
+                  <label for="texture-opacity">Opacity %</label><input id="texture-opacity" type="number" min="0" max="100" value="100" />
+                  <label for="texture-hardness">Hardness %</label><input id="texture-hardness" type="number" min="0" max="100" value="75" />
+                </div>
+                <div class="actions">
+                  <label for="texture-shape">Pixel shape</label><select id="texture-shape"><option>Square</option><option>Round</option></select>
+                  <label for="texture-stamp">Stamp</label><select id="texture-stamp"><option>Aligned</option><option>Fixed</option></select>
+                  <label><input id="texture-alpha" type="checkbox" /> Edit alpha</label>
+                  <label for="texture-alpha-value">Alpha</label><input id="texture-alpha-value" type="number" min="0" max="255" value="255" />
+                  <button id="texture-fill" type="button" disabled>Fill selection</button>
+                  <button id="texture-clear" type="button" disabled>Clear selection</button>
+                </div>
+                <div class="actions">
+                  <button id="texture-fit" type="button">Fit</button>
+                  <button id="texture-focus" type="button">Focus UVs</button>
+                  <button id="texture-actual" type="button">100%</button>
+                  <button id="texture-out" type="button" aria-label="Zoom out">−</button>
+                  <span id="texture-zoom">100%</span>
+                  <button id="texture-in" type="button" aria-label="Zoom in">+</button>
+                  <label><input id="texture-uv" type="checkbox" checked /> UV overlay</label>
+                  <label for="texture-uv-color">Line color</label><input id="texture-uv-color" type="color" value="#5ee8ff" />
+                  <label for="texture-uv-opacity">Line opacity %</label><input id="texture-uv-opacity" type="number" min="0" max="100" value="65" />
+                  <label for="texture-uv-width">Line width</label><input id="texture-uv-width" type="number" min="1" max="5" value="1" />
+                  <label><input id="texture-unlit" type="checkbox" /> Unlit 3D</label>
+                </div>
+                <div id="texture-viewport" tabindex="0" aria-label="Texture canvas">
+                  <canvas id="texture-picture" width="1" height="1" aria-hidden="true"></canvas>
+                  <canvas id="texture-overlay" width="1" height="1" aria-hidden="true"></canvas>
+                </div>
+                <p id="texture-status" aria-live="polite"></p>
+                <div class="actions">
+                  <label for="texture-import">Replace Base Color</label><input id="texture-import" type="file" accept=".png,.jpg,.jpeg,.webp" />
+                  <button id="texture-export" type="button">Export PNG</button>
+                </div>
+              </fieldset>
+            </section>
+          </section>
         </div>
-        <p id="autosave-status" aria-live="polite"></p>
-        <details id="project-settings" hidden>
-          <summary>Project settings</summary>
-          <label for="history-budget">Undo history budget (MiB)</label>
-          <input id="history-budget" type="number" min="1" max="512" step="1" />
-        </details>
-      </fieldset>
-      <div class="actions">
-        <button id="export" type="button" disabled>Export FBX ZIP</button>
-        <button id="export-original" type="button" disabled>Export Original</button>
-        <button id="unwrap" type="button" disabled>Generate UV atlas</button>
-        <button id="rebake" type="button" disabled>Rebake textures</button>
-        <button id="paint" type="button" aria-pressed="false" disabled>3D Paint</button>
-        <button id="mesh-mode" type="button" aria-pressed="false" disabled>Mesh Edit</button>
-        <button id="repair-mode" type="button" aria-pressed="false" disabled>Repair</button>
-        <button id="uv-mode" type="button" aria-pressed="false" disabled>UV Editor</button>
-        <button id="extract-mode" type="button" aria-pressed="false" disabled>Extract</button>
-        <button id="rig-mode" type="button" aria-pressed="false" disabled>Rig &amp; Pose</button>
-        <button id="weights-mode" type="button" aria-pressed="false" disabled>Weight Paint</button>
-        <button id="diag-mode" type="button" aria-pressed="false" disabled>Humanoid Tests</button>
-        <button id="undo-stroke" type="button" disabled>Undo</button>
-        <button id="redo" type="button" disabled>Redo</button>
-        <button id="toggle-texture" type="button" aria-expanded="false" disabled>Texture editor</button>
+        <div id="workspace-tools-resize" class="panel-divider" role="separator" aria-label="Resize tool panel" aria-controls="tools-panel" aria-orientation="vertical" tabindex="0"></div>
+        <aside id="tools-panel" class="workspace-panel" aria-label="Tool settings">
+          <h2 class="panel-title">Inspector</h2>
+          <div class="panel-content">
+            <fieldset id="paint-tools" hidden>
+              <legend>3D Paint</legend>
+              <label for="paint-target">Base Color binding</label>
+              <select id="paint-target"></select>
+              <button id="paint-unwrap" type="button" hidden>Create paint atlas</button>
+              <div class="actions">
+                <label for="paint-mode">Mode</label>
+                <select id="paint-mode"><option value="surface">Surface</option><option value="screen">Screen projection</option><option value="pixel">Texture pixels</option></select>
+                <label for="paint-size" id="paint-units">Diameter (scene units)</label><input id="paint-size" type="number" min="0.000001" />
+                <label for="paint-color">Color</label><input id="paint-color" type="color" value="#15e4f2" />
+                <label for="paint-opacity">Opacity %</label><input id="paint-opacity" type="number" value="100" min="0" max="100" />
+                <label for="paint-hardness">Hardness %</label><input id="paint-hardness" type="number" value="75" min="0" max="100" />
+                <label><input id="paint-shared" type="checkbox" /> Edit shared map</label>
+              </div>
+              <div class="actions">
+                <label for="paint-mask">Mask</label>
+                <select id="paint-mask"><option value="">None</option><option value="face">Selected faces</option><option value="island">Selected UV islands</option>
+                  <option value="created">New faces</option></select>
+                <button id="paint-select" type="button" aria-pressed="false">Pick mask regions</button>
+                <button id="paint-clear" type="button">Clear mask</button>
+              </div>
+              <div class="actions" id="paint-pose" hidden>
+                <label for="paint-clip">Frozen pose</label><select id="paint-clip"><option value="">Rest pose</option></select>
+                <label for="paint-seconds">Time (s)</label><input id="paint-seconds" type="number" min="0" step="0.01" value="0" />
+              </div>
+              <p id="paint-info" aria-live="polite"></p>
+            </fieldset>
+            <fieldset id="repair-tools" hidden>
+              <legend>Boundary Repair</legend>
+              <div class="contours">
+                <table aria-label="Model boundaries">
+                  <thead><tr><th>Contour</th><th>Type</th><th>Edges</th><th>Length</th><th>Diameter</th><th>Deviation</th><th>Keep Open</th><th>Result</th></tr></thead>
+                  <tbody id="repair-contours"></tbody>
+                </table>
+              </div>
+              <div class="actions">
+                <label for="repair-method">Method</label>
+                <select id="repair-method"><option value="planar">Planar Fill</option><option value="fan">Fan Fill</option>
+                  <option value="smooth">Smooth Fill</option><option value="grid">Grid Fill</option><option value="bridge">Bridge</option></select>
+                <label for="repair-material">Material</label><select id="repair-material"><option value="">Adjacent material</option></select>
+                <label><input id="repair-project" type="checkbox" /> Project UVs into 0–1</label>
+                <label for="repair-tolerance">Planarity tolerance %</label><input id="repair-tolerance" type="number" value="2.5" min="0" max="100" step="any" />
+              </div>
+              <div class="actions" id="repair-center" hidden>
+                <label><input id="repair-custom" type="checkbox" /> Custom Fan center</label>
+                <label for="repair-x">X</label><input id="repair-x" type="number" step="any" />
+                <label for="repair-y">Y</label><input id="repair-y" type="number" step="any" />
+                <label for="repair-z">Z</label><input id="repair-z" type="number" step="any" />
+              </div>
+              <div class="actions" id="repair-smooth-settings" hidden>
+                <label>Refinement passes <input id="repair-density" type="number" min="1" max="3" value="2" /></label>
+                <label>Fairing iterations <input id="repair-iterations" type="number" min="0" max="50" value="8" /></label>
+              </div>
+              <div class="actions" id="repair-grid-settings" hidden>
+                <label>Corner vertex IDs <input id="repair-grid-corners" placeholder="Automatic or four IDs" /></label>
+              </div>
+              <div class="actions" id="repair-bridge-settings" hidden>
+                <label>First loop offset <input id="repair-start-a" type="number" min="0" max="255" value="0" /></label>
+                <label>Second loop offset <input id="repair-start-b" type="number" min="0" max="255" placeholder="Best match" /></label>
+                <label>Twist (edges) <input id="repair-twist" type="number" min="-255" max="255" value="0" /></label>
+                <label>Segments <input id="repair-segments" type="number" min="1" max="16" value="1" /></label>
+                <label>Edges to bridge (0 for full loops) <input id="repair-span" type="number" min="0" max="255" value="0" /></label>
+                <label><input id="repair-reverse" type="checkbox" /> Swap first and second loop</label>
+              </div>
+              <details id="repair-auto-settings">
+                <summary>Auto Fill</summary>
+                <div class="actions">
+                  <label for="repair-scope">Scope</label>
+                  <select id="repair-scope"><option value="selection">Selected contours</option><option value="object">Selected object</option></select>
+                  <label for="repair-max-edges">Max edges</label><input id="repair-max-edges" type="number" min="3" step="1" value="8" />
+                  <label for="repair-max-diameter">Max diameter (0 for any)</label><input id="repair-max-diameter" type="number" min="0" step="any" value="0" />
+                  <label><input id="repair-allow-planar" type="checkbox" checked /> Planar</label>
+                  <label><input id="repair-allow-fan" type="checkbox" checked /> Fan</label>
+                  <button id="repair-auto" type="button">Preview Auto Fill</button>
+                </div>
+              </details>
+              <div class="actions">
+                <button id="repair-preview" type="button">Preview Fill</button>
+                <button id="repair-manual" type="button">Manual Face</button>
+                <button id="repair-apply" type="button" disabled>Apply</button>
+                <button id="repair-cancel" type="button" disabled>Cancel preview</button>
+                <button id="repair-select-new" type="button" hidden>Select new faces</button>
+                <button id="repair-uv-new" type="button" hidden>Edit new UVs</button>
+                <button id="repair-paint-new" type="button" hidden>Paint new faces</button>
+              </div>
+              <p id="repair-info" aria-live="polite"></p>
+            </fieldset>
+            <fieldset id="mesh-tools" hidden>
+              <legend>Mesh Edit</legend>
+              <div class="actions">
+                <label for="mesh-kind">Select</label>
+                <select id="mesh-kind"><option value="vertex">Vertex</option><option value="edge">Edge</option><option value="face">Face</option></select>
+                <label for="mesh-ids">Element IDs</label><input id="mesh-ids" placeholder="Click elements or enter IDs" />
+                <button id="mesh-connected" type="button">Select Connected</button>
+              </div>
+              <details>
+                <summary>Selection commands</summary>
+                <div class="actions">
+                  <button id="mesh-select-all" type="button">Select All</button>
+                  <button id="mesh-select-none" type="button">Clear</button>
+                  <button id="mesh-select-invert" type="button">Invert</button>
+                  <button id="mesh-select-boundary" type="button">Select Boundary</button>
+                </div>
+                <div class="actions">
+                  <label>Material <select id="mesh-selection-material"></select></label>
+                  <button id="mesh-select-material" type="button">Select by Material</button>
+                </div>
+              </details>
+              <div class="actions">
+                <label for="mesh-operation">Operation</label>
+                <select id="mesh-operation">
+                  <option value="move">Move</option><option value="rotate">Rotate</option><option value="scale">Scale</option>
+                  <option value="create">Create Face</option><option value="splitEdge">Split Edge</option><option value="splitFace">Split Face</option>
+                  <option value="weld">Weld</option><option value="flipEdge">Flip Edge</option><option value="dissolve">Dissolve Edge</option>
+                  <option value="flipNormals">Flip Normals</option><option value="recalculate">Recalculate Normals</option>
+                  <option value="separate">Separate</option><option value="delete">Delete</option>
+                </select>
+              </div>
+              <div class="actions" id="mesh-transform">
+                <label for="mesh-x">X</label><input id="mesh-x" type="number" value="0" step="any" />
+                <label for="mesh-y">Y</label><input id="mesh-y" type="number" value="0" step="any" />
+                <label for="mesh-z">Z</label><input id="mesh-z" type="number" value="0" step="any" />
+                <label for="mesh-axis">Axis</label><select id="mesh-axis"><option value="">All</option><option>X</option><option>Y</option><option>Z</option></select>
+                <label for="mesh-pivot">Pivot</label><select id="mesh-pivot"><option value="">Selection center</option><option value="origin">Object origin</option></select>
+              </div>
+              <div class="actions" id="mesh-create" hidden>
+                <label for="mesh-material">Material</label><select id="mesh-material"></select>
+                <label><input id="mesh-project" type="checkbox" /> Project UVs into 0–1</label>
+                <label><input id="mesh-chain" type="checkbox" /> Keep last edge</label>
+                <button id="mesh-winding" type="button">Flip winding</button>
+              </div>
+              <div class="actions" id="mesh-weld" hidden>
+                <label for="mesh-weld-mode">Weld to</label><select id="mesh-weld-mode"><option value="first">First vertex</option><option value="average">Average</option><option value="tolerance">Within tolerance</option></select>
+                <label for="mesh-tolerance">Tolerance</label><input id="mesh-tolerance" type="number" value="0.001" min="0" step="any" />
+              </div>
+              <div class="actions" id="mesh-split" hidden>
+                <label for="mesh-fraction">Position on edge</label><input id="mesh-fraction" type="number" value="0.5" min="0" max="1" step="any" />
+              </div>
+              <div class="actions">
+                <button id="mesh-preview" type="button">Preview</button>
+                <button id="mesh-apply" type="button" disabled>Apply</button>
+                <button id="mesh-cancel" type="button" disabled>Cancel preview</button>
+              </div>
+              <p id="mesh-info" aria-live="polite"></p>
+            </fieldset>
+            <fieldset id="diag-tools" hidden>
+              <legend>Humanoid Tests</legend>
+              <details id="diag-mapping">
+                <summary>Humanoid mapping</summary>
+                <div class="actions">
+                  <label>Rig <select id="diag-group"></select></label>
+                  <button id="diag-suggest" type="button">Suggest roles</button>
+                  <label><input id="diag-reverse" type="checkbox" /> Reverse forward direction</label>
+                </div>
+                <p id="diag-map-summary" aria-live="polite"></p>
+                <div id="diag-map"><table><thead><tr><th>Role</th><th>Joint</th><th>Mapping check</th></tr></thead><tbody id="diag-roles"></tbody></table></div>
+              </details>
+              <details id="diag-calibration">
+                <summary>Calibration and offsets</summary>
+                <div class="actions">
+                  <label>Reference <select id="diag-reference"><option>T</option><option>A</option></select></label>
+                  <button id="diag-calibrate" type="button">Align reference pose</button>
+                  <button id="diag-capture" type="button">Capture current manual pose</button>
+                </div>
+                <p id="diag-calibration-state"></p>
+                <div class="actions">
+                  <label>Calibrate axes for <select id="diag-axis-role"></select></label>
+                  <label>X ° <input id="diag-axis-x" type="number" min="-180" max="180" value="0" step="any" /></label>
+                  <label>Y ° <input id="diag-axis-y" type="number" min="-180" max="180" value="0" step="any" /></label>
+                  <label>Z ° <input id="diag-axis-z" type="number" min="-180" max="180" value="0" step="any" /></label>
+                  <button id="diag-save-axes" type="button">Save local axes</button>
+                </div>
+                <div class="actions">
+                  <label>Arm abduction ° <input id="diag-arm-offset" type="number" value="0" step="any" /></label>
+                  <label>Leg spacing ° <input id="diag-leg-offset" type="number" value="0" step="any" /></label>
+                  <label>Pelvis side <input id="diag-hip-x" type="number" value="0" step="any" /></label>
+                  <label>Pelvis height <input id="diag-hip-y" type="number" value="0" step="any" /></label>
+                  <label>Pelvis forward <input id="diag-hip-z" type="number" value="0" step="any" /></label>
+                  <button id="diag-save-offsets" type="button">Save character offsets</button>
+                </div>
+              </details>
+              <div class="actions">
+                <label>Diagnostic clip <select id="diag-clip"></select></label>
+                <label>Preset or saved pose <select id="diag-preset"></select></label>
+                <button id="diag-base" type="button">Reset to working rest</button>
+              </div>
+              <div class="actions">
+                <button id="diag-play" type="button" aria-pressed="false">Play</button>
+                <button id="diag-step-back" type="button" aria-label="Previous frame">−1 frame</button>
+                <button id="diag-step-forward" type="button" aria-label="Next frame">+1 frame</button>
+                <label><input id="diag-loop" type="checkbox" checked /> Loop</label>
+                <label>Speed <select id="diag-speed"><option value=".25">0.25×</option><option value=".5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="custom">Custom</option></select></label>
+                <label>Custom speed <input id="diag-speed-custom" type="number" value="1" min="0.05" max="4" step="any" /></label>
+                <label><input id="diag-root" type="checkbox" /> Root motion</label>
+              </div>
+              <label for="diag-scrub">Time <output id="diag-time">0.000 s</output></label>
+              <input id="diag-scrub" type="range" min="0" max="0" value="0" step="0.001" />
+              <div class="actions">
+                <label><input id="diag-range" type="checkbox" /> Repeat range</label>
+                <label>From (s) <input id="diag-in" type="number" min="0" value="0" step="any" /></label>
+                <label>To (s) <input id="diag-out" type="number" min="0" value="0" step="any" /></label>
+                <button id="diag-freeze" type="button">Freeze for Weight Paint</button>
+              </div>
+              <div class="actions">
+                <label><input id="diag-overlay" type="checkbox" checked /> Skeleton overlay</label>
+                <label><input id="diag-corrected" type="checkbox" checked /> Apply character offsets</label>
+                <label><input id="diag-compare" type="checkbox" /> Compare source skeleton</label>
+                <label>Display <select id="diag-display"><option value="lit">Lit</option><option value="unlit">Unlit</option><option value="heatmap">Weight heatmap</option></select></label>
+                <label>Heatmap joint <select id="diag-heat-joint"></select></label>
+              </div>
+              <div class="actions">
+                <label>Pose name <input id="diag-pose-name" maxlength="120" /></label>
+                <button id="diag-save-pose" type="button">Save current pose</button>
+              </div>
+              <details id="diag-export">
+                <summary>Published diagnostic clips</summary>
+                <div class="actions">
+                  <label>Clip name <input id="diag-publish-name" maxlength="120" /></label>
+                  <button id="diag-publish" type="button">Include selected diagnostic in exports</button>
+                  <label>Included clip <select id="diag-published"></select></label>
+                  <button id="diag-remove" type="button">Remove from exports</button>
+                </div>
+              </details>
+              <p id="diag-info" aria-live="polite"></p>
+            </fieldset>
+            <fieldset id="weights-tools" hidden>
+              <legend>Skin Weights</legend>
+              <div class="actions">
+                <label for="weights-joint">Influence</label><select id="weights-joint"></select>
+                <label><input id="weights-lock" type="checkbox" /> Lock influence</label>
+                <span id="weights-key" aria-label="Heatmap from zero to full influence">0 ───── 1</span>
+              </div>
+              <div class="actions">
+                <label>Brush <select id="weights-brush"><option value="add">Add</option><option value="subtract">Subtract</option>
+                  <option value="replace">Replace</option><option value="smooth">Smooth</option></select></label>
+                <label>Radius (px) <input id="weights-radius" type="number" min="1" max="512" value="30" /></label>
+                <label>Strength % <input id="weights-strength" type="number" min="0" max="100" value="35" /></label>
+                <label>Hardness % <input id="weights-hardness" type="number" min="0" max="100" value="50" /></label>
+                <label><input id="weights-xray" type="checkbox" /> X-ray</label>
+              </div>
+              <div class="actions">
+                <label>Value <input id="weights-value" type="number" min="0" max="1" step="any" value="0.5" /></label>
+                <label>Vertex IDs <input id="weights-vertices" placeholder="All active vertices" /></label>
+                <label>Face mask IDs <input id="weights-faces" placeholder="All active faces" /></label>
+                <button id="weights-pick-mask" type="button" aria-pressed="false">Pick mask faces</button>
+                <button id="weights-numeric" type="button">Set exact weight</button>
+                <button id="weights-normalize" type="button">Normalize</button>
+                <button id="weights-find" type="button">Find invalid</button>
+              </div>
+              <div class="actions">
+                <label>Frozen pose <select id="weights-pose"><option value="rest">Working rest</option></select></label>
+                <label>Time (s) <input id="weights-time" type="number" min="0" step="any" value="0" /></label>
+              </div>
+              <details id="weights-limit-tools">
+                <summary>Influence limits</summary>
+                <div class="actions">
+                  <label>Overflow <select id="weights-policy"><option value="reject">Reject stroke</option><option value="replace">Replace specified influence</option>
+                    <option value="limit">Limit to four</option></select></label>
+                  <label>Replacement <select id="weights-replace"></select></label>
+                  <label>Fallback for zero sums <select id="weights-fallback"></select></label>
+                  <label>Maximum <input id="weights-limit" type="number" min="1" max="4" value="4" /></label>
+                  <button id="weights-convert" type="button">Preview conversion</button>
+                  <button id="weights-confirm" type="button" disabled>Apply conversion</button>
+                </div>
+              </details>
+              <details id="weights-mirror-tools">
+                <summary>Mirror weights</summary>
+                <div class="actions">
+                  <label>Plane normal <select id="weights-axis"><option value="0">X</option><option value="1">Y</option><option value="2">Z</option></select></label>
+                  <label>Plane offset <input id="weights-offset" type="number" value="0" step="any" /></label>
+                  <label>Tolerance <input id="weights-tolerance" type="number" min="0.00000001" value="0.001" step="any" /></label>
+                  <label>Joint ID pairs <input id="weights-mirror-pairs" placeholder="object-1=object-2" /></label>
+                  <button id="weights-mirror" type="button">Mirror selection</button>
+                </div>
+              </details>
+              <details id="weights-transfer-tools">
+                <summary>Transfer weights</summary>
+                <div class="actions">
+                  <label>Source mesh <select id="weights-source"></select></label>
+                  <label>Source version <select id="weights-source-mode"><option value="original">Original import</option><option value="snapshot">Captured working state</option></select></label>
+                  <button id="weights-capture" type="button">Capture source</button>
+                  <label>Source face IDs <input id="weights-source-faces" placeholder="All source faces" /></label>
+                  <label>Source=target joint IDs <input id="weights-transfer-pairs" placeholder="Match stable IDs" /></label>
+                  <label>Max distance <input id="weights-distance" type="number" min="0.000001" step="any" value="0.1" /></label>
+                  <label>Normal angle ° <input id="weights-angle" type="number" min="0" max="90" value="45" /></label>
+                  <button id="weights-transfer" type="button">Transfer to selection</button>
+                </div>
+              </details>
+              <p id="weights-info" aria-live="polite"></p>
+              <p id="weights-issues" aria-live="polite"></p>
+            </fieldset>
+            <fieldset id="rig-tools" hidden>
+              <legend>Rig &amp; Pose</legend>
+              <div class="actions">
+                <label for="rig-joint">Joint hierarchy</label><select id="rig-joint"></select>
+                <label><input id="rig-xray" type="checkbox" checked /> X-ray</label>
+                <label><input id="rig-compare" type="checkbox" /> Show original skeleton</label>
+                <label for="rig-edit-mode">Edit</label><select id="rig-edit-mode"><option value="rest">Working rest</option><option value="pose">Manual pose</option></select>
+              </div>
+              <div class="actions">
+                <label for="rig-operation">Transform</label><select id="rig-operation"><option value="move">Move joint</option><option value="axes">Rotate local axes</option></select>
+                <label for="rig-space">Axes</label><select id="rig-space"><option value="local">Local</option><option value="world">World</option></select>
+                <label for="rig-descendants">Descendants</label><select id="rig-descendants"><option value="preserve">Preserve world transforms</option><option value="move">Move together</option></select>
+                <label>X <input id="rig-x" type="number" value="0" step="any" /></label>
+                <label>Y <input id="rig-y" type="number" value="0" step="any" /></label>
+                <label>Z <input id="rig-z" type="number" value="0" step="any" /></label>
+                <button id="rig-apply" type="button">Apply offsets</button>
+              </div>
+              <details id="rig-structure">
+                <summary>Hierarchy and binding</summary>
+                <div class="actions">
+                  <label for="rig-name">Joint name</label><input id="rig-name" maxlength="80" />
+                  <button id="rig-rename" type="button">Rename joint</button>
+                  <label>Child height <input id="rig-child-length" type="number" value="0.1" step="any" /></label>
+                  <button id="rig-add" type="button">Add child</button>
+                </div>
+                <div class="actions">
+                  <label for="rig-other">Parent or weight destination</label><select id="rig-other"></select>
+                  <button id="rig-reparent" type="button">Reparent joint</button>
+                  <button id="rig-delete" type="button">Delete and transfer weights</button>
+                </div>
+                <div class="actions">
+                  <label for="rig-mirror">Mirror partner</label><select id="rig-mirror"></select>
+                  <label for="rig-plane">Symmetry plane normal</label><select id="rig-plane"><option value="0">X</option><option value="1">Y</option><option value="2">Z</option></select>
+                  <label>Plane offset <input id="rig-plane-offset" type="number" value="0" step="any" /></label>
+                  <button id="rig-rebind" type="button">Rebind affected meshes</button>
+                  <button id="rig-reset" type="button">Restore original rig</button>
+                </div>
+              </details>
+              <div id="rig-pose-settings" hidden>
+                <div class="actions">
+                  <button id="rig-reset-bone" type="button">Reset Bone</button>
+                  <button id="rig-reset-pose" type="button">Reset Pose</button>
+                  <label for="rig-saved">Saved pose</label><select id="rig-saved"></select>
+                  <label for="rig-pose-name">Pose name</label><input id="rig-pose-name" maxlength="120" />
+                  <button id="rig-save" type="button">Save Pose</button>
+                  <button id="rig-rename-pose" type="button">Rename</button>
+                  <button id="rig-copy-pose" type="button">Duplicate</button>
+                  <button id="rig-delete-pose" type="button">Delete pose</button>
+                </div>
+                <div id="rig-presets" class="actions" role="group" aria-label="Quick load saved poses" hidden></div>
+                <div class="actions">
+                  <label>Finger joint IDs <input id="rig-fingers" placeholder="For example object-12, object-13" /></label>
+                  <label>Local axis <select id="rig-curl-axis"><option value="0">X</option><option value="1">Y</option><option value="2" selected>Z</option></select></label>
+                  <label>Curl angle <input id="rig-curl-angle" type="number" value="30" step="any" /></label>
+                  <button id="rig-curl" type="button">Curl chain</button>
+                  <button id="rig-sweep" type="button">Preview joint sweep</button>
+                </div>
+              </div>
+              <details id="rig-clips">
+                <summary>Original clips and adaptations</summary>
+                <div class="actions">
+                  <label for="rig-clip">Original clip</label><select id="rig-clip"></select>
+                  <label><input id="rig-preview-clip" type="checkbox" /> Preview frozen clip</label>
+                  <label>Time (s) <input id="rig-time" type="number" min="0" value="0" step="any" /></label>
+                  <label><input id="rig-include-offsets" type="checkbox" /> Include manual pose offsets</label>
+                  <button id="rig-adapt" type="button">Adapt clip</button>
+                  <button id="rig-use-original" type="button">Use original clip</button>
+                  <button id="rig-exclude" type="button">Exclude from export</button>
+                </div>
+                <p id="rig-clip-info"></p>
+              </details>
+              <p id="rig-info" aria-live="polite"></p>
+            </fieldset>
+            <fieldset id="extract-tools" hidden>
+              <legend>Extract Static Assets</legend>
+              <div class="actions">
+                <label for="extract-selection">Select</label>
+                <select id="extract-selection"><option value="all">Whole mesh</option><option value="components">Components</option><option value="faces">Faces</option></select>
+                <label for="extract-faces">Face IDs</label><input id="extract-faces" type="text" placeholder="3, 5, 9–14" />
+                <button id="extract-face-apply" type="button">Select faces</button>
+                <label for="extract-preview"><input id="extract-preview" type="checkbox" /> Isolate selection</label>
+              </div>
+              <details><summary>Connected components</summary><div id="extract-components" class="actions"></div></details>
+              <p id="extract-selection-info"></p>
+              <div class="actions">
+                <label for="extract-name">Output name</label><input id="extract-name" type="text" maxlength="120" />
+                <button id="extract-queue" type="button">Queue selected group</button>
+                <button id="extract-queue-components" type="button">Queue separate components</button>
+              </div>
+              <div id="extract-queue-list"></div>
+              <div class="actions">
+                <label for="extract-kind">Operation</label>
+                <select id="extract-kind"><option value="independent">Make Independent Asset</option><option value="geometry">Separate Geometry</option></select>
+                <label for="extract-copy">Source</label><select id="extract-copy"><option value="copy">Copy</option><option value="cut">Cut</option></select>
+                <label for="extract-layout">UVs</label>
+                <select id="extract-layout"><option value="pack" selected>Pack existing islands</option><option value="keep">Keep UVs</option><option value="unwrap">Auto Unwrap</option></select>
+                <label for="extract-size">Map size</label><select id="extract-size"><option>256</option><option>512</option><option selected>1024</option><option>2048</option><option>4096</option></select>
+                <label for="extract-padding">Padding (px)</label><input id="extract-padding" type="number" min="0" max="64" value="4" />
+                <label><input id="extract-fill" type="checkbox" /> Neutral fill for repairs</label>
+              </div>
+              <div class="actions">
+                <label for="extract-pivot">Pivot</label><select id="extract-pivot"><option value="original">Original</option><option value="center">Bounds center</option><option value="bottom">Bottom center</option><option value="point">Picked or local point</option></select>
+                <button id="extract-pick" type="button" aria-pressed="false">Pick pivot on mesh</button>
+                <label>Local X <input id="extract-x" type="number" step="any" value="0" /></label>
+                <label>Y <input id="extract-y" type="number" step="any" value="0" /></label>
+                <label>Z <input id="extract-z" type="number" step="any" value="0" /></label>
+              </div>
+              <div class="actions">
+                <label>Rotate X° <input id="extract-rx" type="number" step="any" value="0" /></label>
+                <label>Y° <input id="extract-ry" type="number" step="any" value="0" /></label>
+                <label>Z° <input id="extract-rz" type="number" step="any" value="0" /></label>
+                <label>Scale <input id="extract-scale" type="number" min="0.000001" step="any" value="1" /></label>
+                <label><input id="extract-origin" type="checkbox" /> Export pivot at world zero</label>
+              </div>
+              <div class="actions">
+                <button id="extract-create" type="button">Create selection</button>
+                <button id="extract-create-batch" type="button">Create queued groups</button>
+                <button id="extract-export" type="button">Export selected asset</button>
+                <button id="extract-export-batch" type="button">Export checked assets ZIP</button>
+              </div>
+              <div id="extract-assets" class="actions"></div>
+              <p id="extract-info" aria-live="polite"></p>
+            </fieldset>
+            <details id="workspace-quick" open>
+              <summary>Quick operations</summary>
+              <div class="actions">
+                <button id="unwrap" type="button" disabled>Generate UV atlas</button>
+                <button id="rebake" type="button" disabled>Rebake textures</button>
+              </div>
+            </details>
+            <details id="project-settings" hidden>
+              <summary>Project settings</summary>
+              <label for="history-budget">Undo history budget (MiB)</label>
+              <input id="history-budget" type="number" min="1" max="512" step="1" />
+            </details>
+            <details id="offline-panel">
+              <summary>Offline launch</summary>
+              <button id="offline-cache" type="button">Save application for offline launch</button>
+              <p id="offline-status" aria-live="polite"></p>
+            </details>
+          </div>
+        </aside>
+      </div>
+      <footer class="statusbar" aria-label="Project status">
+        <p id="status" role="status">Select a model to inspect it locally.</p>
         <button id="cancel-job" type="button" hidden>Cancel operation</button>
-      </div>
-      <p id="history-status" hidden></p>
-      <p id="mesh-export-note" hidden></p>
-      <p id="status" role="status">Select a model to inspect it locally.</p>
-      <div class="work-area">
-      <div>
-      <details id="asset-review" hidden>
-        <summary>Asset diagnostics and export report</summary>
-        <p id="asset-summary"></p>
-        <details><summary>Materials and UV channels</summary><ul id="asset-material-list"></ul></details>
-        <fieldset id="asset-review-actions">
-          <div class="actions">
-            <button id="asset-scan" type="button">Scan mesh</button>
-            <button id="asset-intersections" type="button">Check self-intersections</button>
-            <button id="asset-report-text" type="button">Save report text</button>
-            <button id="asset-report-json" type="button">Save report JSON</button>
-          </div>
-        </fieldset>
-        <p id="asset-scan-status" aria-live="polite"></p>
-        <ul id="asset-findings"></ul>
-      </details>
-      <details id="offline-panel">
-        <summary>Offline launch</summary>
-        <button id="offline-cache" type="button">Save application for offline launch</button>
-        <p id="offline-status" aria-live="polite"></p>
-      </details>
-      <fieldset id="viewer-tools" hidden>
-        <legend>Viewport</legend>
-        <div class="actions">
-          <label for="projection">Projection</label>
-          <select id="projection"><option>Perspective</option><option>Orthographic</option></select>
-          <label for="view-direction">View</label>
-          <select id="view-direction"><option>Oblique</option><option>Front</option><option>Back</option><option>Left</option><option>Right</option><option>Top</option><option>Bottom</option></select>
-          <button id="frame-all" type="button">Frame all</button>
-          <button id="frame-selection" type="button" disabled>Frame selection</button>
-        </div>
-      </fieldset>
-      <fieldset id="paint-tools" hidden>
-        <legend>3D Paint</legend>
-        <label for="paint-target">Base Color binding</label>
-        <select id="paint-target"></select>
-        <button id="paint-unwrap" type="button" hidden>Create paint atlas</button>
-        <div class="actions">
-          <label for="paint-mode">Mode</label>
-          <select id="paint-mode"><option value="surface">Surface</option><option value="screen">Screen projection</option><option value="pixel">Texture pixels</option></select>
-          <label for="paint-size" id="paint-units">Diameter (scene units)</label><input id="paint-size" type="number" min="0.000001" />
-          <label for="paint-color">Color</label><input id="paint-color" type="color" value="#15e4f2" />
-          <label for="paint-opacity">Opacity %</label><input id="paint-opacity" type="number" value="100" min="0" max="100" />
-          <label for="paint-hardness">Hardness %</label><input id="paint-hardness" type="number" value="75" min="0" max="100" />
-          <label><input id="paint-shared" type="checkbox" /> Edit shared map</label>
-        </div>
-        <div class="actions">
-          <label for="paint-mask">Mask</label>
-          <select id="paint-mask"><option value="">None</option><option value="face">Selected faces</option><option value="island">Selected UV islands</option>
-            <option value="created">New faces</option></select>
-          <button id="paint-select" type="button" aria-pressed="false">Pick mask regions</button>
-          <button id="paint-clear" type="button">Clear mask</button>
-        </div>
-        <div class="actions" id="paint-pose" hidden>
-          <label for="paint-clip">Frozen pose</label><select id="paint-clip"><option value="">Rest pose</option></select>
-          <label for="paint-seconds">Time (s)</label><input id="paint-seconds" type="number" min="0" step="0.01" value="0" />
-        </div>
-        <p id="paint-info" aria-live="polite"></p>
-      </fieldset>
-      <div class="model-view">
-        <canvas id="viewport" width="640" height="480" tabindex="0" role="img" aria-label="Imported model preview" hidden></canvas>
-        <canvas id="paint-cursor" width="640" height="480" aria-hidden="true" hidden></canvas>
-        <span id="rig-label" aria-hidden="true" hidden></span>
-        <span id="weights-cursor" aria-hidden="true" hidden></span>
-      </div>
-      <fieldset id="repair-tools" hidden>
-        <legend>Boundary Repair</legend>
-        <div class="contours">
-          <table aria-label="Model boundaries">
-            <thead><tr><th>Contour</th><th>Type</th><th>Edges</th><th>Length</th><th>Diameter</th><th>Deviation</th><th>Keep Open</th><th>Result</th></tr></thead>
-            <tbody id="repair-contours"></tbody>
-          </table>
-        </div>
-        <div class="actions">
-          <label for="repair-method">Method</label>
-          <select id="repair-method"><option value="planar">Planar Fill</option><option value="fan">Fan Fill</option>
-            <option value="smooth">Smooth Fill</option><option value="grid">Grid Fill</option><option value="bridge">Bridge</option></select>
-          <label for="repair-material">Material</label><select id="repair-material"><option value="">Adjacent material</option></select>
-          <label><input id="repair-project" type="checkbox" /> Project UVs into 0–1</label>
-          <label for="repair-tolerance">Planarity tolerance %</label><input id="repair-tolerance" type="number" value="2.5" min="0" max="100" step="any" />
-        </div>
-        <div class="actions" id="repair-center" hidden>
-          <label><input id="repair-custom" type="checkbox" /> Custom Fan center</label>
-          <label for="repair-x">X</label><input id="repair-x" type="number" step="any" />
-          <label for="repair-y">Y</label><input id="repair-y" type="number" step="any" />
-          <label for="repair-z">Z</label><input id="repair-z" type="number" step="any" />
-        </div>
-        <div class="actions" id="repair-smooth-settings" hidden>
-          <label>Refinement passes <input id="repair-density" type="number" min="1" max="3" value="2" /></label>
-          <label>Fairing iterations <input id="repair-iterations" type="number" min="0" max="50" value="8" /></label>
-        </div>
-        <div class="actions" id="repair-grid-settings" hidden>
-          <label>Corner vertex IDs <input id="repair-grid-corners" placeholder="Automatic or four IDs" /></label>
-        </div>
-        <div class="actions" id="repair-bridge-settings" hidden>
-          <label>First loop offset <input id="repair-start-a" type="number" min="0" max="255" value="0" /></label>
-          <label>Second loop offset <input id="repair-start-b" type="number" min="0" max="255" placeholder="Best match" /></label>
-          <label>Twist (edges) <input id="repair-twist" type="number" min="-255" max="255" value="0" /></label>
-          <label>Segments <input id="repair-segments" type="number" min="1" max="16" value="1" /></label>
-          <label>Edges to bridge (0 for full loops) <input id="repair-span" type="number" min="0" max="255" value="0" /></label>
-          <label><input id="repair-reverse" type="checkbox" /> Swap first and second loop</label>
-        </div>
-        <details id="repair-auto-settings">
-          <summary>Auto Fill</summary>
-          <div class="actions">
-            <label for="repair-scope">Scope</label>
-            <select id="repair-scope"><option value="selection">Selected contours</option><option value="object">Selected object</option></select>
-            <label for="repair-max-edges">Max edges</label><input id="repair-max-edges" type="number" min="3" step="1" value="8" />
-            <label for="repair-max-diameter">Max diameter (0 for any)</label><input id="repair-max-diameter" type="number" min="0" step="any" value="0" />
-            <label><input id="repair-allow-planar" type="checkbox" checked /> Planar</label>
-            <label><input id="repair-allow-fan" type="checkbox" checked /> Fan</label>
-            <button id="repair-auto" type="button">Preview Auto Fill</button>
-          </div>
-        </details>
-        <div class="actions">
-          <button id="repair-preview" type="button">Preview Fill</button>
-          <button id="repair-manual" type="button">Manual Face</button>
-          <button id="repair-apply" type="button" disabled>Apply</button>
-          <button id="repair-cancel" type="button" disabled>Cancel preview</button>
-          <button id="repair-select-new" type="button" hidden>Select new faces</button>
-          <button id="repair-uv-new" type="button" hidden>Edit new UVs</button>
-          <button id="repair-paint-new" type="button" hidden>Paint new faces</button>
-        </div>
-        <p id="repair-info" aria-live="polite"></p>
-      </fieldset>
-      <fieldset id="mesh-tools" hidden>
-        <legend>Mesh Edit</legend>
-        <div class="actions">
-          <label for="mesh-kind">Select</label>
-          <select id="mesh-kind"><option value="vertex">Vertex</option><option value="edge">Edge</option><option value="face">Face</option></select>
-          <label for="mesh-ids">Element IDs</label><input id="mesh-ids" placeholder="Click elements or enter IDs" />
-          <button id="mesh-connected" type="button">Select Connected</button>
-        </div>
-        <div class="actions">
-          <label for="mesh-operation">Operation</label>
-          <select id="mesh-operation">
-            <option value="move">Move</option><option value="rotate">Rotate</option><option value="scale">Scale</option>
-            <option value="create">Create Face</option><option value="splitEdge">Split Edge</option><option value="splitFace">Split Face</option>
-            <option value="weld">Weld</option><option value="flipEdge">Flip Edge</option><option value="dissolve">Dissolve Edge</option>
-            <option value="flipNormals">Flip Normals</option><option value="recalculate">Recalculate Normals</option>
-            <option value="separate">Separate</option><option value="delete">Delete</option>
-          </select>
-        </div>
-        <div class="actions" id="mesh-transform">
-          <label for="mesh-x">X</label><input id="mesh-x" type="number" value="0" step="any" />
-          <label for="mesh-y">Y</label><input id="mesh-y" type="number" value="0" step="any" />
-          <label for="mesh-z">Z</label><input id="mesh-z" type="number" value="0" step="any" />
-          <label for="mesh-axis">Axis</label><select id="mesh-axis"><option value="">All</option><option>X</option><option>Y</option><option>Z</option></select>
-          <label for="mesh-pivot">Pivot</label><select id="mesh-pivot"><option value="">Selection center</option><option value="origin">Object origin</option></select>
-        </div>
-        <div class="actions" id="mesh-create" hidden>
-          <label for="mesh-material">Material</label><select id="mesh-material"></select>
-          <label><input id="mesh-project" type="checkbox" /> Project UVs into 0–1</label>
-          <label><input id="mesh-chain" type="checkbox" /> Keep last edge</label>
-          <button id="mesh-winding" type="button">Flip winding</button>
-        </div>
-        <div class="actions" id="mesh-weld" hidden>
-          <label for="mesh-weld-mode">Weld to</label><select id="mesh-weld-mode"><option value="first">First vertex</option><option value="average">Average</option><option value="tolerance">Within tolerance</option></select>
-          <label for="mesh-tolerance">Tolerance</label><input id="mesh-tolerance" type="number" value="0.001" min="0" step="any" />
-        </div>
-        <div class="actions" id="mesh-split" hidden>
-          <label for="mesh-fraction">Position on edge</label><input id="mesh-fraction" type="number" value="0.5" min="0" max="1" step="any" />
-        </div>
-        <div class="actions">
-          <button id="mesh-preview" type="button">Preview</button>
-          <button id="mesh-apply" type="button" disabled>Apply</button>
-          <button id="mesh-cancel" type="button" disabled>Cancel preview</button>
-        </div>
-        <p id="mesh-info" aria-live="polite"></p>
-      </fieldset>
-      <fieldset id="object-tools" hidden>
-        <legend>Objects</legend>
-        <div class="actions">
-          <label for="object-selection">Select object</label>
-          <select id="object-selection"></select>
-          <button id="object-visibility" type="button" disabled>Hide object</button>
-          <label for="object-label">Project label</label>
-          <input id="object-label" maxlength="160" disabled />
-          <button id="rename-object" type="button" disabled>Apply label</button>
-        </div>
         <p id="selection-details"></p>
-      </fieldset>
-      </div>
-      <fieldset id="diag-tools" hidden>
-        <legend>Humanoid Tests</legend>
-        <details id="diag-mapping">
-          <summary>Humanoid mapping</summary>
-          <div class="actions">
-            <label>Rig <select id="diag-group"></select></label>
-            <button id="diag-suggest" type="button">Suggest roles</button>
-            <label><input id="diag-reverse" type="checkbox" /> Reverse forward direction</label>
-          </div>
-          <p id="diag-map-summary" aria-live="polite"></p>
-          <div id="diag-map"><table><thead><tr><th>Role</th><th>Joint</th><th>Mapping check</th></tr></thead><tbody id="diag-roles"></tbody></table></div>
-        </details>
-        <details id="diag-calibration">
-          <summary>Calibration and offsets</summary>
-          <div class="actions">
-            <label>Reference <select id="diag-reference"><option>T</option><option>A</option></select></label>
-            <button id="diag-calibrate" type="button">Align reference pose</button>
-            <button id="diag-capture" type="button">Capture current manual pose</button>
-          </div>
-          <p id="diag-calibration-state"></p>
-          <div class="actions">
-            <label>Calibrate axes for <select id="diag-axis-role"></select></label>
-            <label>X ° <input id="diag-axis-x" type="number" min="-180" max="180" value="0" step="any" /></label>
-            <label>Y ° <input id="diag-axis-y" type="number" min="-180" max="180" value="0" step="any" /></label>
-            <label>Z ° <input id="diag-axis-z" type="number" min="-180" max="180" value="0" step="any" /></label>
-            <button id="diag-save-axes" type="button">Save local axes</button>
-          </div>
-          <div class="actions">
-            <label>Arm abduction ° <input id="diag-arm-offset" type="number" value="0" step="any" /></label>
-            <label>Leg spacing ° <input id="diag-leg-offset" type="number" value="0" step="any" /></label>
-            <label>Pelvis side <input id="diag-hip-x" type="number" value="0" step="any" /></label>
-            <label>Pelvis height <input id="diag-hip-y" type="number" value="0" step="any" /></label>
-            <label>Pelvis forward <input id="diag-hip-z" type="number" value="0" step="any" /></label>
-            <button id="diag-save-offsets" type="button">Save character offsets</button>
-          </div>
-        </details>
-        <div class="actions">
-          <label>Diagnostic clip <select id="diag-clip"></select></label>
-          <label>Preset or saved pose <select id="diag-preset"></select></label>
-          <button id="diag-base" type="button">Reset to working rest</button>
-        </div>
-        <div class="actions">
-          <button id="diag-play" type="button" aria-pressed="false">Play</button>
-          <button id="diag-step-back" type="button" aria-label="Previous frame">−1 frame</button>
-          <button id="diag-step-forward" type="button" aria-label="Next frame">+1 frame</button>
-          <label><input id="diag-loop" type="checkbox" checked /> Loop</label>
-          <label>Speed <select id="diag-speed"><option value=".25">0.25×</option><option value=".5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="custom">Custom</option></select></label>
-          <label>Custom speed <input id="diag-speed-custom" type="number" value="1" min="0.05" max="4" step="any" /></label>
-          <label><input id="diag-root" type="checkbox" /> Root motion</label>
-        </div>
-        <label for="diag-scrub">Time <output id="diag-time">0.000 s</output></label>
-        <input id="diag-scrub" type="range" min="0" max="0" value="0" step="0.001" />
-        <div class="actions">
-          <label><input id="diag-range" type="checkbox" /> Repeat range</label>
-          <label>From (s) <input id="diag-in" type="number" min="0" value="0" step="any" /></label>
-          <label>To (s) <input id="diag-out" type="number" min="0" value="0" step="any" /></label>
-          <button id="diag-freeze" type="button">Freeze for Weight Paint</button>
-        </div>
-        <div class="actions">
-          <label><input id="diag-overlay" type="checkbox" checked /> Skeleton overlay</label>
-          <label><input id="diag-corrected" type="checkbox" checked /> Apply character offsets</label>
-          <label><input id="diag-compare" type="checkbox" /> Compare source skeleton</label>
-          <label>Display <select id="diag-display"><option value="lit">Lit</option><option value="unlit">Unlit</option><option value="heatmap">Weight heatmap</option></select></label>
-          <label>Heatmap joint <select id="diag-heat-joint"></select></label>
-        </div>
-        <div class="actions">
-          <label>Pose name <input id="diag-pose-name" maxlength="120" /></label>
-          <button id="diag-save-pose" type="button">Save current pose</button>
-        </div>
-        <details id="diag-export">
-          <summary>Published diagnostic clips</summary>
-          <div class="actions">
-            <label>Clip name <input id="diag-publish-name" maxlength="120" /></label>
-            <button id="diag-publish" type="button">Include selected diagnostic in exports</button>
-            <label>Included clip <select id="diag-published"></select></label>
-            <button id="diag-remove" type="button">Remove from exports</button>
-          </div>
-        </details>
-        <p id="diag-info" aria-live="polite"></p>
-      </fieldset>
-      <fieldset id="weights-tools" hidden>
-        <legend>Skin Weights</legend>
-        <div class="actions">
-          <label for="weights-joint">Influence</label><select id="weights-joint"></select>
-          <label><input id="weights-lock" type="checkbox" /> Lock influence</label>
-          <span id="weights-key" aria-label="Heatmap from zero to full influence">0 ───── 1</span>
-        </div>
-        <div class="actions">
-          <label>Brush <select id="weights-brush"><option value="add">Add</option><option value="subtract">Subtract</option>
-            <option value="replace">Replace</option><option value="smooth">Smooth</option></select></label>
-          <label>Radius (px) <input id="weights-radius" type="number" min="1" max="512" value="30" /></label>
-          <label>Strength % <input id="weights-strength" type="number" min="0" max="100" value="35" /></label>
-          <label>Hardness % <input id="weights-hardness" type="number" min="0" max="100" value="50" /></label>
-          <label><input id="weights-xray" type="checkbox" /> X-ray</label>
-        </div>
-        <div class="actions">
-          <label>Value <input id="weights-value" type="number" min="0" max="1" step="any" value="0.5" /></label>
-          <label>Vertex IDs <input id="weights-vertices" placeholder="All active vertices" /></label>
-          <label>Face mask IDs <input id="weights-faces" placeholder="All active faces" /></label>
-          <button id="weights-pick-mask" type="button" aria-pressed="false">Pick mask faces</button>
-          <button id="weights-numeric" type="button">Set exact weight</button>
-          <button id="weights-normalize" type="button">Normalize</button>
-          <button id="weights-find" type="button">Find invalid</button>
-        </div>
-        <div class="actions">
-          <label>Frozen pose <select id="weights-pose"><option value="rest">Working rest</option></select></label>
-          <label>Time (s) <input id="weights-time" type="number" min="0" step="any" value="0" /></label>
-        </div>
-        <details id="weights-limit-tools">
-          <summary>Influence limits</summary>
-          <div class="actions">
-            <label>Overflow <select id="weights-policy"><option value="reject">Reject stroke</option><option value="replace">Replace specified influence</option>
-              <option value="limit">Limit to four</option></select></label>
-            <label>Replacement <select id="weights-replace"></select></label>
-            <label>Fallback for zero sums <select id="weights-fallback"></select></label>
-            <label>Maximum <input id="weights-limit" type="number" min="1" max="4" value="4" /></label>
-            <button id="weights-convert" type="button">Preview conversion</button>
-            <button id="weights-confirm" type="button" disabled>Apply conversion</button>
-          </div>
-        </details>
-        <details id="weights-mirror-tools">
-          <summary>Mirror weights</summary>
-          <div class="actions">
-            <label>Plane normal <select id="weights-axis"><option value="0">X</option><option value="1">Y</option><option value="2">Z</option></select></label>
-            <label>Plane offset <input id="weights-offset" type="number" value="0" step="any" /></label>
-            <label>Tolerance <input id="weights-tolerance" type="number" min="0.00000001" value="0.001" step="any" /></label>
-            <label>Joint ID pairs <input id="weights-mirror-pairs" placeholder="object-1=object-2" /></label>
-            <button id="weights-mirror" type="button">Mirror selection</button>
-          </div>
-        </details>
-        <details id="weights-transfer-tools">
-          <summary>Transfer weights</summary>
-          <div class="actions">
-            <label>Source mesh <select id="weights-source"></select></label>
-            <label>Source version <select id="weights-source-mode"><option value="original">Original import</option><option value="snapshot">Captured working state</option></select></label>
-            <button id="weights-capture" type="button">Capture source</button>
-            <label>Source face IDs <input id="weights-source-faces" placeholder="All source faces" /></label>
-            <label>Source=target joint IDs <input id="weights-transfer-pairs" placeholder="Match stable IDs" /></label>
-            <label>Max distance <input id="weights-distance" type="number" min="0.000001" step="any" value="0.1" /></label>
-            <label>Normal angle ° <input id="weights-angle" type="number" min="0" max="90" value="45" /></label>
-            <button id="weights-transfer" type="button">Transfer to selection</button>
-          </div>
-        </details>
-        <p id="weights-info" aria-live="polite"></p>
-        <p id="weights-issues" aria-live="polite"></p>
-      </fieldset>
-      <fieldset id="rig-tools" hidden>
-        <legend>Rig &amp; Pose</legend>
-        <div class="actions">
-          <label for="rig-joint">Joint hierarchy</label><select id="rig-joint"></select>
-          <label><input id="rig-xray" type="checkbox" checked /> X-ray</label>
-          <label><input id="rig-compare" type="checkbox" /> Show original skeleton</label>
-          <label for="rig-edit-mode">Edit</label><select id="rig-edit-mode"><option value="rest">Working rest</option><option value="pose">Manual pose</option></select>
-        </div>
-        <div class="actions">
-          <label for="rig-operation">Transform</label><select id="rig-operation"><option value="move">Move joint</option><option value="axes">Rotate local axes</option></select>
-          <label for="rig-space">Axes</label><select id="rig-space"><option value="local">Local</option><option value="world">World</option></select>
-          <label for="rig-descendants">Descendants</label><select id="rig-descendants"><option value="preserve">Preserve world transforms</option><option value="move">Move together</option></select>
-          <label>X <input id="rig-x" type="number" value="0" step="any" /></label>
-          <label>Y <input id="rig-y" type="number" value="0" step="any" /></label>
-          <label>Z <input id="rig-z" type="number" value="0" step="any" /></label>
-          <button id="rig-apply" type="button">Apply offsets</button>
-        </div>
-        <details id="rig-structure">
-          <summary>Hierarchy and binding</summary>
-          <div class="actions">
-            <label for="rig-name">Joint name</label><input id="rig-name" maxlength="80" />
-            <button id="rig-rename" type="button">Rename joint</button>
-            <label>Child height <input id="rig-child-length" type="number" value="0.1" step="any" /></label>
-            <button id="rig-add" type="button">Add child</button>
-          </div>
-          <div class="actions">
-            <label for="rig-other">Parent or weight destination</label><select id="rig-other"></select>
-            <button id="rig-reparent" type="button">Reparent joint</button>
-            <button id="rig-delete" type="button">Delete and transfer weights</button>
-          </div>
-          <div class="actions">
-            <label for="rig-mirror">Mirror partner</label><select id="rig-mirror"></select>
-            <label for="rig-plane">Symmetry plane normal</label><select id="rig-plane"><option value="0">X</option><option value="1">Y</option><option value="2">Z</option></select>
-            <label>Plane offset <input id="rig-plane-offset" type="number" value="0" step="any" /></label>
-            <button id="rig-rebind" type="button">Rebind affected meshes</button>
-            <button id="rig-reset" type="button">Restore original rig</button>
-          </div>
-        </details>
-        <div id="rig-pose-settings" hidden>
-          <div class="actions">
-            <button id="rig-reset-bone" type="button">Reset Bone</button>
-            <button id="rig-reset-pose" type="button">Reset Pose</button>
-            <label for="rig-saved">Saved pose</label><select id="rig-saved"></select>
-            <label for="rig-pose-name">Pose name</label><input id="rig-pose-name" maxlength="120" />
-            <button id="rig-save" type="button">Save Pose</button>
-            <button id="rig-rename-pose" type="button">Rename</button>
-            <button id="rig-copy-pose" type="button">Duplicate</button>
-            <button id="rig-delete-pose" type="button">Delete pose</button>
-          </div>
-          <div id="rig-presets" class="actions" role="group" aria-label="Quick load saved poses" hidden></div>
-          <div class="actions">
-            <label>Finger joint IDs <input id="rig-fingers" placeholder="For example object-12, object-13" /></label>
-            <label>Local axis <select id="rig-curl-axis"><option value="0">X</option><option value="1">Y</option><option value="2" selected>Z</option></select></label>
-            <label>Curl angle <input id="rig-curl-angle" type="number" value="30" step="any" /></label>
-            <button id="rig-curl" type="button">Curl chain</button>
-            <button id="rig-sweep" type="button">Preview joint sweep</button>
-          </div>
-        </div>
-        <details id="rig-clips">
-          <summary>Original clips and adaptations</summary>
-          <div class="actions">
-            <label for="rig-clip">Original clip</label><select id="rig-clip"></select>
-            <label><input id="rig-preview-clip" type="checkbox" /> Preview frozen clip</label>
-            <label>Time (s) <input id="rig-time" type="number" min="0" value="0" step="any" /></label>
-            <label><input id="rig-include-offsets" type="checkbox" /> Include manual pose offsets</label>
-            <button id="rig-adapt" type="button">Adapt clip</button>
-            <button id="rig-use-original" type="button">Use original clip</button>
-            <button id="rig-exclude" type="button">Exclude from export</button>
-          </div>
-          <p id="rig-clip-info"></p>
-        </details>
-        <p id="rig-info" aria-live="polite"></p>
-      </fieldset>
-      <fieldset id="extract-tools" hidden>
-        <legend>Extract Static Assets</legend>
-        <div class="actions">
-          <label for="extract-selection">Select</label>
-          <select id="extract-selection"><option value="all">Whole mesh</option><option value="components">Components</option><option value="faces">Faces</option></select>
-          <label for="extract-faces">Face IDs</label><input id="extract-faces" type="text" placeholder="3, 5, 9–14" />
-          <button id="extract-face-apply" type="button">Select faces</button>
-          <label for="extract-preview"><input id="extract-preview" type="checkbox" /> Isolate selection</label>
-        </div>
-        <details><summary>Connected components</summary><div id="extract-components" class="actions"></div></details>
-        <p id="extract-selection-info"></p>
-        <div class="actions">
-          <label for="extract-name">Output name</label><input id="extract-name" type="text" maxlength="120" />
-          <button id="extract-queue" type="button">Queue selected group</button>
-          <button id="extract-queue-components" type="button">Queue separate components</button>
-        </div>
-        <div id="extract-queue-list"></div>
-        <div class="actions">
-          <label for="extract-kind">Operation</label>
-          <select id="extract-kind"><option value="independent">Make Independent Asset</option><option value="geometry">Separate Geometry</option></select>
-          <label for="extract-copy">Source</label><select id="extract-copy"><option value="copy">Copy</option><option value="cut">Cut</option></select>
-          <label for="extract-layout">UVs</label>
-          <select id="extract-layout"><option value="pack" selected>Pack existing islands</option><option value="keep">Keep UVs</option><option value="unwrap">Auto Unwrap</option></select>
-          <label for="extract-size">Map size</label><select id="extract-size"><option>256</option><option>512</option><option selected>1024</option><option>2048</option><option>4096</option></select>
-          <label for="extract-padding">Padding (px)</label><input id="extract-padding" type="number" min="0" max="64" value="4" />
-          <label><input id="extract-fill" type="checkbox" /> Neutral fill for repairs</label>
-        </div>
-        <div class="actions">
-          <label for="extract-pivot">Pivot</label><select id="extract-pivot"><option value="original">Original</option><option value="center">Bounds center</option><option value="bottom">Bottom center</option><option value="point">Picked or local point</option></select>
-          <button id="extract-pick" type="button" aria-pressed="false">Pick pivot on mesh</button>
-          <label>Local X <input id="extract-x" type="number" step="any" value="0" /></label>
-          <label>Y <input id="extract-y" type="number" step="any" value="0" /></label>
-          <label>Z <input id="extract-z" type="number" step="any" value="0" /></label>
-        </div>
-        <div class="actions">
-          <label>Rotate X° <input id="extract-rx" type="number" step="any" value="0" /></label>
-          <label>Y° <input id="extract-ry" type="number" step="any" value="0" /></label>
-          <label>Z° <input id="extract-rz" type="number" step="any" value="0" /></label>
-          <label>Scale <input id="extract-scale" type="number" min="0.000001" step="any" value="1" /></label>
-          <label><input id="extract-origin" type="checkbox" /> Export pivot at world zero</label>
-        </div>
-        <div class="actions">
-          <button id="extract-create" type="button">Create selection</button>
-          <button id="extract-create-batch" type="button">Create queued groups</button>
-          <button id="extract-export" type="button">Export selected asset</button>
-          <button id="extract-export-batch" type="button">Export checked assets ZIP</button>
-        </div>
-        <div id="extract-assets" class="actions"></div>
-        <p id="extract-info" aria-live="polite"></p>
-      </fieldset>
-      <fieldset id="uv-tools" hidden>
-        <legend>UV Editor</legend>
-        <div class="actions">
-          <label for="uv-material">Material</label><select id="uv-material"></select>
-          <label for="uv-map">Map</label><select id="uv-map"></select>
-          <label for="uv-channel">Channel</label><select id="uv-channel"></select>
-          <label for="uv-background">Background</label><select id="uv-background"><option value="texture">Texture</option><option value="checker">Checker</option><option value="solid">Solid</option><option value="coverage">Coverage</option></select>
-          <label for="uv-kind">Select</label><select id="uv-kind"><option value="vertex">UV vertex</option><option value="edge">Edge</option><option value="face">Face</option><option value="island">Island</option></select>
-        </div>
-        <canvas id="uv-canvas" width="768" height="556" tabindex="0" aria-label="UV grid and islands"></canvas>
-        <div class="actions">
-          <button id="uv-fit" type="button">Fit all</button><button id="uv-fit-selection" type="button">Fit selection</button>
-          <button id="uv-select-all" type="button">Select all</button>
-          <button id="uv-clear-selection" type="button">Clear selection</button>
-          <span id="uv-coordinate"></span>
-        </div>
-        <p id="uv-diagnostics"></p>
-        <div class="actions">
-          <label for="uv-operation">Operation</label>
-          <select id="uv-operation">
-            <option value="move">Move</option><option value="rotate">Rotate</option><option value="scale">Scale</option>
-            <option value="alignU">Align U</option><option value="alignV">Align V</option>
-            <option value="pixel">Snap to pixels</option><option value="vertex">Snap to nearest vertex</option><option value="boundary">Snap to tile edge</option>
-            <option value="cut">Mark seam</option><option value="uncut">Clear seam</option>
-            <option value="stitch">Stitch UV edge</option><option value="planar">Planar projection</option>
-          </select>
-          <label for="uv-u" id="uv-u-label">U</label><input id="uv-u" type="number" value="0" step="any" />
-          <label for="uv-v" id="uv-v-label">V</label><input id="uv-v" type="number" value="0" step="any" />
-          <label for="uv-pivot">Pivot</label><select id="uv-pivot"><option value="selection">Selection center</option><option value="origin">Origin</option><option value="tile">Tile center</option></select>
-          <label for="uv-plane">Plane</label><select id="uv-plane"><option value="">Estimated plane</option><option value="xy">XY</option><option value="xz">XZ</option><option value="yz">YZ</option></select>
-          <button id="uv-run" type="button">Update draft</button>
-        </div>
-        <p id="uv-stitch-hint" hidden>In Edge mode, pick the side of the seam you want to keep fixed.</p>
-        <div class="actions">
-          <label for="uv-size">Atlas size</label><select id="uv-size"><option>256</option><option>512</option><option selected>1024</option><option>2048</option><option>4096</option></select>
-          <label for="uv-padding">Padding (px)</label><input id="uv-padding" type="number" value="4" min="0" max="64" />
-          <label><input id="uv-allow-rotate" type="checkbox" checked /> Allow rotation</label>
-          <label><input id="uv-equalize" type="checkbox" /> Equalize texel density</label>
-          <label><input id="uv-selected-only" type="checkbox" /> Selected only</label>
-          <button id="uv-pack" type="button">Pack islands</button><button id="uv-unwrap" type="button">Auto Unwrap</button>
-        </div>
-        <div class="actions">
-          <label for="uv-mode-select">Apply mode</label><select id="uv-mode-select"><option value="preserve">Preserve Appearance</option><option value="mapping">Change Mapping</option><option value="projection">Spatial Projection</option></select>
-          <label for="uv-source">Bake source</label><select id="uv-source"><option value="working">Working snapshot</option><option value="original">Original import</option></select>
-          <label for="uv-filter">Sampling</label><select id="uv-filter"><option value="linear">Bilinear</option><option value="nearest">Nearest</option></select>
-          <label><input id="uv-missing" type="checkbox" /> Neutral fill for repairs</label>
-          <button id="uv-apply" type="button">Rebake and Apply</button><button id="uv-cancel" type="button">Cancel draft</button>
-        </div>
-        <div id="uv-projection-settings" hidden>
-          <div class="actions">
-            <label for="uv-projection-object">Source mesh</label><select id="uv-projection-object"></select>
-            <label for="uv-projection-pairs">Target = source</label><input id="uv-projection-pairs" placeholder="1=2, 2=1" />
-            <label>Max distance <input id="uv-projection-distance" type="number" min="0" value="0.1" step="any" /></label>
-            <label>Max normal angle <input id="uv-projection-angle" type="number" min="0" max="90" value="45" step="any" /></label>
-            <label>Ray offset <input id="uv-projection-offset" type="number" min="0" value="0" step="any" /></label>
-          </div>
-          <div class="actions">
-            <label for="uv-projection-direction">Ray direction</label><select id="uv-projection-direction"><option value="both">Both</option><option value="forward">Along normal</option><option value="backward">Against normal</option></select>
-            <label for="uv-projection-fallback">On a miss</label><select id="uv-projection-fallback"><option value="empty">Empty texel</option><option value="color">Fill color</option><option value="nearest">Nearest eligible surface</option></select>
-            <label for="uv-projection-color">Base Color fill</label><input id="uv-projection-color" type="color" value="#ff00ff" />
-          </div>
-          <p id="uv-projection-components"></p>
-        </div>
-        <p id="uv-info" aria-live="polite"></p>
-      </fieldset>
-      <section id="texture-panel" aria-label="Texture editor" hidden>
-        <fieldset>
-          <legend>Texture editor</legend>
-          <label for="texture-target">Object and material</label>
-          <select id="texture-target"></select>
-          <div class="actions" id="texture-sharing" hidden>
-            <button id="texture-edit-shared" type="button">Edit shared map</button>
-            <button id="texture-copy" type="button">Copy for this binding</button>
-          </div>
-          <p id="texture-info"></p>
-          <div class="actions">
-            <label for="texture-tool">Tool</label>
-            <select id="texture-tool"><option value="brush">Brush</option><option value="stamp">Clone Stamp</option><option value="eyedropper">Eyedropper</option><option value="pixel">Pixel Brush</option><option value="select">Rectangle</option><option value="pan">Pan</option></select>
-            <label for="texture-color">Color</label><input id="texture-color" type="color" value="#15e4f2" />
-            <label for="texture-size">Size (px)</label><input id="texture-size" type="number" min="1" max="512" value="24" />
-            <label for="texture-opacity">Opacity %</label><input id="texture-opacity" type="number" min="0" max="100" value="100" />
-            <label for="texture-hardness">Hardness %</label><input id="texture-hardness" type="number" min="0" max="100" value="75" />
-          </div>
-          <div class="actions">
-            <label for="texture-shape">Pixel shape</label><select id="texture-shape"><option>Square</option><option>Round</option></select>
-            <label for="texture-stamp">Stamp</label><select id="texture-stamp"><option>Aligned</option><option>Fixed</option></select>
-            <label><input id="texture-alpha" type="checkbox" /> Edit alpha</label>
-            <label for="texture-alpha-value">Alpha</label><input id="texture-alpha-value" type="number" min="0" max="255" value="255" />
-            <button id="texture-fill" type="button" disabled>Fill selection</button>
-            <button id="texture-clear" type="button" disabled>Clear selection</button>
-          </div>
-          <div class="actions">
-            <button id="texture-fit" type="button">Fit</button>
-            <button id="texture-focus" type="button">Focus UVs</button>
-            <button id="texture-actual" type="button">100%</button>
-            <button id="texture-out" type="button" aria-label="Zoom out">−</button>
-            <span id="texture-zoom">100%</span>
-            <button id="texture-in" type="button" aria-label="Zoom in">+</button>
-            <label><input id="texture-uv" type="checkbox" checked /> UV overlay</label>
-            <label for="texture-uv-color">Line color</label><input id="texture-uv-color" type="color" value="#5ee8ff" />
-            <label for="texture-uv-opacity">Line opacity %</label><input id="texture-uv-opacity" type="number" min="0" max="100" value="65" />
-            <label for="texture-uv-width">Line width</label><input id="texture-uv-width" type="number" min="1" max="5" value="1" />
-            <label><input id="texture-unlit" type="checkbox" /> Unlit 3D</label>
-          </div>
-          <div id="texture-viewport" tabindex="0" aria-label="Texture canvas">
-            <canvas id="texture-picture" width="1" height="1" aria-hidden="true"></canvas>
-            <canvas id="texture-overlay" width="1" height="1" aria-hidden="true"></canvas>
-          </div>
-          <p id="texture-status" aria-live="polite"></p>
-          <div class="actions">
-            <label for="texture-import">Replace Base Color</label><input id="texture-import" type="file" accept=".png,.jpg,.jpeg,.webp" />
-            <button id="texture-export" type="button">Export PNG</button>
-          </div>
-        </fieldset>
-      </section>
-      </div>
+        <p id="project-status">No open project</p>
+        <p id="history-status" hidden></p>
+        <p id="mesh-export-note" hidden></p>
+        <p id="autosave-status" aria-live="polite"></p>
+      </footer>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>

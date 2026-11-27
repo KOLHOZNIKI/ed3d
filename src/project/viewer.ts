@@ -1,5 +1,6 @@
-import { AmbientLight, AnimationMixer, Box3, Box3Helper, DirectionalLight, MOUSE, Mesh, MeshBasicMaterial, MeshLambertMaterial, MeshPhongMaterial, OrthographicCamera,
-  PerspectiveCamera, Raycaster, Scene, SkinnedMesh, SRGBColorSpace, Texture, Vector2, Vector3, WebGLRenderer,
+import { AmbientLight, AnimationMixer, AxesHelper, Box3, Box3Helper, DataTexture, DirectionalLight, GridHelper, MOUSE, Mesh, MeshBasicMaterial,
+  MeshLambertMaterial, MeshNormalMaterial, MeshPhongMaterial, MeshStandardMaterial, OrthographicCamera, PerspectiveCamera, Raycaster,
+  RepeatWrapping, Scene, SkinnedMesh, SRGBColorSpace, Texture, Vector2, Vector3, WebGLRenderer,
   type AnimationClip, type BufferGeometry, type Material, type Object3D } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { Model } from './adapter';
@@ -7,10 +8,40 @@ import { applyViews, disposeAppearance, emptyAppearance, sourceAppearance, unlit
 import { sourceImage, type TextureCatalog, type TextureTarget } from '../texture/bindings';
 import { atlasColor, type WorkingState } from './state';
 
+export type DisplayMode = 'textured' | 'unlit' | 'solid' | 'wire' | 'edges' | 'checker' | 'normals';
+export type CompareMode = 'working' | 'reference' | 'split';
+type ReferenceView = { root: Object3D; appearance?: Appearance };
+
+function checkerMaterial() {
+  const size = 64;
+  const pixels = new Uint8Array(size * size * 4);
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    const a = x % 8 === 0 || y % 8 === 0 ? [63, 149, 153, 255]
+      : ((x >> 3) + (y >> 3)) % 2 ? [210, 224, 224, 255] : [42, 61, 76, 255];
+    pixels.set(a, 4 * (y * size + x));
+  }
+  const map = new DataTexture(pixels, size, size);
+  map.wrapS = map.wrapT = RepeatWrapping;
+  map.colorSpace = SRGBColorSpace;
+  map.needsUpdate = true;
+  return new MeshBasicMaterial({ map });
+}
+
 export class Viewer {
   readonly scene = new Scene();
   #renderer: WebGLRenderer | null;
   #canvas: HTMLCanvasElement;
+  #ratio: number;
+  #fixedBuffer: boolean;
+  #compare: CompareMode = 'working';
+  #reference?: ReferenceView;
+  #referenceScene = new Scene();
+  #referenceAmbient = new AmbientLight(0xffffff, 1.5);
+  #referenceKey = new DirectionalLight(0xffffff, 2);
+  #referenceGrid = new GridHelper(10, 20, 0x526c80, 0x2b4051);
+  #referenceAxes = new AxesHelper(1);
+  #referenceBounds = new Box3Helper(new Box3(), 0x708fa2);
+  #isolated?: Object3D;
   #model?: Object3D;
   #camera?: PerspectiveCamera | OrthographicCamera;
   #orbit?: OrbitControls;
@@ -19,26 +50,45 @@ export class Viewer {
   #inspection?: { mesh: Mesh; geometry: BufferGeometry };
   #skinView?: { mesh: Mesh; geometry: BufferGeometry; material: Material };
   #outline = new Box3Helper(new Box3(), 0x2ad9ed);
+  #floor = new GridHelper(10, 20, 0x526c80, 0x2b4051);
+  #axes = new AxesHelper(1);
+  #bounds = new Box3Helper(new Box3(), 0x708fa2);
+  #ambient = new AmbientLight(0xffffff, 1.5);
+  #keyLight = new DirectionalLight(0xffffff, 2);
+  #display: DisplayMode = 'textured';
+  #materials = {
+    solid: new MeshStandardMaterial({ color: 0x9badbf, roughness: .76 }),
+    normals: new MeshNormalMaterial(),
+    checker: checkerMaterial(),
+    wire: new MeshBasicMaterial({ color: 0xa0eadb, wireframe: true }),
+    edges: new MeshBasicMaterial({ color: 0xa0eadb, wireframe: true, transparent: true, opacity: .75, depthWrite: false }),
+  };
+  #materialSides = new Map<string, Material>();
   #painting = false;
   #paintingStroke = false;
   #pose?: { clip: AnimationClip; time: number };
   #mixers = new WeakMap<AnimationClip, AnimationMixer>();
   #manualPose?: () => () => void;
-  #previewUnlit?: Map<Material, MeshBasicMaterial>;
+  #previewUnlit = false;
+  #unlitMaterials = new Map<Material, MeshBasicMaterial>();
   onPoseRender?: () => void;
-  onCameraChange?: () => void;
+  #cameraListeners = new Set<() => void>();
   #contextLost = false;
 
   constructor(canvas: HTMLCanvasElement, onContext: (lost: boolean) => void) {
     this.#canvas = canvas;
+    this.#ratio = canvas.width / canvas.height;
+    this.#fixedBuffer = canvas.hasAttribute('data-fixed-buffer');
+    canvas.parentElement?.style.setProperty('--viewport-aspect', String(this.#ratio));
     const context = canvas.getContext('webgl2', { antialias: true });
     this.#renderer = context ? new WebGLRenderer({ canvas, context }) : null;
-    this.#renderer?.setClearColor(0x151b25);
-    this.scene.add(new AmbientLight(0xffffff, 1.5));
-    const light = new DirectionalLight(0xffffff, 2);
-    light.position.set(3, 5, 4);
-    this.scene.add(light, this.#outline);
-    this.#outline.visible = false;
+    this.#renderer?.setClearColor(0x19232e);
+    this.#keyLight.position.set(3, 5, 4);
+    this.#referenceKey.position.copy(this.#keyLight.position);
+    this.#referenceScene.add(this.#referenceAmbient, this.#referenceKey, this.#referenceGrid, this.#referenceAxes, this.#referenceBounds);
+    this.scene.add(this.#ambient, this.#keyLight, this.#floor, this.#axes, this.#bounds, this.#outline);
+    this.#bounds.visible = this.#axes.visible = this.#outline.visible = false;
+    new ResizeObserver(() => this.resize()).observe(canvas);
     canvas.addEventListener('webglcontextlost', event => {
       event.preventDefault();
       this.#contextLost = true;
@@ -46,6 +96,7 @@ export class Viewer {
     });
     canvas.addEventListener('webglcontextrestored', () => {
       this.#contextLost = false;
+      this.resize();
       this.render();
       onContext(false);
     });
@@ -53,6 +104,93 @@ export class Viewer {
 
   get camera() { return this.#camera; }
   get available() { return !!this.#renderer && !this.#contextLost; }
+  get comparing() { return this.#compare !== 'working'; }
+  get isolated() { return this.#isolated; }
+
+  onCameraChange(listener: () => void) { this.#cameraListeners.add(listener); }
+
+  resize() {
+    if (!this.#renderer || this.#contextLost) return;
+    const cursor = document.getElementById('paint-cursor') as HTMLCanvasElement;
+    if (this.#fixedBuffer) {
+      if (cursor.width !== this.#canvas.width || cursor.height !== this.#canvas.height) {
+        cursor.width = this.#canvas.width;
+        cursor.height = this.#canvas.height;
+      }
+      return;
+    }
+    const rect = this.#canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const scale = Math.min(devicePixelRatio, 2, 4096 / Math.max(rect.width, rect.height));
+    const width = Math.round(rect.width * scale), height = Math.round(rect.height * scale);
+    if (width < 1 || height < 1 || width === this.#canvas.width && height === this.#canvas.height) return;
+    this.#renderer.setSize(width, height, false);
+    cursor.width = width;
+    cursor.height = height;
+    for (const listener of this.#cameraListeners) listener();
+    this.render();
+  }
+
+  setDisplay(mode: DisplayMode) {
+    this.#display = mode;
+    this.render();
+  }
+
+  setGuides(grid: boolean, axes: boolean, bounds: boolean) {
+    this.#floor.visible = grid;
+    this.#axes.visible = axes;
+    this.#bounds.visible = bounds;
+    this.render();
+  }
+
+  setLighting(exposure: number, background: string) {
+    const multiplier = 2 ** Math.max(-4, Math.min(4, exposure));
+    this.#ambient.intensity = 1.5 * multiplier;
+    this.#keyLight.intensity = 2 * multiplier;
+    this.#referenceAmbient.intensity = this.#ambient.intensity;
+    this.#referenceKey.intensity = this.#keyLight.intensity;
+    this.#renderer?.setClearColor(background);
+    (this.#canvas.closest('.model-stage') as HTMLElement | null)?.style.setProperty('--stage-background', background);
+    this.render();
+  }
+
+  compare(mode: CompareMode, reference?: ReferenceView) {
+    this.#compare = reference ? mode : 'working';
+    if (reference !== this.#reference) {
+      this.#reference?.root.removeFromParent();
+      this.#reference = reference;
+      if (reference) {
+        this.#referenceScene.add(reference.root);
+        this.#referenceBounds.box.setFromObject(reference.root);
+      }
+      this.#clearUnlitMaterials();
+      this.#renderer?.renderLists.dispose();
+    }
+    const container = this.#canvas.parentElement!;
+    if (this.comparing) container.dataset.compare = this.#compare;
+    else delete container.dataset.compare;
+    container.style.setProperty('--viewport-aspect', String(this.#ratio * (this.#compare === 'split' ? 2 : 1)));
+    this.#configureOrbit();
+    this.resize();
+    this.render();
+  }
+
+  isolate(object?: Object3D) {
+    this.#isolated = object;
+    this.render();
+  }
+
+  measureGuides() {
+    if (!this.#model) return;
+    const box = this.#bounds.box.setFromObject(this.#model);
+    if (box.isEmpty()) return;
+    const center = box.getCenter(new Vector3()), diameter = Math.max(.001, box.getSize(new Vector3()).length());
+    const size = 10 ** Math.ceil(Math.log10(diameter * 1.4));
+    this.#floor.scale.setScalar(size / 10);
+    this.#floor.position.set(center.x, box.min.y, center.z);
+    this.#axes.position.copy(this.#floor.position);
+    this.#axes.scale.setScalar(diameter * .3);
+  }
 
   install(model: Object3D, appearance?: Appearance) {
     this.close();
@@ -61,6 +199,7 @@ export class Viewer {
     this.#appearance = appearance;
     if (!this.#renderer) return;
     this.#canvas.hidden = false;
+    this.measureGuides();
     this.frame();
   }
 
@@ -71,11 +210,13 @@ export class Viewer {
     this.#model?.removeFromParent();
     this.#model = undefined;
     this.#inspection = undefined;
+    this.#isolated = undefined;
     this.#skinView = undefined;
     this.#pose = undefined;
     this.#mixers = new WeakMap();
     this.#manualPose = undefined;
-    this.previewUnlit(false);
+    this.#previewUnlit = false;
+    this.#clearUnlitMaterials();
     this.onPoseRender = undefined;
     if (this.#appearance) disposeAppearance(this.#appearance);
     this.#appearance = undefined;
@@ -88,11 +229,15 @@ export class Viewer {
 
   replaceAppearance(appearance?: Appearance) {
     if (this.#appearance) disposeAppearance(this.#appearance);
+    this.#clearUnlitMaterials();
     this.#appearance = appearance;
   }
 
   setLive(appearance?: Appearance) {
-    if (this.#live) disposeAppearance(this.#live);
+    if (this.#live) {
+      disposeAppearance(this.#live);
+      this.#clearUnlitMaterials();
+    }
     this.#live = appearance;
   }
 
@@ -117,8 +262,9 @@ export class Viewer {
   #configureOrbit() {
     if (!this.#orbit) return;
     this.#orbit.enabled = !this.#paintingStroke;
-    this.#orbit.mouseButtons.LEFT = this.#painting ? null : MOUSE.ROTATE;
-    this.#orbit.mouseButtons.RIGHT = this.#painting ? MOUSE.ROTATE : MOUSE.PAN;
+    this.#orbit.mouseButtons.LEFT = this.#painting && !this.comparing ? null : MOUSE.ROTATE;
+    this.#orbit.mouseButtons.MIDDLE = MOUSE.PAN;
+    this.#orbit.mouseButtons.RIGHT = MOUSE.ROTATE;
     this.#orbit.enableRotate = true;
   }
 
@@ -129,11 +275,7 @@ export class Viewer {
 
   manualPose(apply?: () => () => void) { this.#manualPose = apply; }
 
-  previewUnlit(value: boolean) {
-    if (value) { this.#previewUnlit ??= new Map(); return; }
-    for (const material of this.#previewUnlit?.values() ?? []) material.dispose();
-    this.#previewUnlit = undefined;
-  }
+  previewUnlit(value: boolean) { this.#previewUnlit = value; }
 
   withPose<T>(use: () => T): T {
     if (this.#manualPose) {
@@ -179,7 +321,7 @@ export class Viewer {
   #frameBox(box: Box3, orthographic: boolean, direction: Vector3) {
     if (box.isEmpty()) return;
     const center = box.getCenter(new Vector3()), radius = Math.max(box.getSize(new Vector3()).length() / 2, 0.001);
-    const aspect = this.#canvas.width / this.#canvas.height;
+    const aspect = this.#ratio;
     const height = 3.5 * radius * Math.tan(20 * Math.PI / 180);
     this.#orbit?.dispose();
     const camera = orthographic
@@ -191,7 +333,10 @@ export class Viewer {
     this.#orbit = new OrbitControls(camera, this.#canvas);
     this.#orbit.target.copy(center);
     this.#configureOrbit();
-    this.#orbit.addEventListener('change', () => { this.render(); this.onCameraChange?.(); });
+    this.#orbit.addEventListener('change', () => {
+      this.render();
+      for (const listener of this.#cameraListeners) listener();
+    });
     this.#orbit.update();
     this.render();
   }
@@ -203,61 +348,132 @@ export class Viewer {
   }
 
   pick(event: PointerEvent, meshes: Mesh[]) {
-    if (!this.#camera) return;
+    if (!this.#camera || this.comparing) return;
     const bounds = this.#canvas.getBoundingClientRect();
     const uv = new Vector2(2 * (event.clientX - bounds.left) / bounds.width - 1,
       1 - 2 * (event.clientY - bounds.top) / bounds.height);
     const ray = new Raycaster();
     ray.setFromCamera(uv, this.#camera);
-    return ray.intersectObjects(meshes.filter(shown), false)[0]?.object;
+    return ray.intersectObjects(meshes.filter(mesh => shown(mesh) && this.#inIsolation(mesh)), false)[0]?.object;
+  }
+
+  #inIsolation(object: Object3D) {
+    if (!this.#isolated) return true;
+    for (let node: Object3D | null = object; node; node = node.parent) if (node === this.#isolated) return true;
+    return false;
   }
 
   render() {
     if (!this.#renderer || !this.#camera || this.#contextLost) return;
+    const renderer = this.#renderer;
     const restore = applyViews((this.#live ?? this.#appearance)?.views ?? []);
-    const clearUnlit = this.#applyPreviewUnlit();
+    const display = this.#previewUnlit ? 'unlit' : this.#display;
+    const clearDisplay = this.#applyDisplay(this.#model, display);
     const restoreSkin = this.#skinView && applyViews([this.#skinView]);
     const inspection = this.#inspection, masked: [Mesh, number][] = [];
     const geometry = inspection?.mesh.geometry;
-    if (inspection) {
-      inspection.mesh.geometry = inspection.geometry;
+    if (inspection) inspection.mesh.geometry = inspection.geometry;
+    if (inspection || this.#isolated) {
       this.#model?.traverse(node => {
-        if (node instanceof Mesh && node !== inspection.mesh) {
+        if (node instanceof Mesh && (inspection && node !== inspection.mesh || !this.#inIsolation(node))) {
           masked.push([node, node.layers.mask]);
           node.layers.mask = 0;
         }
       });
     }
+    const drawWorking = () => this.withPose(() => {
+      this.onPoseRender?.();
+      this.#draw(this.scene, this.#model, display);
+    });
     try {
-      this.withPose(() => {
-        this.onPoseRender?.();
-        this.#renderer!.render(this.scene, this.#camera!);
-      });
+      if (this.#compare === 'reference') this.#drawReference();
+      else if (this.#compare === 'split') {
+        const { x: width, y: height } = renderer.getSize(new Vector2()), half = Math.floor(width / 2);
+        renderer.setScissorTest(true);
+        renderer.setViewport(0, 0, half, height);
+        renderer.setScissor(0, 0, half, height);
+        this.#drawReference();
+        renderer.setViewport(half, 0, width - half, height);
+        renderer.setScissor(half, 0, width - half, height);
+        drawWorking();
+      } else drawWorking();
     } finally {
+      if (this.#compare === 'split') {
+        const size = renderer.getSize(new Vector2());
+        renderer.setScissorTest(false);
+        renderer.setViewport(0, 0, size.x, size.y);
+      }
       if (inspection && geometry) inspection.mesh.geometry = geometry;
       for (const [mesh, mask] of masked) mesh.layers.mask = mask;
       restoreSkin?.();
-      clearUnlit?.();
+      clearDisplay?.();
       restore();
     }
   }
 
-  #applyPreviewUnlit() {
-    const cache = this.#previewUnlit;
-    if (!cache) return;
+  #drawReference() {
+    if (!this.#reference) return;
+    const { root, appearance } = this.#reference;
+    this.#referenceGrid.visible = this.#floor.visible;
+    this.#referenceGrid.position.copy(this.#floor.position);
+    this.#referenceGrid.scale.copy(this.#floor.scale);
+    this.#referenceAxes.visible = this.#axes.visible;
+    this.#referenceAxes.position.copy(this.#axes.position);
+    this.#referenceAxes.scale.copy(this.#axes.scale);
+    this.#referenceBounds.visible = this.#bounds.visible;
+    const restore = applyViews(appearance?.views ?? []);
+    const clear = this.#applyDisplay(root, this.#display);
+    try { this.#draw(this.#referenceScene, root, this.#display); }
+    finally { clear?.(); restore(); }
+  }
+
+  #draw(scene: Scene, model: Object3D | undefined, display: DisplayMode) {
+    const renderer = this.#renderer!, camera = this.#camera!;
+    renderer.render(scene, camera);
+    if (display !== 'edges' || !model) return;
+    const previous = renderer.autoClear;
+    const clear = this.#applyDisplay(model, display, true);
+    try {
+      renderer.autoClear = false;
+      renderer.render(model, camera);
+    } finally {
+      renderer.autoClear = previous;
+      clear?.();
+    }
+  }
+
+  #clearUnlitMaterials() {
+    for (const material of this.#unlitMaterials.values()) material.dispose();
+    this.#unlitMaterials.clear();
+  }
+
+  #applyDisplay(root: Object3D | undefined, mode: DisplayMode, overlay = false) {
+    if (mode === 'textured' || mode === 'edges' && !overlay) return;
     const views: { mesh: Mesh; material: Material | Material[] }[] = [];
-    const flat = (material: Material) => {
-      let result = cache.get(material);
+    const materialFor = (material: Material) => {
+      if (mode !== 'unlit') {
+        const base = this.#materials[mode];
+        if (base.side === material.side) return base;
+        const id = `${mode}/${material.side}`;
+        let sided = this.#materialSides.get(id);
+        if (!sided) {
+          sided = base.clone();
+          sided.side = material.side;
+          this.#materialSides.set(id, sided);
+        }
+        return sided;
+      }
+      let result = this.#unlitMaterials.get(material);
       if (!result) {
         const source = material as Material & { color?: MeshBasicMaterial['color']; map?: Texture | null };
         result = unlitColor(material, source.map ?? null);
         if (source.color) result.color.copy(source.color);
-        cache.set(material, result);
+        this.#unlitMaterials.set(material, result);
       }
       return result;
     };
-    this.#model?.traverse(node => {
-      if (node instanceof Mesh) views.push({ mesh: node, material: Array.isArray(node.material) ? node.material.map(flat) : flat(node.material) });
+    root?.traverse(node => {
+      if (node instanceof Mesh) views.push({ mesh: node, material: Array.isArray(node.material) ? node.material.map(materialFor) : materialFor(node.material) });
     });
     return applyViews(views);
   }

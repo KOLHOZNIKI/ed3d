@@ -73,7 +73,7 @@ export class PaintTool {
     this.#clear.addEventListener('click', () => { this.#mask.clear(); this.#info(); this.#queueCursor(); });
     this.#clip.addEventListener('change', () => this.#pose());
     this.#seconds.addEventListener('change', () => this.#pose());
-    viewer.onCameraChange = () => { this.#projection = undefined; this.leave(); };
+    viewer.onCameraChange(() => { this.#projection = undefined; this.leave(); });
   }
 
   configure(active: boolean, locked: boolean, context?: Context, wanted?: string) {

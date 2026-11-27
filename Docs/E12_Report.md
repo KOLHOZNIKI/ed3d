@@ -2,6 +2,8 @@
 
 This report covers the supported V1 profile in [§§7, 19–23 of the specification](AssetFixer_Technical_Specification_v1.0.md#sec-07). The [format and project reference](Formats_and_Projects.md) describes conversion rules, limits and archive migrations. The [changelog](../CHANGELOG.md) maps USR-01 through USR-17 to their implementation stages. The [user guide](../README.md) describes the operating workflows and pinned dependencies.
 
+The later [workspace report](Workspace_Report.md) records current §8 coverage and the remaining interaction items separately from these acceptance workflows.
+
 ## End-to-end results
 
 Chrome 158.0.8127.37 and Edge 158.0.4370.45 ran the production bundle on the Windows workstation. The browser cached the static build, reloaded with the network disabled, imported a local FBX ZIP and ran xatlas and the texture worker. The test painted 792 red texels across the folded fixture and counted 5,429 red texels after transfer to a 256 × 256 atlas. The export still contained ten triangles. The baked PNG was byte-identical after saving, closing and reopening. It also reopened and exported the real Tripo plate and Tripo skinned GLB without network requests.

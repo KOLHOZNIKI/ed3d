@@ -74,8 +74,7 @@ try {
     if (['http:', 'https:'].includes(destination.protocol) && destination.hostname !== '127.0.0.1') externalRequests.push(destination.href);
   });
   const html = await readFile('dist/index.html', 'utf8');
-  const body = html.replace(/width="640" height="480"/, `width="${width}" height="${height}"`)
-    .replace('max-width: 40rem;', strokeCount ? 'max-width: 120rem;' : 'max-width: 40rem;');
+  const body = html.replace(/width="640" height="480"/, `width="${width}" height="${height}" data-fixed-buffer`);
   await page.route(url, route => route.fulfill({ contentType: 'text/html; charset=utf-8', body }));
   await page.goto(url);
   const viewport = await page.locator('#viewport').evaluate(canvas => {

@@ -100,7 +100,7 @@ try {
   assert.deepEqual((await paintImage('fold-undone.zip')).data, base.data);
 
   await select('paint-mode', 'screen');
-  await set('paint-size', 90);
+  await set('paint-size', 90 * (await viewport.boundingBox()).width / 640);
   const screenCursor = await rendered(center);
   assert.ok(screenCursor > surfaceCursor, [screenCursor, surfaceCursor]);
   await stroke(center, [.477, .60]);

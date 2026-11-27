@@ -72,6 +72,7 @@ export class UvTool {
   #zoom = 1;
   #gesture?: Gesture;
   #locked = false;
+  #spacePan = false;
   #componentNote = '';
   #wire = new LineSegments(new BufferGeometry(), new LineBasicMaterial({ color: 0x4ee8ff, depthTest: false }));
 
@@ -108,6 +109,13 @@ export class UvTool {
     this.#canvas.addEventListener('pointerdown', event => this.#down(event));
     this.#canvas.addEventListener('pointermove', event => this.#move(event));
     this.#canvas.addEventListener('pointerup', event => this.#up(event));
+    this.#canvas.addEventListener('keydown', event => {
+      if (event.code !== 'Space' || this.#locked || event.ctrlKey || event.metaKey) return;
+      event.preventDefault();
+      this.#spacePan = true;
+    });
+    this.#canvas.addEventListener('keyup', event => { if (event.code === 'Space') this.#spacePan = false; });
+    this.#canvas.addEventListener('blur', () => { this.#spacePan = false; });
     this.#canvas.addEventListener('pointercancel', () => {
       if (this.#gesture && !this.#gesture.pan) {
         if (this.#gesture.prior) this.#draft.set(this.#channel, this.#gesture.prior);
@@ -188,6 +196,13 @@ export class UvTool {
     if (!this.#context || this.#locked) return false;
     if (key === 'Escape' && this.#draft.has(this.#channel)) { this.#cancel(); return true; }
     if (key === 'Enter' && this.#draft.has(this.#channel)) { void this.#apply(); return true; }
+    const transform = ({ w: 'move', e: 'rotate', r: 'scale' } as Record<string, string>)[key.toLowerCase()];
+    if (transform) {
+      ui<HTMLSelectElement>('operation').value = transform;
+      this.#operationFields(true);
+      this.#draw();
+      return true;
+    }
     const kind = ({ '1': 'vertex', '2': 'edge', '3': 'face', '4': 'island' } as Record<string, string>)[key];
     if (!kind) return false;
     ui<HTMLSelectElement>('kind').value = kind;
@@ -480,7 +495,7 @@ export class UvTool {
   #down(event: PointerEvent) {
     const layout = this.#layout;
     if (this.#locked || !layout || event.button > 2) return;
-    const start = this.#pointer(event), pan = event.button !== 0 || event.altKey;
+    const start = this.#pointer(event), pan = event.button !== 0 || event.altKey || this.#spacePan;
     const control = this.#handle(layout);
     const handle = !pan && !event.shiftKey && control && Math.hypot(start[0] - control.handle[0], start[1] - control.handle[1]) < 10 ? control : undefined;
     if (!pan && !handle) {

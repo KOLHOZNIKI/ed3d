@@ -55,6 +55,7 @@ export class TextureEditor {
   #aligned?: Point;
   #sharedAllowed = new Set<string>();
   #locked = false;
+  #spacePan = false;
   #actions: Actions;
 
   constructor(actions: Actions) {
@@ -113,7 +114,21 @@ export class TextureEditor {
     }, { passive: false });
     this.#view.addEventListener('keydown', event => {
       if (event.key === 'Escape') { this.cancel(); this.#region = undefined; this.#refresh(); this.#paintOverlay(); }
+      if (this.#locked || event.ctrlKey || event.metaKey || event.altKey) return;
+      if (event.code === 'Space') {
+        event.preventDefault();
+        this.#spacePan = true;
+      }
+      const tool = ({ b: 'brush', c: 'stamp', i: 'eyedropper' } as Record<string, string>)[event.key.toLowerCase()];
+      if (tool && !this.#gesture) {
+        event.preventDefault();
+        byId<HTMLSelectElement>('tool').value = tool;
+        this.#refresh();
+        this.#paintOverlay();
+      }
     });
+    this.#view.addEventListener('keyup', event => { if (event.code === 'Space') this.#spacePan = false; });
+    this.#view.addEventListener('blur', () => { this.#spacePan = false; });
     new ResizeObserver(() => {
       if (this.panel.hidden) return;
       if (this.#fitMode) this.fit();
@@ -125,6 +140,7 @@ export class TextureEditor {
 
   close() {
     this.cancel();
+    this.#spacePan = false;
     this.panel.hidden = true;
     this.#session = this.#target = this.#image = this.#atlas = this.#paths = this.#scaledPaths = this.#geometry = undefined;
     this.#region = this.#source = this.#aligned = undefined;
@@ -329,7 +345,7 @@ export class TextureEditor {
   #down(event: PointerEvent) {
     if (!this.#image || !this.#target || this.#locked || this.#gesture || (event.button !== 0 && event.button !== 1)) return;
     const screen = this.#screen(event), point = this.#imagePoint(screen), tool = value('tool');
-    const pan = tool === 'pan' || event.button === 1;
+    const pan = tool === 'pan' || event.button === 1 || this.#spacePan;
     if (!pan && !this.#inside(point)) return;
     event.preventDefault();
     this.#view.focus({ preventScroll: true });

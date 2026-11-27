@@ -22,7 +22,7 @@ try {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('dialog', dialog => dialog.accept());
-  const html = (await readFile('dist/index.html', 'utf8')).replace(/width="640" height="480"/, 'width="1920" height="1080"');
+  const html = (await readFile('dist/index.html', 'utf8')).replace(/width="640" height="480"/, 'width="1920" height="1080" data-fixed-buffer');
   await page.route(url, route => route.fulfill({ contentType: 'text/html; charset=utf-8', body: html }));
   await page.goto(url);
   const field = id => page.locator(`#${id}`);
