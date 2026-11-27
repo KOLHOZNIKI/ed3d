@@ -5,6 +5,7 @@ import type { Viewer } from '../project/viewer';
 import type { ElementSelection } from '../project/selection';
 import type { ModelAdapter } from '../project/adapter';
 import type { MeshEdit } from './commands';
+import { falloffs, type SoftSelection } from './soft-selection';
 import { connected, edgesOf, edgeKey, edgeVertices, usedVertices, verticesOf, type Face, type Kind, type MeshData, type Vec3 } from './data';
 import { applyMeshEdit, center } from './edit';
 import { faceNormal, vector } from './polygon';
@@ -32,6 +33,7 @@ export class MeshTool {
   #line = new LineBasicMaterial({ color: 0x5fe6fd });
   #previewLine = new LineBasicMaterial({ color: 0xffb64d, depthTest: false });
   #points = new PointsMaterial({ color: 0x5fe6fd, size: 7, sizeAttenuation: false, depthTest: false });
+  #softPoints = new PointsMaterial({ vertexColors: true, size: 5, sizeAttenuation: false, depthTest: false });
   #handle = new Object3D();
   #gizmo?: TransformControls;
   #camera?: Camera;
@@ -52,7 +54,7 @@ export class MeshTool {
       this.#cancel();
       this.#syncFields();
     });
-    for (const name of [...xyz, 'axis', 'pivot', 'material', 'project', 'weld-mode', 'tolerance', 'fraction']) {
+    for (const name of [...xyz, 'axis', 'pivot', 'material', 'project', 'weld-mode', 'tolerance', 'fraction', 'soft', 'soft-radius', 'soft-falloff']) {
       ui(name).addEventListener('input', () => this.#cancel());
     }
     ui('connected').addEventListener('click', () => this.#selectConnected());
@@ -220,7 +222,8 @@ export class MeshTool {
       const affected = data.faces.filter(face => !retained.has(face) || face.corners.some(({ vertex }) =>
         [0, 1, 2].some(k => data.positions[3 * vertex + k] !== geometry.mesh.positions[3 * vertex + k]))).length;
       const warning = edit.type === 'create' && !edit.project ? ' New face requires UV unwrapping.' : '';
-      this.#say(`Preview · ${affected} existing faces affected · ${data.faces.length} → ${after} faces${geometry.piece ? ` + ${geometry.piece.faces.length} in the new object` : ''}.${warning}`);
+      const soft = edit.type === 'softTransform' && geometry.influence ? ` · ${geometry.influence.size - edit.vertices.length} neighboring vertices in radius` : '';
+      this.#say(`Preview · ${affected} existing faces affected · ${data.faces.length} → ${after} faces${geometry.piece ? ` + ${geometry.piece.faces.length} in the new object` : ''}${soft}.${warning}`);
     } catch (error) { this.#say(error instanceof Error ? error.message : String(error)); }
     this.#syncFields();
     this.#draw();
@@ -249,7 +252,7 @@ export class MeshTool {
   }
 
   #command({ adapter, id }: Context): MeshEdit {
-    const object = id, type = choice('operation') as Exclude<MeshEdit['type'], 'repair' | 'uv' | 'extract' | 'weights'>;
+    const object = id, type = choice('operation') as Exclude<MeshEdit['type'], 'repair' | 'uv' | 'extract' | 'weights' | 'softTransform'>;
     const vertices = this.#selection.vertex;
     const edge = () => {
       if (this.#selection.edge.length !== 1) throw new Error('Select exactly one edge.');
@@ -262,7 +265,11 @@ export class MeshTool {
         const axis = choice('axis').toLowerCase();
         const value = xyz.map(key => axis && key !== axis ? Number(type === 'scale') : number(key)) as unknown as Vec3;
         if (!value.every(Number.isFinite)) throw new Error('Enter finite values for all axes.');
-        return { type, object, vertices, value, pivot: choice('pivot') ? [0, 0, 0] : undefined };
+        const input = { object, vertices, value, pivot: choice('pivot') ? [0, 0, 0] as const : undefined };
+        if (!toggle('soft')) return { type, ...input };
+        const radius = number('soft-radius'), falloff = choice('soft-falloff') as SoftSelection['falloff'];
+        if (!(radius > 0) || !Number.isFinite(radius) || !falloffs.includes(falloff)) throw new Error('Choose a positive Soft Selection radius and a supported falloff.');
+        return { type: 'softTransform', mode: type, ...input, soft: { radius, falloff } };
       }
       case 'create':
         if (vertices.length < 3) throw new Error('Select three or more vertices in contour order.');
@@ -293,7 +300,7 @@ export class MeshTool {
 
   #syncFields() {
     const type = choice('operation') as MeshEdit['type'];
-    const fields = { transform: transforms.has(type), create: type === 'create', weld: type === 'weld', split: type === 'splitEdge' };
+    const fields = { transform: transforms.has(type), 'soft-options': toggle('soft'), create: type === 'create', weld: type === 'weld', split: type === 'splitEdge' };
     for (const [id, show] of Object.entries(fields)) ui(id).hidden = !show;
     const ok = !!this.#data && !this.#locked;
     ui<HTMLButtonElement>('preview').disabled = !ok;
@@ -408,6 +415,15 @@ export class MeshTool {
     if (this.#selection.vertex.length) this.#outline.add(new Points(positions(this.#selection.vertex.flatMap(id => world(data, id))), this.#points));
     const preview = this.#preview?.geometry;
     if (preview) {
+      if (preview.influence) {
+        const selected = new Set(this.#selectedVertices()), points: number[] = [], colors: number[] = [];
+        for (const [id, factor] of preview.influence) {
+          if (selected.has(id)) continue;
+          points.push(...world(preview.mesh, id));
+          colors.push(.25 + .75 * factor, .08 + .38 * factor, .02);
+        }
+        if (points.length) this.#outline.add(new Points(positions(points).setAttribute('color', new Float32BufferAttribute(colors, 3)), this.#softPoints));
+      }
       const known = new Set(data.faces), annotation: number[] = [];
       for (const face of preview.mesh.faces) if (!known.has(face) || face.corners.some(c =>
         !vector(data, c.vertex).equals(vector(preview.mesh, c.vertex)))) {

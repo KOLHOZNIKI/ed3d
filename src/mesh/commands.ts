@@ -1,9 +1,13 @@
 import type { Vec3 } from './data';
 import type { Fill } from '../repair/fill';
 import { validWeightEdits, type WeightEditRow } from '../weights/data';
+import { falloffs, type SoftSelection } from './soft-selection';
+
+export type TransformMode = 'move' | 'rotate' | 'scale';
+type TransformInput = { vertices: number[]; value: Vec3; pivot?: Vec3 };
 
 export type MeshEdit = { object: string } & (
-  { type: 'move' | 'rotate' | 'scale'; vertices: number[]; value: Vec3; pivot?: Vec3 } |
+  (TransformInput & ({ type: TransformMode } | { type: 'softTransform'; mode: TransformMode; soft: SoftSelection })) |
   { type: 'delete' | 'recalculate' | 'flipNormals'; faces: number[] } |
   { type: 'separate'; faces: number[]; piece: string } |
   { type: 'extract'; faces: number[]; piece: string; cut: boolean; pivot: Vec3; rotation: Vec3; scale: number } |
@@ -17,9 +21,10 @@ export type MeshEdit = { object: string } & (
   { type: 'uv'; channel: number; coordinates: number[]; seams: string[]; suppliesTexture?: true }
 );
 
-const names = new Set(['move', 'rotate', 'scale', 'delete', 'recalculate', 'flipNormals', 'separate',
+const names = new Set(['move', 'rotate', 'scale', 'softTransform', 'delete', 'recalculate', 'flipNormals', 'separate',
   'create', 'weld', 'splitEdge', 'splitFace', 'dissolve', 'flipEdge', 'repair', 'uv', 'extract', 'weights']);
 const encoder = new TextEncoder(), decoder = new TextDecoder('utf-8', { fatal: true });
+const types = new WeakMap<Uint8Array, MeshEdit['type']>();
 const id = (value: unknown) => typeof value === 'string' && /^object-(0|[1-9]\d{0,7})$/.test(value);
 const index = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= 0x7fffffff;
 const indices = (value: unknown, min: number) => Array.isArray(value) && value.length >= min && value.length <= 200000 &&
@@ -29,8 +34,12 @@ const edge = (value: unknown) => typeof value === 'string' && /^\d{1,10}\/\d{1,1
 export const boundaryId = (value: unknown): value is string => typeof value === 'string' && /^B(0|[1-9]\d{0,9})$/.test(value);
 
 export function encodeEdit(edit: MeshEdit) {
-  return encoder.encode(JSON.stringify(edit));
+  const bytes = encoder.encode(JSON.stringify(edit));
+  types.set(bytes, edit.type);
+  return bytes;
 }
+
+export const editType = (data: Uint8Array) => types.get(data) ?? decodeEdit(data).type;
 
 export function decodeEdit(data: Uint8Array) {
   const value: unknown = JSON.parse(decoder.decode(data));
@@ -41,6 +50,14 @@ export function decodeEdit(data: Uint8Array) {
   switch (t) {
     case 'move': case 'rotate': case 'scale':
       valid = indices(o.vertices, 1) && vec(o.value) && (o.pivot === undefined || vec(o.pivot)); break;
+    case 'softTransform': {
+      const soft = o.soft as Partial<SoftSelection> | undefined;
+      valid = (o.mode === 'move' || o.mode === 'rotate' || o.mode === 'scale') &&
+        indices(o.vertices, 1) && vec(o.value) && (o.pivot === undefined || vec(o.pivot)) &&
+        typeof soft?.radius === 'number' && Number.isFinite(soft.radius) && soft.radius > 0 &&
+        soft.falloff !== undefined && falloffs.includes(soft.falloff);
+      break;
+    }
     case 'delete': case 'recalculate': case 'flipNormals':
       valid = indices(o.faces, 1); break;
     case 'separate':
@@ -70,6 +87,7 @@ export function decodeEdit(data: Uint8Array) {
       valid = edge(o.edge);
   }
   if (!valid) throw invalid();
+  types.set(data, t as MeshEdit['type']);
   return o as MeshEdit;
 }
 

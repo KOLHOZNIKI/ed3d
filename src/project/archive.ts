@@ -4,7 +4,7 @@ import { atlasColor, maxPinnedSnapshots, type AtlasState, type ExtractedAsset, t
 import { decodePng, encodeImage, textureHeader, tileSize } from '../texture/image';
 import { validatedTransform } from './object-transform';
 import { readOperationSettings, type OperationSettings } from './operation-settings';
-import { boundaryId, decodeEdit } from '../mesh/commands';
+import { boundaryId, decodeEdit, editType } from '../mesh/commands';
 import type { TextureBake } from '../e00/rebake';
 import { glbSlots } from '../uv/transfer';
 import type { Joint, Pose, PoseState, PoseTranslations, Quat, RigClip, RigState } from '../rig/state';
@@ -144,7 +144,10 @@ export async function writeProject(document: AssetDocument<WorkingState>, option
   const working = await writeWorking(state);
   const snapshots = [];
   for (const snapshot of pins) snapshots.push({ id: snapshot.id, revision: snapshot.revision, working: await writeWorking(snapshot.state) });
-  const schemaVersion = snapshots.length ? 14 : working.objectTransforms && Object.keys(working.objectTransforms).length ||
+  const softSelection = operations?.['mesh-soft'] !== undefined || operations?.['mesh-soft-radius'] !== undefined ||
+    operations?.['mesh-soft-falloff'] !== undefined || [state, ...pins.map(pin => pin.state)]
+      .some(version => version.meshEdits?.some(edit => editType(edit) === 'softTransform'));
+  const schemaVersion = softSelection ? 15 : snapshots.length ? 14 : working.objectTransforms && Object.keys(working.objectTransforms).length ||
     working.textures.some(texture => texture.key.split('/').length > 3) ? 13 : 12;
   const manifest = encoder.encode(JSON.stringify({ format: 'AssetFixer', schemaVersion, id: options?.id ?? document.id,
     name: options?.name ?? document.name, revision, settings: { historyBudget, operations }, scene, originals: originalRefs,
@@ -166,7 +169,7 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
   const manifest = record(JSON.parse(decoder.decode(encoded)));
   if (manifest.format !== 'AssetFixer') throw new Error('This file is not an AssetFixer project.');
   const version = integer(manifest.schemaVersion, 1);
-  if (version > 14) throw new Error(`Project schema ${version} is newer than this application supports.`);
+  if (version > 15) throw new Error(`Project schema ${version} is newer than this application supports.`);
   // Version 1 had a fixed history budget. Version 2 persists the project setting.
   const settings = version === 1 ? undefined : record(manifest.settings);
   const historyBudget = settings ? integer(settings.historyBudget, MiB, projectLimit) : defaultHistoryBudget;
@@ -218,7 +221,7 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
     return { id, parent, transform, name: text(node.name, 1024), mesh: bool(node.mesh), visible: bool(node.visible) };
   });
   const images = new WeakMap<Uint8Array, TextureEdit['image']>();
-  const checkImageBudget = version >= 14 ? workingImageBudget() : undefined;
+  const checkImageBudget = version >= 14 && manifest.snapshots !== undefined ? workingImageBudget() : undefined;
   const readWorking = (value: unknown): Omit<WorkingState, 'snapshots'> => {
     const working = record(value), entries = new Set(scene.map(entry => entry.id));
     const extracted = new Map<string, string>();
@@ -230,6 +233,7 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
       for (let i = 0; i < bytes.length; i++) {
         if (bytes[i] !== 10) continue;
         const row = bytes.slice(start, i), edit = decodeEdit(row);
+        if (version < 15 && edit.type === 'softTransform') throw new Error('Soft Selection requires project schema 15.');
         if (!entries.has(edit.object)) throw new Error('A saved mesh edit refers to an unknown object.');
         if (edit.type === 'separate' || edit.type === 'extract') {
           if (entries.has(edit.piece)) throw new Error('A saved separate operation reuses an object ID.');

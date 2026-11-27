@@ -122,10 +122,15 @@ public static class FbxProbe
 
         public void ApplyPoseProbeMove(int[] indices, Vector3 worldOffset)
         {
-            poseMesh = UnityEngine.Object.Instantiate(mesh);
-            var vertices = poseMesh.vertices;
+            var vertices = mesh.vertices;
             var localOffset = meshTransform.InverseTransformVector(worldOffset);
             foreach (int index in indices) vertices[index] += localOffset;
+            SetPoseProbeVertices(vertices);
+        }
+
+        public void SetPoseProbeVertices(Vector3[] vertices)
+        {
+            poseMesh = UnityEngine.Object.Instantiate(mesh);
             poseMesh.vertices = vertices;
             skin.sharedMesh = poseMesh;
         }
@@ -163,6 +168,71 @@ public static class FbxProbe
         var report = new Report { unityVersion = Application.unityVersion, comparisons = comparisons.ToArray() };
         File.WriteAllText("e00-report.json", JsonUtility.ToJson(report, true));
         Debug.Log($"E00 measured {comparisons.Count} FBX pairs. See e00-report.json.");
+    }
+
+    public static void RunSoftSelection()
+    {
+        const float tolerance = 2e-5f;
+        var comparisons = new List<Pair>();
+        foreach (var fixture in new[] { "seams-soft-selection", "elbow-soft-selection" }) {
+            var folder = "Assets/Fixtures/" + fixture;
+            using (var before = new Model(Directory.GetFiles(folder + "/original", "*.fbx").Single().Replace('\\', '/')))
+            using (var after = new Model(Directory.GetFiles(folder + "/exported", "*.fbx").Single().Replace('\\', '/'))) {
+                var vertices = before.mesh.vertices;
+                var uv = before.mesh.uv;
+                var sourceIndices = before.mesh.triangles;
+                var expectedVertices = (Vector3[])vertices.Clone();
+                var expectedCorners = new Vector3[sourceIndices.Length];
+                var delta = Vector3.up * .03125f;
+                if (before.skin != null) for (int i = 0; i < uv.Length; i++) {
+                    float weight = Mathf.Abs(uv[i].y - .0625f) < 1e-6f ? (uv[i].x < .5f ? 1 : .6f) :
+                        (uv[i].x < .5f && Mathf.Abs(uv[i].y - .5f) < 1e-6f ? .2f : 0);
+                    expectedVertices[i] += delta * weight;
+                }
+                for (int i = 0; i < sourceIndices.Length; i += 3) {
+                    // The detached witness is the only triangle with a vertex below the cube.
+                    bool detached = Enumerable.Range(i, 3).Any(j => vertices[sourceIndices[j]].y < -.5f);
+                    for (int j = i; j < i + 3; j++) {
+                        int k = sourceIndices[j];
+                        var expected = expectedVertices[k];
+                        if (before.skin == null && !detached) expected += delta * Mathf.Max(0, 1 - vertices[k].magnitude / 1.5f);
+                        expectedCorners[j] = before.meshTransform.TransformPoint(expected);
+                    }
+                }
+                var matches = MatchPoints(expectedCorners, after.basePoints, tolerance, sourceIndices.Select(i => uv[i]).ToArray(), after.mesh.uv);
+                var result = new Pair { fixture = fixture, original = before.info, exported = after.info, tolerance = tolerance };
+                if (matches.Any(i => i < 0)) throw new InvalidOperationException("Unexpected Soft Selection position or UV in " + fixture);
+                var canonical = MatchPoints(after.basePoints, after.basePoints, tolerance, after.mesh.uv, after.mesh.uv);
+                result.sameTriangleConnectivity = TriangleKeys(matches, i => canonical[i]).SequenceEqual(TriangleKeys(after.mesh, i => canonical[i]));
+                result.baseError = Delta(expectedCorners, after.basePoints, matches);
+                result.compatible = result.sameTriangleConnectivity && before.info.boundBaseColor == 1 && after.info.boundBaseColor == 1;
+                if (before.skin != null) {
+                    if (after.skin == null || !before.info.boneNames.SequenceEqual(after.info.boneNames) ||
+                        !before.info.clips.SequenceEqual(after.info.clips) || before.clips.Length != 1) throw new InvalidOperationException("Lost skin or clip.");
+                    var indices = MatchPoints(expectedVertices.Select(before.meshTransform.TransformPoint).ToArray(), after.basePoints, tolerance, uv, after.mesh.uv);
+                    if (indices.Any(i => i < 0)) throw new InvalidOperationException("Lost a skinned point.");
+                    result.maxWeightError = WeightDelta(before, after, indices);
+                    before.SetPoseProbeVertices(expectedVertices);
+                    result.maxClipDurationError = Mathf.Abs(before.clips[0].length - after.clips[0].length);
+                    Vector3[] firstPose = null;
+                    var identity = Enumerable.Range(0, indices.Length).ToArray();
+                    for (int t = 0; t <= 20; t++) {
+                        before.clips[0].SampleAnimation(before.root, before.clips[0].length * t / 20);
+                        after.clips[0].SampleAnimation(after.root, after.clips[0].length * t / 20);
+                        var pose = before.PosedPoints();
+                        if (firstPose == null) firstPose = pose;
+                        result.originalClipMotion = Mathf.Max(result.originalClipMotion, Delta(firstPose, pose, identity));
+                        result.maxClipError = Mathf.Max(result.maxClipError, Delta(pose, after.PosedPoints(), indices));
+                        result.clipSamples++;
+                    }
+                    result.compatible &= result.maxWeightError <= 1e-6f && result.maxClipDurationError <= 1e-5f &&
+                        result.maxClipError <= tolerance && result.originalClipMotion > tolerance;
+                }
+                comparisons.Add(result);
+            }
+        }
+        File.WriteAllText("soft-selection-unity.json", JsonUtility.ToJson(new Report { unityVersion = Application.unityVersion, comparisons = comparisons.ToArray() }, true));
+        if (comparisons.Any(result => !result.compatible)) throw new InvalidOperationException("Soft Selection FBX comparison failed.");
     }
 
     static Pair Compare(string fixture, Model before, Model after, PositionEdit edit)
@@ -326,9 +396,10 @@ public static class FbxProbe
         }
     }
 
-    static (int, int, int)[] TriangleKeys(Mesh mesh, Func<int, int> key)
+    static (int, int, int)[] TriangleKeys(Mesh mesh, Func<int, int> key) => TriangleKeys(mesh.triangles, key);
+
+    static (int, int, int)[] TriangleKeys(int[] indices, Func<int, int> key)
     {
-        var indices = mesh.triangles;
         var triangles = new (int, int, int)[indices.Length / 3];
         for (int triangle = 0; triangle < triangles.Length; triangle++) {
             int offset = triangle * 3;

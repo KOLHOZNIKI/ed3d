@@ -1,5 +1,6 @@
 export const settingIds = [
   'fbx-texture-files',
+  'mesh-soft', 'mesh-soft-radius', 'mesh-soft-falloff',
   'texture-tool', 'texture-color', 'texture-size', 'texture-opacity', 'texture-hardness', 'texture-shape', 'texture-stamp',
   'texture-alpha', 'texture-alpha-value', 'texture-filter',
   'paint-mode', 'paint-color', 'paint-opacity', 'paint-hardness',

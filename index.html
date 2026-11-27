@@ -499,6 +499,11 @@
                 <label for="mesh-z">Z</label><input id="mesh-z" type="number" value="0" step="any" />
                 <label for="mesh-axis">Axis</label><select id="mesh-axis"><option value="">All</option><option>X</option><option>Y</option><option>Z</option></select>
                 <label for="mesh-pivot">Pivot</label><select id="mesh-pivot"><option value="">Selection center</option><option value="origin">Object origin</option></select>
+                <label><input id="mesh-soft" type="checkbox" /> Soft Selection</label>
+                <span class="actions" id="mesh-soft-options" hidden>
+                  <label for="mesh-soft-radius">Radius (local units)</label><input id="mesh-soft-radius" type="number" value="1" min="0" step="any" />
+                  <label for="mesh-soft-falloff">Falloff</label><select id="mesh-soft-falloff"><option value="smooth">Smooth</option><option value="linear">Linear</option><option value="sharp">Sharp</option></select>
+                </span>
               </div>
               <div class="actions" id="mesh-create" hidden>
                 <label for="mesh-material">Material</label><select id="mesh-material"></select>

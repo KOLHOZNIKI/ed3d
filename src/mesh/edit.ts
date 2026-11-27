@@ -7,6 +7,7 @@ import { applyRepairs } from '../repair/fill';
 import { validatePatch } from '../repair/intersections';
 import { applyUvLayout } from '../uv/mesh-layout';
 import { applyWeightEdits } from '../weights/data';
+import { softWeights } from './soft-selection';
 
 type VertexSource = readonly [vertex: number, factor: number];
 // Missing replacement entries keep their stable ID. Empty lists remove it from the source object.
@@ -20,7 +21,7 @@ interface TopologyChanges {
   readonly pieceFaces?: readonly number[];
 }
 
-interface MeshResult { mesh: MeshData; piece?: MeshData; topology?: TopologyChanges }
+interface MeshResult { mesh: MeshData; piece?: MeshData; topology?: TopologyChanges; influence?: ReadonlyMap<number, number> }
 
 function topologyChange(source: MeshData, result: MeshResult, changes: Partial<TopologyChanges> = {}): MeshResult {
   const survivingFaces = new Set(result.mesh.faces.map(face => face.id));
@@ -67,7 +68,7 @@ export function applyMeshEdit(mesh: MeshData, edit: MeshEdit): MeshResult {
       return topologyChange(mesh, { mesh: edit.cut ? filterFaces(mesh, mesh.faces.filter(face => !ids.has(face.id))) : mesh,
         piece: { ...selected, positions, faces: corners, uvSeams } }, { pieceVertices: remap });
     }
-    case 'move': case 'rotate': case 'scale': return { mesh: transform(mesh, edit) };
+    case 'move': case 'rotate': case 'scale': case 'softTransform': return transform(mesh, edit);
     case 'delete': case 'separate': {
       const faces = pickFaces(mesh, edit.faces);
       if (faces.size === mesh.faces.length) throw new Error('Keep at least one face in the source object.');
@@ -135,19 +136,28 @@ function requireEdge(mesh: MeshData, key: string) {
   return sides;
 }
 
-function transform(mesh: MeshData, edit: MeshEdit & { type: 'move' | 'rotate' | 'scale' }) {
+function transform(mesh: MeshData, edit: Extract<MeshEdit, { vertices: number[]; value: readonly number[] }>): MeshResult {
   const vertices = pickVertices(mesh, edit.vertices);
+  const mode = edit.type === 'softTransform' ? edit.mode : edit.type;
+  const influence = edit.type === 'softTransform' ? softWeights(mesh, vertices, edit.soft) : undefined;
   const positions = mesh.positions.slice(), value = new Vector3(...edit.value);
   const pivot = edit.pivot ? new Vector3(...edit.pivot) : center(mesh, edit.vertices);
-  if (edit.type === 'scale' && Math.min(...edit.value) <= 0) throw new Error('Scale factors must be positive.');
+  if (mode === 'scale' && Math.min(...edit.value) <= 0) throw new Error('Scale factors must be positive.');
   const rad = Math.PI / 180;
-  const matrix = new Matrix4();
-  if (edit.type === 'rotate') matrix.makeRotationFromEuler(new Euler(value.x * rad, value.y * rad, value.z * rad));
-  if (edit.type === 'scale') matrix.makeScale(...edit.value);
+  const matrix = new Matrix4(), angles = new Euler(), factors = new Vector3();
+  if (mode === 'rotate') matrix.makeRotationFromEuler(angles.set(value.x * rad, value.y * rad, value.z * rad));
+  if (mode === 'scale') matrix.makeScale(...edit.value);
   const changed = new Set<number>();
-  for (const id of vertices) {
-    const start = vector(mesh, id);
-    const end = edit.type === 'move' ? start.clone().add(value) : start.clone().sub(pivot).applyMatrix4(matrix).add(pivot);
+  for (const id of influence?.keys() ?? vertices) {
+    const start = vector(mesh, id), end = start.clone(), weight = influence?.get(id) ?? 1;
+    if (mode === 'move') end.addScaledVector(value, weight);
+    else {
+      end.sub(pivot);
+      if (weight === 1) end.applyMatrix4(matrix);
+      else if (mode === 'scale') end.multiply(factors.set(1, 1, 1).lerp(value, weight));
+      else end.applyEuler(angles.set(value.x * rad * weight, value.y * rad * weight, value.z * rad * weight));
+      end.add(pivot);
+    }
     if (!end.toArray().every(value => Number.isFinite(Math.fround(value)))) throw new Error('The transform produced invalid coordinates.');
     if (end.equals(start)) continue;
     end.toArray(positions, id * 3);
@@ -163,9 +173,9 @@ function transform(mesh: MeshData, edit: MeshEdit & { type: 'move' | 'rotate' | 
     if (changedShape(mesh, result, face)) transformedBasis.add(face.id);
     if (faceNormal(mesh, face).normalize().distanceToSquared(faceNormal(result, face).normalize()) > 1e-16) affected.add(face.id);
   }
-  if (edit.type !== 'move' && mesh.faces.every(face => face.corners.every(c => vertices.has(c.vertex)))) {
+  if (mode !== 'move' && mesh.faces.every(face => face.corners.every(c => vertices.has(c.vertex)))) {
     const normal = new Matrix3().getNormalMatrix(matrix);
-    return { ...result, faces: mesh.faces.map(face => ({ ...face, corners: face.corners.map(corner => ({
+    return { influence, mesh: { ...result, faces: mesh.faces.map(face => ({ ...face, corners: face.corners.map(corner => ({
       ...corner,
       attributes: corner.attributes.map((values, i) => {
         const channel = mesh.channels[i].name;
@@ -173,11 +183,11 @@ function transform(mesh: MeshData, edit: MeshEdit & { type: 'move' | 'rotate' | 
         if (channel === 'tangent') return [...new Vector3().fromArray(values).transformDirection(matrix).toArray(), values[3]];
         return values;
       }),
-    })) })) };
+    })) })) } };
   }
   const updated = recalculate(result, affected, mesh);
-  return { ...updated, faces: updated.faces.map((face, i) =>
-    transformedBasis.has(face.id) && face === mesh.faces[i] ? tangentFrame(result, face) : face) };
+  return { influence, mesh: { ...updated, faces: updated.faces.map((face, i) =>
+    transformedBasis.has(face.id) && face === mesh.faces[i] ? tangentFrame(result, face) : face) } };
 }
 
 function changedShape(before: MeshData, after: MeshData, face: Face) {

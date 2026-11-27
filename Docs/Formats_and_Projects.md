@@ -32,14 +32,15 @@ Choose **PNG** under **FBX maps** to write external PNG images in whole-scene, s
 | 12 | Relative original paths and local FBX material-map assignments. |
 | 13 | Object transform overrides and editable scalar texture bindings. |
 | 14 | Pinned source snapshots, their working manifests, and shared resource references. |
+| 15 | Soft Selection transform commands and radius and falloff preferences. |
 
-The reader accepts schemas 1 through 14. Saves use schema 14 when the document contains pins and use the relevant earlier schema for projects without pins. Each pin references a captured revision and an independent working manifest. Identical resource bytes are stored once even when used by several pins and the current document. The project supports up to eight pins. The optional operation settings record restores paint, UV/bake, repair, extraction and FBX output preferences. Reopen uses the archived originals and working state and starts a new Undo history. An unknown newer schema is refused before replacing the open project.
+The reader accepts schemas 1 through 15. Saves use the earliest schema that represents the document, including pinned revisions and operation settings. Each pin references a captured revision and an independent working manifest. Identical resource bytes are stored once even when used by several pins and the current document. The project supports up to eight pins. The optional operation settings record restores paint, Soft Selection, UV/bake, repair, extraction and FBX output preferences. Reopen uses the archived originals and working state and starts a new Undo history. An unknown newer schema is refused before replacing the open project.
 
 ## Resource and engine limits
 
 - Model inputs have a 160 MiB aggregate limit. FBX ZIP entries are capped at 128 MiB each and 256 MiB expanded overall, with at most 256 entries. Projects have a 512 MiB limit. Invalid or duplicate archive paths are refused.
 - Import checks texture headers before decoding. The limits are 8192 × 8192 pixels per image and 512 MiB of estimated RGBA storage across the linked or embedded maps. The 2D editor and direct UV bake support maps through 4096 × 4096. Spatial projection is capped at 2048 × 2048.
-- In schema 14, archived working and pinned image tiles share a 512 MiB decode budget. Repeated references to an identical image share its decoded tiles.
+- In archives with pins, the working and pinned image tiles share a 512 MiB decode budget. Repeated references to an identical image share its decoded tiles.
 - GLB numeric editing uses R for AO, G for Roughness and B for Metallic. The packed Roughness/Metallic image keeps its two independent channels. If an input image also supplies AO, editing can produce a separate image for that binding. Alpha editing works on the Base Color image and preserves the material's existing alpha mode. Recognized separate Tripo Roughness and Metallic maps are exported for assignment to the Unity material.
 - Object transforms accept static meshes and groups. Transform tracks, skinned objects and joint hierarchies remain in the rig workflow. A scale or rotation that would require a sheared local transform is refused before commit.
 - The diagnostic texture estimate counts four bytes per decoded texel. Mipmaps, source snapshots, Undo, GPU copies and worker buffers add to peak use.

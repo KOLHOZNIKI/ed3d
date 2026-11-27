@@ -527,6 +527,60 @@ static const ufbx_mesh *find_mesh(const ufbx_scene *scene, const char *name)
     return node ? node->mesh : NULL;
 }
 
+static bool compare_soft_move(ufbx_scene *original, const ufbx_scene *exported, double radius)
+{
+    ufbx_mesh *a = original->meshes.data[0];
+    const ufbx_mesh *b = exported->meshes.data[0];
+    const bool topology = same_connectivity(a, b), weights = same_skin_weights(a, b);
+    if (!topology || !weights || !a->vertex_uv.exists || !b->vertex_uv.exists || !b->vertex_normal.exists || !a->num_vertices) return false;
+    double *distances = malloc(a->num_vertices * sizeof(double));
+    if (!distances) return false;
+    for (size_t i = 0; i < a->num_vertices; i++) distances[i] = i ? INFINITY : 0.0;
+    // Relax both directions over polygon edges until every shorter path is known on these small fixtures.
+    for (size_t pass = 1; radius > 0 && pass < a->num_vertices; pass++) {
+        bool changed = false;
+        for (size_t i = 0; i < a->num_faces; i++) {
+            const ufbx_face face = a->faces.data[i];
+            for (size_t corner = 0; corner < face.num_indices; corner++) {
+                const uint32_t left = a->vertex_indices.data[face.index_begin + corner];
+                const uint32_t right = a->vertex_indices.data[face.index_begin + (corner + 1) % face.num_indices];
+                const double length = point_distance(a->vertices.data[left], a->vertices.data[right]);
+                if (distances[left] + length < distances[right]) { distances[right] = distances[left] + length; changed = true; }
+                if (distances[right] + length < distances[left]) { distances[left] = distances[right] + length; changed = true; }
+            }
+        }
+        if (!changed) break;
+    }
+    double position_error = 0, uv_error = 0;
+    size_t changed = 0, unmoved_coincident = 0;
+    for (size_t i = 0; i < a->num_vertices; i++) {
+        const double offset = distances[i] < radius ? 0.03125 * (1.0 - distances[i] / radius) : 0.0;
+        if (i && offset == 0 && point_distance(a->vertices.data[0], a->vertices.data[i]) == 0) unmoved_coincident++;
+        if (offset > 0) changed++;
+    }
+    for (size_t i = 0; i < a->num_vertices; i++) {
+        // Feed the independently predicted rest positions to the animation evaluator.
+        if (distances[i] < radius) a->vertices.data[i].y += 0.03125 * (1.0 - distances[i] / radius);
+        position_error = fmax(position_error, point_distance(a->vertices.data[i], b->vertices.data[i]));
+    }
+    double seed_normal_angle = 0;
+    for (size_t i = 0; i < a->num_indices; i++) {
+        uv_error = fmax(uv_error, uv_distance(ufbx_get_vertex_vec2(&a->vertex_uv, i), ufbx_get_vertex_vec2(&b->vertex_uv, i)));
+        if (b->vertex_indices.data[i] != 0) continue;
+        for (size_t j = i + 1; j < a->num_indices; j++) if (b->vertex_indices.data[j] == 0) {
+            seed_normal_angle = fmax(seed_normal_angle, normal_angle(ufbx_get_vertex_vec3(&b->vertex_normal, i),
+                ufbx_get_vertex_vec3(&b->vertex_normal, j)));
+        }
+    }
+    free(distances);
+    printf(",\"softSelection\":{\"samePolygonConnectivity\":true,\"sameSourceSkinWeights\":true,\"changedControlPoints\":%zu,"
+           "\"untouchedCoincidentPoints\":%zu,\"maxPositionError\":%.9g,\"maxUvError\":%.9g,\"seedNormalAngle\":%.9g}",
+           changed, unmoved_coincident, position_error, uv_error, seed_normal_angle);
+    const bool animation = compare_clips(original, exported, a, b);
+    return (radius == 0 || changed > 1) && (a->skin_deformers.count || (unmoved_coincident == 1 && seed_normal_angle > 80)) &&
+        position_error <= 1e-7 && uv_error <= 1e-9 && animation;
+}
+
 static bool shared_skeleton(const ufbx_scene *scene, const ufbx_mesh *const *meshes, size_t count)
 {
     const ufbx_node *bones[] = { ufbx_find_node(scene, "Pelvis"), ufbx_find_node(scene, "Spine"), ufbx_find_node(scene, "Chest") };
@@ -998,7 +1052,7 @@ int main(int argc, char **argv)
     const bool weight = argc == 4 && (!strcmp(argv[3], "--weight-stroke") || !strcmp(argv[3], "--weight-wide"));
     const bool stitch = argc == 4 && strcmp(argv[3], "--uv-stitch") == 0;
     if (argc != 3 && argc != 5 && !shared && !rig && !weight && !stitch && !check_clip_extrema) {
-        fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx [--shared-skin | --selected-skin | --clip-extrema | --rig-moved | --rig-renamed | --rig-deleted | --weight-stroke | --weight-wide | --uv-stitch | control-point offset-y | --seams offset-y | --atlas source-corners.bin | --baked source-corners.bin | --smooth center | --grid center]\n");
+        fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx [--shared-skin | --selected-skin | --clip-extrema | --rig-moved | --rig-renamed | --rig-deleted | --weight-stroke | --weight-wide | --uv-stitch | control-point offset-y | --seams offset-y | --atlas source-corners.bin | --baked source-corners.bin | --smooth center | --grid center | --soft-move radius]\n");
         return 2;
     }
     const bool baked = argc == 5 && strcmp(argv[3], "--baked") == 0;
@@ -1006,7 +1060,8 @@ int main(int argc, char **argv)
     const bool smooth = argc == 5 && strcmp(argv[3], "--smooth") == 0;
     const bool repair = smooth || (argc == 5 && strcmp(argv[3], "--grid") == 0);
     const bool seams = argc == 5 && strcmp(argv[3], "--seams") == 0;
-    const bool edited = argc == 5 && !atlas && !repair && !seams;
+    const bool soft = argc == 5 && strcmp(argv[3], "--soft-move") == 0;
+    const bool edited = argc == 5 && !atlas && !repair && !seams && !soft;
     unsigned long long control_point = 0;
     double offset_y = 0.0;
     if (edited) {
@@ -1038,6 +1093,15 @@ int main(int argc, char **argv)
     stats(exported);
 
     const ufbx_mesh *a = original->meshes.data[0], *b = exported->meshes.data[0];
+    if (soft) {
+        char *end;
+        const double radius = strtod(argv[4], &end);
+        const bool matches = end != argv[4] && !*end && isfinite(radius) && radius >= 0 && compare_soft_move(original, exported, radius);
+        puts("}");
+        ufbx_free_scene(exported);
+        ufbx_free_scene(original);
+        return matches ? 0 : 1;
+    }
     if (seams) {
         char *end;
         const double offset = strtod(argv[4], &end);
