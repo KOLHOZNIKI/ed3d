@@ -63,7 +63,7 @@ index 9a2c23e..da208cf 100644
      elemDataSingleString(layer, 'MappingInformationType', 'ByPolygon');
      elemDataSingleString(layer, 'ReferenceInformationType', 'IndexToDirect');
 diff --git a/node_modules/@comfyorg/fbx-exporter-three/dist/data/animationCollector.js b/node_modules/@comfyorg/fbx-exporter-three/dist/data/animationCollector.js
-index c2953bb..1fb15ee 100644
+index c2953bb..c0438d7 100644
 --- a/node_modules/@comfyorg/fbx-exporter-three/dist/data/animationCollector.js
 +++ b/node_modules/@comfyorg/fbx-exporter-three/dist/data/animationCollector.js
 @@ -16,8 +16,7 @@ const _quat = new Quaternion();
@@ -87,3 +87,31 @@ index c2953bb..1fb15ee 100644
          curveNodes,
      };
  }
+@@ -239,9 +238,15 @@ function bakeQuaternionToEulerDegrees(quatValues) {
+     for (let i = 0; i < n; i++) {
+         _quat.set(quatValues[i * 4], quatValues[i * 4 + 1], quatValues[i * 4 + 2], quatValues[i * 4 + 3]);
+         _euler.setFromQuaternion(_quat, 'ZYX');
+-        const triple = [_euler.x * RAD_TO_DEG, _euler.y * RAD_TO_DEG, _euler.z * RAD_TO_DEG];
+-        if (i > 0)
++        let triple = [_euler.x * RAD_TO_DEG, _euler.y * RAD_TO_DEG, _euler.z * RAD_TO_DEG];
++        if (i > 0) {
++            // Crossing the ZYX decomposition boundary also changes the Euler branch.
++            // Both triples encode the same rotation. Choose the one that stays close to the preceding key.
++            const alternate = [triple[0] + 180, 180 - triple[1], triple[2] + 180];
+             unrollEuler(prev, triple);
++            unrollEuler(prev, alternate);
++            if (eulerDistanceSq(prev, alternate) < eulerDistanceSq(prev, triple)) triple = alternate;
++        }
+         xs[i] = triple[0];
+         ys[i] = triple[1];
+         zs[i] = triple[2];
+@@ -264,4 +269,7 @@ function unrollEuler(prev, curr) {
+             curr[k] += 360;
+     }
+ }
+-//# sourceMappingURL=animationCollector.js.map
+\ No newline at end of file
++function eulerDistanceSq(a, b) {
++    return (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
++}
++//# sourceMappingURL=animationCollector.js.map

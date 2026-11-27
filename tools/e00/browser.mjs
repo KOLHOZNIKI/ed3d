@@ -391,7 +391,7 @@ async function checkTripoInputs({ page, input, status, exportButton, tripoPath, 
   }));
   await input.setInputFiles(looseFiles.find(file => file.name.endsWith('.fbx')));
   await page.waitForFunction(() => !document.querySelector('#sources').disabled);
-  assert.match(await status.textContent(), /Missing, ambiguous or unreadable textures/);
+  assert.match(await status.textContent(), /Missing or ambiguous textures/);
   await input.setInputFiles(looseFiles);
   await page.waitForFunction(() => !document.querySelector('#sources').disabled);
   assert.match(await status.textContent(), /^ceramic_plate_3d_model.* · 0 bones · 0 clips/);

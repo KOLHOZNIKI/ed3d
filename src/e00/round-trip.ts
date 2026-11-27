@@ -2,6 +2,7 @@ import { FBXExporter } from '@comfyorg/fbx-exporter-three';
 import { ClampToEdgeWrapping, LoadingManager, Mesh, Texture, type Group } from 'three';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { validateFbxAxes } from './fbx-profile';
+import { fbxFrameRate, sampleFbxAutoCurve } from './fbx-animation';
 import { offsetControlPointY, sourceMesh, useSourceTopology, type FbxSourceMesh } from './fbx-topology';
 import { sceneStats } from './scene-stats';
 import { blankPaintMesh, type TextureBake } from './rebake';
@@ -32,6 +33,7 @@ export interface ImportedAsset {
   name: string;
   scene: Group;
   unitScale: number;
+  fps?: number;
   stats: ReturnType<typeof sceneStats>;
   deformation: ReturnType<typeof sourceDeformation>;
   images: Files;
@@ -82,6 +84,7 @@ export async function importAsset(input: readonly File[], assignments?: TextureA
   const unresolved = new Set<string>();
   const checkTexture = textureImportBudget();
   const manager = Object.assign(new LoadingManager(), {
+    assetFixerSampleCurve: sampleFbxAutoCurve,
     assetFixerEmbeddedImage(content: ArrayBuffer | string, name: string) {
       const data = typeof content === 'string' ? Uint8Array.from(atob(content), char => char.charCodeAt(0)) : new Uint8Array(content);
       checkTexture(data, name);
@@ -127,7 +130,8 @@ export async function importAsset(input: readonly File[], assignments?: TextureA
     const stats = sceneStats(scene, 'FBX');
     const deformation = sourceDeformation(scene);
     const alphaProfile = readAlphaProfile(files.get('manifest.json'), modelPath, scene);
-    return { format: 'fbx', name: basename(modelPath).slice(0, -4), scene, unitScale, stats, deformation, images, imagePathsByUrl, alphaProfile };
+    const fps = fbxFrameRate(scene.userData.assetFixerTimeMode, scene.userData.assetFixerCustomFrameRate);
+    return { format: 'fbx', name: basename(modelPath).slice(0, -4), scene, unitScale, fps, stats, deformation, images, imagePathsByUrl, alphaProfile };
   } catch (error) {
     if (scene) disposeModel({ scene });
     throw error;
@@ -232,7 +236,7 @@ export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMa
     }
     fbx = writer.parseSync(asset.scene, {
       // This exporter encodes the Tripo +X/+Y/+Z metadata with its -Z option.
-      preset: 'unity', axisForward: '-Z', unitScale: asset.unitScale, embedTextures: false, bakeSpaceTransform: false,
+      preset: 'unity', axisForward: '-Z', unitScale: asset.unitScale, fps: asset.fps, embedTextures: false, bakeSpaceTransform: false,
     });
   } finally {
     if (generated) {

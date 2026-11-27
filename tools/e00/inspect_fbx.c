@@ -364,10 +364,10 @@ static bool compare_repair(const ufbx_mesh *a, const ufbx_mesh *b, size_t center
         max_outer == 0 && max_uv == 0 && max_normal <= 1e-4 && same_skin_weights(a, b);
 }
 
-static ufbx_scene *evaluate(const ufbx_scene *scene, const ufbx_anim_stack *stack, double time)
+static ufbx_scene *evaluate_scene(const ufbx_scene *scene, const ufbx_anim_stack *stack, double time, bool skinning)
 {
     ufbx_error error;
-    const ufbx_evaluate_opts opts = { .evaluate_skinning = true };
+    const ufbx_evaluate_opts opts = { .evaluate_skinning = skinning };
     ufbx_scene *pose = ufbx_evaluate_scene(scene, stack->anim, time, &opts, &error);
     if (!pose) {
         char description[1024];
@@ -376,6 +376,11 @@ static ufbx_scene *evaluate(const ufbx_scene *scene, const ufbx_anim_stack *stac
         exit(1);
     }
     return pose;
+}
+
+static ufbx_scene *evaluate(const ufbx_scene *scene, const ufbx_anim_stack *stack, double time)
+{
+    return evaluate_scene(scene, stack, time, true);
 }
 
 static bool inspect_coordinate_source(const ufbx_scene *source)
@@ -624,6 +629,168 @@ static bool shared_skeleton(const ufbx_scene *scene, const ufbx_mesh *const *mes
         }
     }
     return true;
+}
+
+static ufbx_matrix world_delta(const ufbx_matrix *parent, const ufbx_transform *before, ufbx_quat rotation)
+{
+    ufbx_transform after = *before;
+    after.rotation = ufbx_quat_mul(rotation, before->rotation);
+    const ufbx_matrix old_local = ufbx_transform_to_matrix(before), new_local = ufbx_transform_to_matrix(&after);
+    const ufbx_matrix inverse_local = ufbx_matrix_invert(&old_local), inverse_parent = ufbx_matrix_invert(parent);
+    ufbx_matrix delta = ufbx_matrix_mul(parent, &new_local);
+    delta = ufbx_matrix_mul(&delta, &inverse_local);
+    return ufbx_matrix_mul(&delta, &inverse_parent);
+}
+
+static bool below_joint(const ufbx_node *node, const ufbx_node *joint)
+{
+    for (; node; node = node->parent) if (node == joint) return true;
+    return false;
+}
+
+static ufbx_vec3 blend_point(const ufbx_skin_deformer *skin, size_t vertex, const ufbx_matrix *matrices, ufbx_vec3 point)
+{
+    const ufbx_skin_vertex row = skin->vertices.data[vertex];
+    ufbx_vec3 sum = { 0 };
+    double total = 0;
+    for (size_t i = 0; i < row.num_weights; i++) {
+        const ufbx_skin_weight weight = skin->weights.data[row.weight_begin + i];
+        const ufbx_vec3 position = ufbx_transform_position(&matrices[weight.cluster_index], point);
+        for (size_t axis = 0; axis < 3; axis++) sum.v[axis] += position.v[axis] * weight.weight;
+        total += weight.weight;
+    }
+    for (size_t axis = 0; axis < 3; axis++) sum.v[axis] /= total;
+    return sum;
+}
+
+static bool same_authored_weights(const ufbx_skin_deformer *source, const ufbx_skin_deformer *target)
+{
+    if (source->clusters.count != target->clusters.count) return false;
+    for (size_t i = 0; i < source->clusters.count; i++) {
+        const ufbx_skin_cluster *a = source->clusters.data[i], *b = target->clusters.data[i];
+        if (!a->bone_node || !b->bone_node) return false;
+        const char *left = a->bone_node->name.data, *right = b->bone_node->name.data;
+        // Three.js removes namespace separators from binding names.
+        while (*left) {
+            if (*left != ':' && *left != *right++) return false;
+            left++;
+        }
+        if (*right || !same_cluster_weights(a, b)) return false;
+    }
+    return true;
+}
+
+static bool compare_authored_base(const ufbx_scene *source, const ufbx_scene *exported, const char *joint_name,
+                                  double degrees, const char *clip_name, const char *adapted_name, size_t samples)
+{
+    const ufbx_node *joint = ufbx_find_node(source, joint_name);
+    const ufbx_anim_stack *clip = ufbx_find_anim_stack(source, clip_name), *adapted = ufbx_find_anim_stack(exported, adapted_name);
+    if (!joint || !joint->parent || !clip || !adapted) return false;
+    const double range = clip->time_end - clip->time_begin;
+    const double range_error = fabs(clip->time_begin - adapted->time_begin) + fabs(clip->time_end - adapted->time_end);
+    const double meters = source->settings.unit_meters, out_meters = exported->settings.unit_meters;
+    const double radians = degrees * acos(-1.0) / 360.0;
+    const ufbx_quat offset = { .z = sin(radians), .w = cos(radians) };
+    const double fps = source->settings.frames_per_second, output_fps = exported->settings.frames_per_second;
+    size_t empty = 0;
+    for (size_t i = 0; i < source->anim_stacks.count; i++) {
+        const ufbx_anim_stack *stack = source->anim_stacks.data[i];
+        size_t properties = 0;
+        for (size_t l = 0; l < stack->layers.count; l++) properties += stack->layers.data[l]->anim_props.count;
+        if (!properties) empty++;
+    }
+    bool ok = range > 0 && range_error < 1e-6 && meters == out_meters && fps == output_fps &&
+        source->anim_stacks.count == empty + 1 && exported->anim_stacks.count == 1;
+    printf("{\"clipSeconds\":%.9g,\"rangeErrorSeconds\":%.9g,\"sourceFrameRate\":%.9g,\"exportedFrameRate\":%.9g,"
+           "\"sourceEmptyTakes\":%zu,\"meshes\":[", range, range_error, fps, output_fps, empty);
+    for (size_t mesh = 0; mesh < source->meshes.count; mesh++) {
+        const ufbx_mesh *a = source->meshes.data[mesh];
+        const char *name = a->instances.data[0]->name.data;
+        const ufbx_mesh *b = find_mesh(exported, name);
+        if (!b || !same_connectivity(a, b) || a->skin_deformers.count != 1 || b->skin_deformers.count != 1) {
+            fprintf(stderr, "Expected matching connectivity and one skin for %s.\n", name);
+            return false;
+        }
+        const ufbx_skin_deformer *skin = a->skin_deformers.data[0], *out_skin = b->skin_deformers.data[0];
+        if (!same_authored_weights(skin, out_skin)) {
+            fprintf(stderr, "Source skin weights or cluster bindings changed for %s.\n", name);
+            return false;
+        }
+        const size_t count = skin->clusters.count;
+        ufbx_matrix joint_bind = joint->node_to_world, parent_bind = joint->parent->node_to_world;
+        for (size_t c = 0; c < count; c++) {
+            const ufbx_skin_cluster *cluster = skin->clusters.data[c];
+            if (cluster->bone_node == joint) joint_bind = cluster->bind_to_world;
+            if (cluster->bone_node == joint->parent) parent_bind = cluster->bind_to_world;
+        }
+        const ufbx_matrix inverse_parent = ufbx_matrix_invert(&parent_bind);
+        const ufbx_matrix local_matrix = ufbx_matrix_mul(&inverse_parent, &joint_bind);
+        const ufbx_transform rest = ufbx_matrix_to_transform(&local_matrix);
+        const ufbx_quat inverse_rotation = { .x = -rest.rotation.x, .y = -rest.rotation.y, .z = -rest.rotation.z, .w = rest.rotation.w };
+        const ufbx_quat prefix = ufbx_quat_mul(ufbx_quat_mul(rest.rotation, offset), inverse_rotation);
+        const ufbx_matrix rest_delta = world_delta(&parent_bind, &rest, prefix);
+        ufbx_matrix *matrices = malloc(count * sizeof(ufbx_matrix)), *inverse_binds = malloc(count * sizeof(ufbx_matrix));
+        ufbx_vec3 *base = malloc(a->num_vertices * sizeof(ufbx_vec3)), *first = malloc(a->num_vertices * sizeof(ufbx_vec3));
+        if (!matrices || !inverse_binds || !base || !first) exit(1);
+        double bind_error = 0, base_error = 0, rest_motion = 0, geom_motion = 0, pose_error = 0, worst_time = 0, frame_error = 0;
+        const char *worst_joint = "";
+        for (size_t c = 0; c < count; c++) {
+            const ufbx_skin_cluster *cluster = skin->clusters.data[c], *target = out_skin->clusters.data[c];
+            const ufbx_matrix bind = below_joint(cluster->bone_node, joint)
+                ? ufbx_matrix_mul(&rest_delta, &cluster->bind_to_world) : cluster->bind_to_world;
+            inverse_binds[c] = ufbx_matrix_invert(&bind);
+            matrices[c] = ufbx_matrix_mul(&bind, &cluster->geometry_to_bone);
+            for (size_t j = 0; j < 4; j++) {
+                bind_error = fmax(bind_error, point_distance(bind.cols[j], target->bind_to_world.cols[j]) * (j == 3 ? meters : 1));
+            }
+        }
+        for (size_t v = 0; v < a->num_vertices; v++) {
+            base[v] = blend_point(skin, v, matrices, a->vertices.data[v]);
+            if (!isfinite(base[v].x) || !isfinite(base[v].y) || !isfinite(base[v].z)) exit(1);
+            const ufbx_vec3 raw = ufbx_transform_position(&a->instances.data[0]->geometry_to_world, a->vertices.data[v]);
+            const ufbx_vec3 result = ufbx_transform_position(&b->instances.data[0]->geometry_to_world, b->vertices.data[v]);
+            base_error = fmax(base_error, point_distance(base[v], result) * meters);
+            rest_motion = fmax(rest_motion, point_distance(raw, base[v]) * meters);
+        }
+        for (size_t i = 0; i < samples; i++) {
+            const double time = clip->time_begin + range * i / (samples - 1);
+            ufbx_scene *incoming = evaluate_scene(source, clip, time, false), *outgoing = evaluate(exported, adapted, time);
+            const ufbx_node *anim_joint = incoming->nodes.data[joint->typed_id];
+            const ufbx_matrix delta = world_delta(&anim_joint->parent->node_to_world, &anim_joint->local_transform, prefix);
+            for (size_t c = 0; c < count; c++) {
+                const ufbx_node *node = skin->clusters.data[c]->bone_node;
+                ufbx_matrix world = incoming->nodes.data[node->typed_id]->node_to_world;
+                if (below_joint(node, joint)) world = ufbx_matrix_mul(&delta, &world);
+                const ufbx_matrix observed = outgoing->meshes.data[b->typed_id]->skin_deformers.data[0]->clusters.data[c]->bone_node->node_to_world;
+                const double error = point_distance(world.cols[3], observed.cols[3]) * meters;
+                if (error > frame_error) { frame_error = error; worst_joint = node->name.data; }
+                matrices[c] = ufbx_matrix_mul(&world, &inverse_binds[c]);
+            }
+            ufbx_vec3 anchor = blend_point(skin, 0, matrices, base[0]);
+            for (size_t axis = 0; axis < 3; axis++) anchor.v[axis] *= meters;
+            for (size_t v = 0; v < a->num_vertices; v++) {
+                ufbx_vec3 expected = blend_point(skin, v, matrices, base[v]);
+                for (size_t axis = 0; axis < 3; axis++) expected.v[axis] *= meters;
+                const double error = point_distance(expected, posed_point(outgoing, b->typed_id, v));
+                if (error > pose_error) { pose_error = error; worst_time = time; }
+                if (i == 0) first[v] = expected;
+                geom_motion = fmax(geom_motion, fabs(point_distance(expected, anchor) - point_distance(first[v], first[0])));
+            }
+            ufbx_free_scene(outgoing);
+            ufbx_free_scene(incoming);
+        }
+        free(first);
+        free(base);
+        free(inverse_binds);
+        free(matrices);
+        printf("%s{\"mesh\":\"%s\",\"controlPoints\":%zu,\"samples\":%zu,\"rawWeightsExact\":true,"
+               "\"maxBaseErrorMeters\":%.9g,\"maxBindDelta\":%.9g,\"restMotionMeters\":%.9g,\"maxDeformationErrorMeters\":%.9g,\"shapeChangeMeters\":%.9g,"
+               "\"worstTime\":%.9g,\"maxJointPositionError\":%.9g,\"worstJoint\":\"%s\"}",
+               mesh ? "," : "", name, a->num_vertices, samples, base_error, bind_error, rest_motion, pose_error, geom_motion, worst_time, frame_error, worst_joint);
+        ok &= rest_motion > .005 && geom_motion > .01 && base_error < 2e-6 && bind_error < 1e-5 && pose_error < .001;
+    }
+    printf("],\"compatible\":%s}\n", ok ? "true" : "false");
+    return ok;
 }
 
 static bool compare_shared_skin(const ufbx_scene *original, const ufbx_scene *exported, size_t count, bool base_pose)
@@ -1062,6 +1229,15 @@ static bool e05_mesh_report(char **paths)
 
 int main(int argc, char **argv)
 {
+    if ((argc == 8 || argc == 9) && !strcmp(argv[1], "--authored-base-pose")) {
+        const size_t samples = argc == 9 ? strtoul(argv[8], NULL, 10) : 81;
+        if (samples < 2 || samples > 2000) return 2;
+        ufbx_scene *source = load(argv[2], 2), *exported = load(argv[3], 2);
+        const bool matches = compare_authored_base(source, exported, argv[4], strtod(argv[5], NULL), argv[6], argv[7], samples);
+        ufbx_free_scene(exported);
+        ufbx_free_scene(source);
+        return matches ? 0 : 1;
+    }
     const bool mesh_data = argc == 3 && strcmp(argv[1], "--mesh-data") == 0;
     if (mesh_data || (argc == 3 && strcmp(argv[1], "--points") == 0)) {
         ufbx_scene *scene = load(argv[2], 1);

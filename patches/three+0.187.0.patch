@@ -1,5 +1,5 @@
 diff --git a/node_modules/three/examples/jsm/loaders/FBXLoader.js b/node_modules/three/examples/jsm/loaders/FBXLoader.js
-index fc155a4..2d9acb1 100644
+index fc155a4..25ddbdf 100644
 --- a/node_modules/three/examples/jsm/loaders/FBXLoader.js
 +++ b/node_modules/three/examples/jsm/loaders/FBXLoader.js
 @@ -180,13 +180,22 @@ class FBXLoader extends Loader {
@@ -30,15 +30,16 @@ index fc155a4..2d9acb1 100644
  
  	}
  
-@@ -312,6 +321,6 @@ class FBXTreeParser {
+@@ -312,7 +321,7 @@ class FBXTreeParser {
+ 			const filename = images[ id ];
+ 
  			if ( blobs[ filename ] !== undefined ) images[ id ] = blobs[ filename ];
 -			else images[ id ] = images[ id ].split( '\\' ).pop();
 +			// Preserve external reference paths for the host's local-file resolver.
  
  		}
  
- 		return images;
-@@ -339,6 +348,12 @@ class FBXTreeParser {
+@@ -327,6 +336,12 @@ class FBXTreeParser {
  		const fileName = videoNode.RelativeFilename || videoNode.Filename;
  		const extension = fileName.slice( fileName.lastIndexOf( '.' ) + 1 ).toLowerCase();
  
@@ -51,24 +52,33 @@ index fc155a4..2d9acb1 100644
  		let type;
  
  		switch ( extension ) {
+@@ -1015,7 +1030,7 @@ class FBXTreeParser {
+ 		// without a BindPose section).
+ 		this.bindSkeleton( deformers.skeletons, geometryMap, modelMap );
+ 
+-		const animations = new AnimationParser( this.trimAnimationClips ).parse();
++		const animations = new AnimationParser( this.trimAnimationClips, this.manager.assetFixerSampleCurve ).parse();
+ 
+ 		// if all the models where already combined in a single group, just return that
+ 		if ( sceneGraph.children.length === 1 && sceneGraph.children[ 0 ].isGroup ) {
 @@ -1119,27 +1134,19 @@ class FBXTreeParser {
  
  					if ( rawBone.ID === parent.ID ) {
  
 -						const subBone = bone;
 -						bone = new Bone();
+-
+-						bone.matrixWorld.copy( rawBone.transformLink );
 +						// Skin clusters on different meshes can reference the same FBX model node.
 +						if ( bone === null ) {
  
--						bone.matrixWorld.copy( rawBone.transformLink );
+-						// set name and id here - otherwise in cases where "subBone" is created it will not have a name / id
 +							bone = new Bone();
 +							bone.matrixWorld.copy( rawBone.transformLink );
 +							bone.name = name ? PropertyBinding.sanitizeNodeName( name ) : '';
 +							bone.userData.originalName = name;
 +							bone.ID = id;
  
--						// set name and id here - otherwise in cases where "subBone" is created it will not have a name / id
--
 -						bone.name = name ? PropertyBinding.sanitizeNodeName( name ) : '';
 -						bone.userData.originalName = name;
 -						bone.ID = id;
@@ -87,7 +97,16 @@ index fc155a4..2d9acb1 100644
  					}
  
  				} );
-@@ -1805,7 +1806,34 @@ class GeometryParser {
+@@ -1683,6 +1690,8 @@ class FBXTreeParser {
+ 				sceneGraph.userData.unitScaleFactor = fbxTree.GlobalSettings.UnitScaleFactor.value;
+ 
+ 			}
++			sceneGraph.userData.assetFixerTimeMode = fbxTree.GlobalSettings.TimeMode?.value;
++			sceneGraph.userData.assetFixerCustomFrameRate = fbxTree.GlobalSettings.CustomFrameRate?.value;
+ 
+ 		}
+ 
+@@ -1805,7 +1814,34 @@ class GeometryParser {
  		if ( geoNode.attrName ) geo.name = geoNode.attrName;
  
  		const geoInfo = this.parseGeoNode( geoNode, skeleton );
@@ -123,7 +142,7 @@ index fc155a4..2d9acb1 100644
  
  		const positionAttribute = new Float32BufferAttribute( buffers.vertex, 3 );
  
-@@ -1972,7 +2000,7 @@ class GeometryParser {
+@@ -1972,7 +2008,7 @@ class GeometryParser {
  
  	}
  
@@ -132,7 +151,7 @@ index fc155a4..2d9acb1 100644
  
  		const buffers = {
  			vertex: [],
-@@ -1982,6 +2010,7 @@ class GeometryParser {
+@@ -1982,6 +2018,7 @@ class GeometryParser {
  			materialIndex: [],
  			vertexWeights: [],
  			weightsIndices: [],
@@ -140,7 +159,7 @@ index fc155a4..2d9acb1 100644
  		};
  
  		let polygonIndex = 0;
-@@ -2047,7 +2076,7 @@ class GeometryParser {
+@@ -2047,7 +2084,7 @@ class GeometryParser {
  
  					if ( ! displayedWeightsWarning ) {
  
@@ -149,7 +168,7 @@ index fc155a4..2d9acb1 100644
  						displayedWeightsWarning = true;
  
  					}
-@@ -2143,7 +2172,7 @@ class GeometryParser {
+@@ -2143,7 +2180,7 @@ class GeometryParser {
  
  			if ( endOfFace ) {
  
@@ -158,7 +177,7 @@ index fc155a4..2d9acb1 100644
  
  				polygonIndex ++;
  				faceLength = 0;
-@@ -2212,7 +2241,7 @@ class GeometryParser {
+@@ -2212,7 +2249,7 @@ class GeometryParser {
  	}
  
  	// Generate data for a single face in a geometry. If the face is a quad then split it into 2 tris
@@ -167,7 +186,7 @@ index fc155a4..2d9acb1 100644
  
  		let triangles;
  
-@@ -2261,6 +2290,7 @@ class GeometryParser {
+@@ -2261,6 +2298,7 @@ class GeometryParser {
  		}
  
  		for ( const [ i0, i1, i2 ] of triangles ) {
@@ -175,7 +194,39 @@ index fc155a4..2d9acb1 100644
  
  			buffers.vertex.push( geoInfo.vertexPositions[ facePositionIndexes[ i0 * 3 ] ] );
  			buffers.vertex.push( geoInfo.vertexPositions[ facePositionIndexes[ i0 * 3 + 1 ] ] );
-@@ -2968,7 +2998,14 @@ class AnimationParser {
+@@ -2630,9 +2668,10 @@ class GeometryParser {
+ // parse animation data from FBXTree
+ class AnimationParser {
+ 
+-	constructor( trimAnimationClips ) {
++	constructor( trimAnimationClips, sampleCurve ) {
+ 
+ 		this.trimAnimationClips = trimAnimationClips;
++		this.sampleCurve = sampleCurve;
+ 
+ 	}
+ 
+@@ -2727,11 +2766,16 @@ class AnimationParser {
+ 
+ 		for ( const nodeID in rawCurves ) {
+ 
++			const raw = rawCurves[ nodeID ];
++			const times = raw.KeyTime.a.map( convertFBXTimeToSeconds );
++			const values = raw.KeyValueFloat.a;
++			const sampled = this.sampleCurve?.( times, values, raw.KeyAttrFlags?.a, raw.KeyAttrRefCount?.a );
+ 			const animationCurve = {
+ 
+-				id: rawCurves[ nodeID ].id,
+-				times: rawCurves[ nodeID ].KeyTime.a.map( convertFBXTimeToSeconds ),
+-				values: rawCurves[ nodeID ].KeyValueFloat.a,
++				id: raw.id,
++				times: sampled?.times ?? times,
++				values: sampled?.values ?? values,
++				assetFixerSampled: !! sampled,
+ 
+ 			};
+ 
+@@ -2968,7 +3012,14 @@ class AnimationParser {
  
  		}
  
@@ -188,6 +239,59 @@ index fc155a4..2d9acb1 100644
 +
 +		}
 +		return clip;
+ 
+ 	}
+ 
+@@ -3068,6 +3119,13 @@ class AnimationParser {
+ 	generateVectorTrack( modelName, curves, initialValue, type ) {
+ 
+ 		const times = this.getTimesForAllAxes( curves );
++		if ( [ curves.x, curves.y, curves.z ].some( curve => curve?.assetFixerSampled ) ) {
++
++			const axes = [ curves.x, curves.y, curves.z ].map( ( curve, i ) => this.synchronizeCurve( curve, times, initialValue[ i ] ).values );
++			const values = times.flatMap( ( _, i ) => axes.map( axis => axis[ i ] ) );
++			return new VectorKeyframeTrack( modelName + '.' + type, times, values );
++
++		}
+ 		const values = this.getKeyframeTrackValues( times, curves, initialValue );
+ 
+ 		return new VectorKeyframeTrack( modelName + '.' + type, times, values );
+@@ -3295,7 +3353,7 @@ class AnimationParser {
+ 
+ 		}
+ 
+-		// If the curve already has the same number of keyframes as the target, assume times match
++		// The merged times can only have the same length when the axis has every time.
+ 		if ( curve.times.length === targetTimes.length ) return curve;
+ 
+ 		// Linearly interpolate curve values at each target time
+@@ -3323,21 +3381,17 @@ class AnimationParser {
+ 		// After last keyframe
+ 		if ( time >= times[ times.length - 1 ] ) return values[ values.length - 1 ];
+ 
+-		// Find surrounding keyframes and linearly interpolate
+-		for ( let i = 0; i < times.length - 1; i ++ ) {
+-
+-			if ( time >= times[ i ] && time <= times[ i + 1 ] ) {
+-
+-				if ( times[ i ] === time ) return values[ i ];
++		if ( ! times.length ) return initialValue;
++		let lo = 0, hi = times.length - 1;
++		while ( hi - lo > 1 ) {
+ 
+-				const alpha = ( time - times[ i ] ) / ( times[ i + 1 ] - times[ i ] );
+-				return values[ i ] * ( 1 - alpha ) + values[ i + 1 ] * alpha;
+-
+-			}
++			const middle = ( lo + hi ) >>> 1;
++			if ( times[ middle ] <= time ) lo = middle;
++			else hi = middle;
+ 
+ 		}
+-
+-		return initialValue;
++		const alpha = ( time - times[ lo ] ) / ( times[ hi ] - times[ lo ] );
++		return values[ lo ] * ( 1 - alpha ) + values[ hi ] * alpha;
  
  	}
  

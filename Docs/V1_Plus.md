@@ -156,6 +156,30 @@ Run `node tools/base-pose-browser.mjs` from a built checkout with the E00 Chrome
 
 For Unity, place the reference and reopened shared-rig FBX in `Assets/BasePose/original` and `Assets/BasePose/exported`. Run [`SharedSkinProbe.RunBasePose`](../tools/e00/SharedSkinProbe.cs) and check `shared-skin-report.json`. For the plate and animated character, put the first export and reopened export under `Assets/Fixtures/<fixture>/original` and `Assets/Fixtures/<fixture>/exported`, keeping texture paths relative to their FBX. Run [`FbxProbe.Run`](../tools/e00/FbxProbe.cs) and check `e00-report.json`. The user-provided Tripo files and the Kenney corpus asset are local verification inputs. Their provenance is recorded in the [E00 fixture list](E00_FBX_Round_Trip.md#fixtures).
 
+### Authored Mixamo clip on a rebased FBX
+
+Three.js r180 credits Mixamo for the character and motion. The upstream `Samba Dancing.fbx` has SHA-256 `b9003ee562c87bf03051c3a502411b0808d3513f1d74a2011f7530d9f067069f`. The source and generated FBX files are kept in ignored local verification paths. [Three.js example](https://github.com/mrdoob/three.js/blob/r180/examples/webgl_loader_fbx.html#L13) · [Source FBX](https://github.com/mrdoob/three.js/blob/r180/examples/models/fbx/Samba%20Dancing.fbx)
+
+AssetFixer baked a `+15°` local Z rotation of `mixamorig:LeftForeArm`, updating both `Alpha_Surface` and `Alpha_Joints` on the same rig. The skin has 52 weighted bones and 55,320 triangles across both meshes. The browser verified the clip export guard, adapted `mixamo.com` to `mixamo.com_Adapted_1`, saved and reopened the schema 20 project offline, then exported it. The authored clip retained its `18.2 s` range at `30 fps`. The source's `Take 001` contains no animated properties and is omitted by the exporter.
+
+Both probes derive the expected mesh and bind shape from the source skin, then apply the rest-relative joint correction to the sampled source animation. They compare deformation of the rebased geometry against that reference. Unity uses the stock Generic model importer with mesh and animation compression disabled, imported normals and Standard four-influence skinning. It calculates the reference from Unity's imported source. ufbx uses the original FBX curves and sparse cluster weights directly.
+
+| Probe | Skinning results | Maximum adapted deformation error |
+| --- | --- | --- |
+| ufbx v0.23.0 | Connectivity and raw cluster weights matched exactly across 27,850 control points. Base shape and bind matrices matched to numerical precision. | `0.255 mm` over 81 evenly spaced times. A separate run over all 547 source-frame times and 546 midpoints measured `0.163 mm`. |
+| Unity 2022.3.62f2 and 6000.3.9f1 | All 35,389 imported vertices matched the expected base shape within `0.38 µm`. Weight error was zero for both meshes. | `0.068 mm` over 81 evenly spaced times in each Unity version. |
+
+The first test exposed a `183 mm` deformation error between keys. Export now keeps Euler representations continuous across both equivalent ZYX branches. Import samples unweighted, time-independent auto-cubic FBX curves for the working animation, including source translation curves, and export retains the source frame rate when available. Other FBX tangent modes retain the existing import behavior. The output represents the supported authoring curves as sampled keys.
+
+From a Release checkout with the E00 dependencies installed, save the upstream fixture as `test-results/authored-base-pose/Samba Dancing.fbx`. Run `node tools/authored-base-pose-browser.mjs`. Place the compiled ufbx probe in `test-results/authored-base-pose`, then run it as follows. Repeat without the final argument for the 81-sample run. [E00 probe build instructions](E00_FBX_Round_Trip.md#reproduce-on-windows)
+
+```powershell
+$folder = 'test-results/authored-base-pose'
+& "$folder/inspect_fbx.exe" --authored-base-pose "$folder/Samba Dancing.fbx" "$folder/samba-reopened.fbx" 'mixamorig:LeftForeArm' 15 'mixamo.com' 'mixamo.com_Adapted_1' 1093
+```
+
+For Unity, copy [`FbxProbe.cs`](../tools/e00/FbxProbe.cs) and [`AuthoredBasePoseProbe.cs`](../tools/e00/AuthoredBasePoseProbe.cs) to `Assets/Editor`. Place the upstream FBX and the reopened export under `Assets/Fixtures/authored-base-pose/original` and `Assets/Fixtures/authored-base-pose/exported`. Run `AuthoredBasePoseProbe.Run` and check `authored-base-pose.json`.
+
 ### Reproduce
 
 ```powershell

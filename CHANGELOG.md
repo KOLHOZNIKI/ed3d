@@ -25,3 +25,4 @@
 | V1+ | §9.2, UV-16 | Added UV Relax with draft pins, Mirror Move with pair diagnostics, and local Subdivide with shared-edge transitions. [Report](Docs/V1_Plus.md#uv-relax) |
 | V1+ | §9.2 | Added static-mesh Extrude for open edges and connected face regions, with depth, side UVs and new-face paint masks. [Report](Docs/V1_Plus.md#simple-extrude) |
 | V1+ | §16.6 | Added Make Current Pose the Base Pose and verified the offline prop and character workflows with Unity and independent readers. [Report](Docs/V1_Plus.md#make-the-current-pose-the-base-pose) |
+| V1+ | §16.6 | Verified a rebased FBX with an authored Mixamo clip. Preserved FBX frame rates, sampled supported auto-cubic curves and kept exported Euler rotations continuous. [Report](Docs/V1_Plus.md#authored-mixamo-clip-on-a-rebased-fbx) |
