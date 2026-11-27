@@ -96,3 +96,36 @@ await exportFixture('paint_elbow', rig);
 skinned.material = material(false);
 ribbon.deleteAttribute('uv');
 await exportFixture('paint_no_uv', rig, false);
+
+const gridPoints = [], gridIndices = [], gridUvs = [], gridJoints = [], gridWeights = [];
+for (let row = 0; row < 5; row++) for (let column = 0; column < 5; column++) {
+  const id = row * 5 + column;
+  gridPoints.push(column - 2, id === 12 ? .5 : 0, row);
+  gridUvs.push(column / 4, row / 4);
+  if (column < 4 && row < 4) gridIndices.push(id, id + 5, id + 1, id + 1, id + 5, id + 6);
+  gridJoints.push(0, 1, 0, 0);
+  gridWeights.push(1 - row / 4, row / 4, 0, 0);
+}
+const grid = geometry(gridPoints, gridIndices, gridUvs);
+const smoothStatic = new Mesh(grid, material(true));
+smoothStatic.name = 'Smooth grid';
+await exportFixture('smooth_selection_static', new Scene().add(smoothStatic));
+
+const smoothGeometry = grid.clone();
+smoothGeometry.setAttribute('skinIndex', new Uint16BufferAttribute(gridJoints, 4));
+smoothGeometry.setAttribute('skinWeight', new Float32BufferAttribute(gridWeights, 4));
+const smoothSkin = new SkinnedMesh(smoothGeometry, material(true));
+smoothSkin.name = 'Smooth ribbon';
+const gridBase = new Bone(), gridHinge = new Bone();
+gridBase.name = 'GridBase';
+gridHinge.name = 'GridHinge';
+gridHinge.position.z = 2;
+gridBase.add(gridHinge);
+smoothSkin.add(gridBase);
+const smoothRig = new Scene().add(smoothSkin);
+smoothRig.updateMatrixWorld(true);
+smoothSkin.bind(new Skeleton([gridBase, gridHinge]));
+const gridAxis = new Vector3(1, 0, 0);
+smoothRig.animations = [new AnimationClip('GridBend', 1, [new QuaternionKeyframeTrack('GridHinge.quaternion', [0, .5, 1],
+  [0, .5, 0].flatMap(angle => new Quaternion().setFromAxisAngle(gridAxis, angle).toArray()))])];
+await exportFixture('smooth_selection_skinned', smoothRig);

@@ -54,7 +54,8 @@ export class MeshTool {
       this.#cancel();
       this.#syncFields();
     });
-    for (const name of [...xyz, 'axis', 'pivot', 'material', 'project', 'weld-mode', 'tolerance', 'fraction', 'soft', 'soft-radius', 'soft-falloff']) {
+    for (const name of [...xyz, 'axis', 'pivot', 'material', 'project', 'weld-mode', 'tolerance', 'fraction', 'soft', 'soft-radius', 'soft-falloff',
+      'smooth-strength', 'smooth-iterations', 'smooth-boundary']) {
       ui(name).addEventListener('input', () => this.#cancel());
     }
     ui('connected').addEventListener('click', () => this.#selectConnected());
@@ -222,8 +223,9 @@ export class MeshTool {
       const affected = data.faces.filter(face => !retained.has(face) || face.corners.some(({ vertex }) =>
         [0, 1, 2].some(k => data.positions[3 * vertex + k] !== geometry.mesh.positions[3 * vertex + k]))).length;
       const warning = edit.type === 'create' && !edit.project ? ' New face requires UV unwrapping.' : '';
-      const soft = edit.type === 'softTransform' && geometry.influence ? ` · ${geometry.influence.size - edit.vertices.length} neighboring vertices in radius` : '';
-      this.#say(`Preview · ${affected} existing faces affected · ${data.faces.length} → ${after} faces${geometry.piece ? ` + ${geometry.piece.faces.length} in the new object` : ''}${soft}.${warning}`);
+      const detail = geometry.smoothing ? ` · ${geometry.smoothing.changed} moved · ${geometry.smoothing.pinned.size} pinned boundary vertices`
+        : edit.type === 'softTransform' && geometry.influence ? ` · ${geometry.influence.size - edit.vertices.length} neighboring vertices in radius` : '';
+      this.#say(`Preview · ${affected} existing faces affected · ${data.faces.length} → ${after} faces${geometry.piece ? ` + ${geometry.piece.faces.length} in the new object` : ''}${detail}.${warning}`);
     } catch (error) { this.#say(error instanceof Error ? error.message : String(error)); }
     this.#syncFields();
     this.#draw();
@@ -271,6 +273,11 @@ export class MeshTool {
         if (!(radius > 0) || !Number.isFinite(radius) || !falloffs.includes(falloff)) throw new Error('Choose a positive Soft Selection radius and a supported falloff.');
         return { type: 'softTransform', mode: type, ...input, soft: { radius, falloff } };
       }
+      case 'smoothSelection': {
+        const settings = { strength: number('smooth-strength'), iterations: number('smooth-iterations'), fixBoundary: toggle('smooth-boundary') };
+        return this.#kind.value === 'face' ? { type, object, settings, faces: [...this.#selection.face] }
+          : { type, object, settings, vertices: this.#selectedVertices() };
+      }
       case 'create':
         if (vertices.length < 3) throw new Error('Select three or more vertices in contour order.');
         return { type, object, vertices: [...vertices], material: Number(choice('material')), project: toggle('project') };
@@ -300,7 +307,8 @@ export class MeshTool {
 
   #syncFields() {
     const type = choice('operation') as MeshEdit['type'];
-    const fields = { transform: transforms.has(type), 'soft-options': toggle('soft'), create: type === 'create', weld: type === 'weld', split: type === 'splitEdge' };
+    const fields = { transform: transforms.has(type), 'soft-options': toggle('soft'), smooth: type === 'smoothSelection',
+      create: type === 'create', weld: type === 'weld', split: type === 'splitEdge' };
     for (const [id, show] of Object.entries(fields)) ui(id).hidden = !show;
     const ok = !!this.#data && !this.#locked;
     ui<HTMLButtonElement>('preview').disabled = !ok;
@@ -415,6 +423,9 @@ export class MeshTool {
     if (this.#selection.vertex.length) this.#outline.add(new Points(positions(this.#selection.vertex.flatMap(id => world(data, id))), this.#points));
     const preview = this.#preview?.geometry;
     if (preview) {
+      if (preview.smoothing?.pinned.size && this.#kind.value !== 'vertex') {
+        this.#outline.add(new Points(positions([...preview.smoothing.pinned].flatMap(id => world(data, id))), this.#points));
+      }
       if (preview.influence) {
         const selected = new Set(this.#selectedVertices()), points: number[] = [], colors: number[] = [];
         for (const [id, factor] of preview.influence) {

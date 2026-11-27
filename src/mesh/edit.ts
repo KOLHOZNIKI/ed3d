@@ -8,6 +8,7 @@ import { validatePatch } from '../repair/intersections';
 import { applyUvLayout } from '../uv/mesh-layout';
 import { applyWeightEdits } from '../weights/data';
 import { softWeights } from './soft-selection';
+import { smoothSelection } from './smooth-selection';
 
 type VertexSource = readonly [vertex: number, factor: number];
 // Missing replacement entries keep their stable ID. Empty lists remove it from the source object.
@@ -21,7 +22,13 @@ interface TopologyChanges {
   readonly pieceFaces?: readonly number[];
 }
 
-interface MeshResult { mesh: MeshData; piece?: MeshData; topology?: TopologyChanges; influence?: ReadonlyMap<number, number> }
+interface MeshResult {
+  mesh: MeshData;
+  piece?: MeshData;
+  topology?: TopologyChanges;
+  influence?: ReadonlyMap<number, number>;
+  smoothing?: { pinned: ReadonlySet<number>; changed: number };
+}
 
 function topologyChange(source: MeshData, result: MeshResult, changes: Partial<TopologyChanges> = {}): MeshResult {
   const survivingFaces = new Set(result.mesh.faces.map(face => face.id));
@@ -69,6 +76,12 @@ export function applyMeshEdit(mesh: MeshData, edit: MeshEdit): MeshResult {
         piece: { ...selected, positions, faces: corners, uvSeams } }, { pieceVertices: remap });
     }
     case 'move': case 'rotate': case 'scale': case 'softTransform': return transform(mesh, edit);
+    case 'smoothSelection': {
+      const faces = edit.faces && pickFaces(mesh, edit.faces);
+      const vertices = edit.vertices ? pickVertices(mesh, edit.vertices) : new Set(mesh.faces.filter(face => faces!.has(face.id)).flatMap(verticesOf));
+      const { positions, changed, pinned } = smoothSelection(mesh, vertices, faces, edit.settings);
+      return { mesh: deform(mesh, positions, changed), smoothing: { pinned, changed: changed.size } };
+    }
     case 'delete': case 'separate': {
       const faces = pickFaces(mesh, edit.faces);
       if (faces.size === mesh.faces.length) throw new Error('Keep at least one face in the source object.');
@@ -164,30 +177,36 @@ function transform(mesh: MeshData, edit: Extract<MeshEdit, { vertices: number[];
     changed.add(id);
   }
   if (!changed.size) throw new Error('The transform does not move the selection.');
+  const affine = mode !== 'move' && mesh.faces.every(face => face.corners.every(c => vertices.has(c.vertex))) ? matrix : undefined;
+  return { mesh: deform(mesh, positions, changed, affine), influence };
+}
+
+function deform(mesh: MeshData, positions: Float64Array, changed: ReadonlySet<number>, affine?: Matrix4): MeshData {
   const result = { ...mesh, positions };
   const transformedBasis = new Set<number>();
   const affected = new Set<number>();
   for (const face of mesh.faces) {
     if (!face.corners.some(corner => changed.has(corner.vertex))) continue;
     requireTriangles(result, face);
+    if (affine) continue;
     if (changedShape(mesh, result, face)) transformedBasis.add(face.id);
     if (faceNormal(mesh, face).normalize().distanceToSquared(faceNormal(result, face).normalize()) > 1e-16) affected.add(face.id);
   }
-  if (mode !== 'move' && mesh.faces.every(face => face.corners.every(c => vertices.has(c.vertex)))) {
-    const normal = new Matrix3().getNormalMatrix(matrix);
-    return { influence, mesh: { ...result, faces: mesh.faces.map(face => ({ ...face, corners: face.corners.map(corner => ({
+  if (affine) {
+    const normal = new Matrix3().getNormalMatrix(affine);
+    return { ...result, faces: mesh.faces.map(face => ({ ...face, corners: face.corners.map(corner => ({
       ...corner,
       attributes: corner.attributes.map((values, i) => {
         const channel = mesh.channels[i].name;
         if (channel === 'normal') return new Vector3().fromArray(values).applyNormalMatrix(normal).toArray();
-        if (channel === 'tangent') return [...new Vector3().fromArray(values).transformDirection(matrix).toArray(), values[3]];
+        if (channel === 'tangent') return [...new Vector3().fromArray(values).transformDirection(affine).toArray(), values[3]];
         return values;
       }),
-    })) })) } };
+    })) })) };
   }
   const updated = recalculate(result, affected, mesh);
-  return { influence, mesh: { ...updated, faces: updated.faces.map((face, i) =>
-    transformedBasis.has(face.id) && face === mesh.faces[i] ? tangentFrame(result, face) : face) } };
+  return { ...updated, faces: updated.faces.map((face, i) =>
+    transformedBasis.has(face.id) && face === mesh.faces[i] ? tangentFrame(result, face) : face) };
 }
 
 function changedShape(before: MeshData, after: MeshData, face: Face) {

@@ -487,6 +487,7 @@
                 <label for="mesh-operation">Operation</label>
                 <select id="mesh-operation">
                   <option value="move">Move</option><option value="rotate">Rotate</option><option value="scale">Scale</option>
+                  <option value="smoothSelection">Smooth Selection</option>
                   <option value="create">Create Face</option><option value="splitEdge">Split Edge</option><option value="splitFace">Split Face</option>
                   <option value="weld">Weld</option><option value="flipEdge">Flip Edge</option><option value="dissolve">Dissolve Edge</option>
                   <option value="flipNormals">Flip Normals</option><option value="recalculate">Recalculate Normals</option>
@@ -504,6 +505,11 @@
                   <label for="mesh-soft-radius">Radius (local units)</label><input id="mesh-soft-radius" type="number" value="1" min="0" step="any" />
                   <label for="mesh-soft-falloff">Falloff</label><select id="mesh-soft-falloff"><option value="smooth">Smooth</option><option value="linear">Linear</option><option value="sharp">Sharp</option></select>
                 </span>
+              </div>
+              <div class="actions" id="mesh-smooth" hidden>
+                <label for="mesh-smooth-strength">Strength</label><input id="mesh-smooth-strength" type="number" min="0" max="1" step="0.05" value="0.5" />
+                <label for="mesh-smooth-iterations">Iterations</label><input id="mesh-smooth-iterations" type="number" min="1" max="50" step="1" value="1" />
+                <label><input id="mesh-smooth-boundary" type="checkbox" checked /> Fix boundary</label>
               </div>
               <div class="actions" id="mesh-create" hidden>
                 <label for="mesh-material">Material</label><select id="mesh-material"></select>

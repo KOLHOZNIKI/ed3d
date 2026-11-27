@@ -54,6 +54,36 @@ static bool same_connectivity(const ufbx_mesh *a, const ufbx_mesh *b)
     return memcmp(a->vertex_indices.data, b->vertex_indices.data, a->num_indices * sizeof(uint32_t)) == 0;
 }
 
+typedef struct { uint32_t point; ufbx_real weight; } point_weight;
+
+static int by_point_weight(const void *left, const void *right)
+{
+    const point_weight *a = left, *b = right;
+    if (a->point != b->point) return a->point < b->point ? -1 : 1;
+    return (a->weight > b->weight) - (a->weight < b->weight);
+}
+
+static bool same_cluster_weights(const ufbx_skin_cluster *a, const ufbx_skin_cluster *b)
+{
+    const size_t count = a->num_weights;
+    if (count != b->num_weights || count > SIZE_MAX / (2 * sizeof(point_weight))) return false;
+    if (!count || (memcmp(a->vertices.data, b->vertices.data, count * sizeof(uint32_t)) == 0 &&
+                   memcmp(a->weights.data, b->weights.data, count * sizeof(ufbx_real)) == 0)) return true;
+    // A cluster stores sparse control point/weight pairs whose order can change during export.
+    point_weight *pairs = malloc(2 * count * sizeof(point_weight));
+    if (!pairs) return false;
+    for (size_t i = 0; i < count; i++) {
+        pairs[i] = (point_weight){ a->vertices.data[i], a->weights.data[i] };
+        pairs[count + i] = (point_weight){ b->vertices.data[i], b->weights.data[i] };
+    }
+    qsort(pairs, count, sizeof(point_weight), by_point_weight);
+    qsort(pairs + count, count, sizeof(point_weight), by_point_weight);
+    bool exact = true;
+    for (size_t i = 0; exact && i < count; i++) exact = pairs[i].point == pairs[count + i].point && pairs[i].weight == pairs[count + i].weight;
+    free(pairs);
+    return exact;
+}
+
 static bool same_skin_weights(const ufbx_mesh *a, const ufbx_mesh *b)
 {
     if (a->skin_deformers.count != b->skin_deformers.count) return false;
@@ -64,10 +94,7 @@ static bool same_skin_weights(const ufbx_mesh *a, const ufbx_mesh *b)
         for (size_t j = 0; j < left.count; j++) {
             const ufbx_skin_cluster *source = left.data[j], *target = right.data[j];
             if (!source->bone_node || !target->bone_node || strcmp(source->bone_node->name.data, target->bone_node->name.data) != 0 ||
-                source->num_weights != target->num_weights) return false;
-            for (size_t k = 0; k < source->num_weights; k++) {
-                if (source->vertices.data[k] != target->vertices.data[k] || source->weights.data[k] != target->weights.data[k]) return false;
-            }
+                !same_cluster_weights(source, target)) return false;
         }
     }
     return true;
@@ -1132,7 +1159,7 @@ int main(int argc, char **argv)
     bool edit_matches = !edited;
     printf(",\"samePolygonConnectivity\":%s,\"sameSourceSkinWeights\":%s", topology ? "true" : "false", weights ? "true" : "false");
     if (topology) {
-        double position = 0.0, uv = 0.0, normal = 0.0, position_error = 0.0;
+        double position = 0.0, uv = 0.0, normal = 0.0, position_error = 0.0, outside_delta = 0.0;
         size_t changed = 0, corner_uses = 0;
         ufbx_vec3 observed = { .x = 0, .y = 0, .z = 0 };
         bool same_uv_sets = a->uv_sets.count == b->uv_sets.count;
@@ -1145,7 +1172,7 @@ int main(int argc, char **argv)
             if (edited && i == control_point) {
                 observed = delta;
                 delta.y -= offset_y;
-            }
+            } else outside_delta = fmax(outside_delta, length3(delta));
             position_error = fmax(position_error, length3(delta));
         }
         for (size_t set = 0; same_uv_sets && set < a->uv_sets.count; set++) {
@@ -1164,17 +1191,18 @@ int main(int argc, char **argv)
                                                    ufbx_get_vertex_vec3(&b->vertex_normal, i)));
             }
         }
-        printf(",\"maxPositionDeltaByControlPoint\":%.9g", position);
+        printf(",\"maxPositionDeltaByControlPoint\":%.9g,\"changedControlPoints\":%zu", position, changed);
         if (same_uv_sets && a->uv_sets.count) printf(",\"maxUvDeltaInCornerOrder\":%.9g", uv);
         if (has_normal) printf(",\"maxNormalAngleInCornerOrder\":%.9g", normal);
         if (edited) {
             edit_matches = corner_uses > 1 && changed == 1 && position_error <= 1e-9 && same_uv_sets && a->uv_sets.count && uv <= 1e-9;
             printf(",\"positionEdit\":{\"controlPoint\":%llu,\"offsetY\":%.9g,\"observedOffset\":[%.9g,%.9g,%.9g],"
-                   "\"affectedCorners\":%zu,\"changedControlPoints\":%zu,\"maxPositionError\":%.9g,\"matches\":%s}",
-                   control_point, offset_y, observed.x, observed.y, observed.z, corner_uses, changed, position_error,
+                   "\"affectedCorners\":%zu,\"changedControlPoints\":%zu,\"maxPositionError\":%.9g,\"maxDeltaOutsideControlPoint\":%.9g,\"matches\":%s}",
+                   control_point, offset_y, observed.x, observed.y, observed.z, corner_uses, changed, position_error, outside_delta,
                    edit_matches ? "true" : "false");
         }
     }
+    if (edited && edit_matches) original->meshes.data[0]->vertices.data[control_point].y += offset_y;
     const bool animation = topology && compare_clips(original, exported, a, b);
     const bool stitched_uv = !stitch || (topology && compare_stitched_uv(a, b));
     puts("}");

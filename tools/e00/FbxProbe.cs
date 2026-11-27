@@ -60,6 +60,7 @@ public static class FbxProbe
     [Serializable] sealed class PositionEdit
     {
         public float offsetY;
+        public int minimumUvCopies;
     }
 
     [Serializable] sealed class AssetInfo
@@ -317,7 +318,8 @@ public static class FbxProbe
             var canonical = MatchPoints(after.basePoints, after.basePoints, baseTolerance, afterUv, afterUv);
             result.sameTriangleConnectivity = TriangleKeys(before.mesh, i => canonical[matches[i]])
                 .SequenceEqual(TriangleKeys(after.mesh, i => canonical[i]));
-            result.compatible &= result.editedUvCopies > 1 && result.sameTriangleConnectivity;
+            int minimumUvCopies = edit.minimumUvCopies > 0 ? edit.minimumUvCopies : 2;
+            result.compatible &= result.editedUvCopies >= minimumUvCopies && result.sameTriangleConnectivity;
         }
         if (stitch && result.baseError >= 0 && reverse.All(index => index >= 0)) {
             result.maxUvError = Enumerable.Range(0, matches.Length).Max(i => Vector2.Distance(beforeUv[i], afterUv[matches[i]]));

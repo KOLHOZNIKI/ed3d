@@ -2,12 +2,14 @@ import type { Vec3 } from './data';
 import type { Fill } from '../repair/fill';
 import { validWeightEdits, type WeightEditRow } from '../weights/data';
 import { falloffs, type SoftSelection } from './soft-selection';
+import { validSmoothSelection, type SmoothSelectionSettings } from './smooth-selection';
 
 export type TransformMode = 'move' | 'rotate' | 'scale';
 type TransformInput = { vertices: number[]; value: Vec3; pivot?: Vec3 };
 
 export type MeshEdit = { object: string } & (
   (TransformInput & ({ type: TransformMode } | { type: 'softTransform'; mode: TransformMode; soft: SoftSelection })) |
+  ({ type: 'smoothSelection'; settings: SmoothSelectionSettings } & ({ faces: number[]; vertices?: never } | { vertices: number[]; faces?: never })) |
   { type: 'delete' | 'recalculate' | 'flipNormals'; faces: number[] } |
   { type: 'separate'; faces: number[]; piece: string } |
   { type: 'extract'; faces: number[]; piece: string; cut: boolean; pivot: Vec3; rotation: Vec3; scale: number } |
@@ -21,7 +23,7 @@ export type MeshEdit = { object: string } & (
   { type: 'uv'; channel: number; coordinates: number[]; seams: string[]; suppliesTexture?: true }
 );
 
-const names = new Set(['move', 'rotate', 'scale', 'softTransform', 'delete', 'recalculate', 'flipNormals', 'separate',
+const names = new Set(['move', 'rotate', 'scale', 'softTransform', 'smoothSelection', 'delete', 'recalculate', 'flipNormals', 'separate',
   'create', 'weld', 'splitEdge', 'splitFace', 'dissolve', 'flipEdge', 'repair', 'uv', 'extract', 'weights']);
 const encoder = new TextEncoder(), decoder = new TextDecoder('utf-8', { fatal: true });
 const types = new WeakMap<Uint8Array, MeshEdit['type']>();
@@ -58,6 +60,9 @@ export function decodeEdit(data: Uint8Array) {
         soft.falloff !== undefined && falloffs.includes(soft.falloff);
       break;
     }
+    case 'smoothSelection':
+      valid = (o.vertices === undefined ? indices(o.faces, 1) : o.faces === undefined && indices(o.vertices, 1)) &&
+        validSmoothSelection(o.settings as Partial<SmoothSelectionSettings> | undefined); break;
     case 'delete': case 'recalculate': case 'flipNormals':
       valid = indices(o.faces, 1); break;
     case 'separate':

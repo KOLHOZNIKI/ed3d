@@ -52,6 +52,8 @@ Open **Mesh Edit** and choose an object. Click a vertex, edge or face in the vie
 
 Enable **Soft Selection** for Move, Rotate or Scale. Enter a radius in object-local units and choose **Smooth**, **Linear**, or **Sharp** falloff. Orange points in the preview show neighboring vertices in range. Influence follows shared mesh edges and stops at disconnected parts. [V1+ scope and verification](Docs/V1_Plus.md)
 
+In **Mesh Edit**, choose **Smooth Selection** and set the strength and iteration count. **Fix boundary** is enabled by default and keeps the perimeter of the selected region in place. The preview reports how many vertices move and how many stay pinned. [Smooth Selection workflow and checks](Docs/V1_Plus.md#smooth-selection)
+
 Open **Repair** to inspect boundaries on the selected object. Mark intentional openings **Keep Open**. Choose **Planar Fill**, **Fan Fill**, or **Manual Face** for selected boundaries. **Auto Fill** previews a batch with edge, diameter, and planarity limits. Check the wireframe and the reason for each skipped contour before applying. The resulting faces can be selected for mesh editing or 3D Paint.
 
 Use **Smooth Fill** for a non-planar patch with a fixed rim. Set refinement passes and fairing iterations. **Grid Fill** creates quads between four automatically detected or entered corner vertex IDs. Opposite sides need the same segment counts. **Bridge** joins two boundaries or equal-length spans. The default pairing minimizes distance. Use offsets, twist, and segments to adjust the preview. **Edit new UVs** opens the UV Editor with the added faces selected.

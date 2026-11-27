@@ -33,8 +33,9 @@ Choose **PNG** under **FBX maps** to write external PNG images in whole-scene, s
 | 13 | Object transform overrides and editable scalar texture bindings. |
 | 14 | Pinned source snapshots, their working manifests, and shared resource references. |
 | 15 | Soft Selection transform commands and radius and falloff preferences. |
+| 16 | Smooth Selection commands and smoothing preferences. |
 
-The reader accepts schemas 1 through 15. Saves use the earliest schema that represents the document, including pinned revisions and operation settings. Each pin references a captured revision and an independent working manifest. Identical resource bytes are stored once even when used by several pins and the current document. The project supports up to eight pins. The optional operation settings record restores paint, Soft Selection, UV/bake, repair, extraction and FBX output preferences. Reopen uses the archived originals and working state and starts a new Undo history. An unknown newer schema is refused before replacing the open project.
+The reader accepts schemas 1 through 16. Saves use the earliest schema that represents the document, including pinned revisions and operation settings. Each pin references a captured revision and an independent working manifest. Identical resource bytes are stored once even when used by several pins and the current document. The project supports up to eight pins. The optional operation settings record restores paint, mesh, UV/bake, repair, extraction and FBX output preferences. Reopen uses the archived originals and working state and starts a new Undo history. An unknown newer schema is refused before replacing the open project.
 
 ## Resource and engine limits
 
