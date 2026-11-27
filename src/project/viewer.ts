@@ -164,6 +164,19 @@ export class Viewer {
   frame(object = this.#model, orthographic = this.#camera instanceof OrthographicCamera, direction = new Vector3(0.6, 0.45, 1)) {
     if (!object || !this.#renderer) return;
     const box = this.withPose(() => new Box3().setFromObject(object, !!(this.#pose || this.#manualPose)));
+    this.#frameBox(box, orthographic, direction);
+  }
+
+  focus(points: readonly Vector3[]) {
+    if (!points.length || !this.#renderer) return;
+    const box = new Box3().setFromPoints([...points]);
+    const size = this.#model ? this.withPose(() => new Box3().setFromObject(this.#model!).getSize(new Vector3()).length()) : 1;
+    box.expandByScalar(Math.max(.001, size * .015));
+    const direction = this.#camera?.getWorldDirection(new Vector3()).negate() ?? new Vector3(.6, .45, 1);
+    this.#frameBox(box, this.#camera instanceof OrthographicCamera, direction);
+  }
+
+  #frameBox(box: Box3, orthographic: boolean, direction: Vector3) {
     if (box.isEmpty()) return;
     const center = box.getCenter(new Vector3()), radius = Math.max(box.getSize(new Vector3()).length() / 2, 0.001);
     const aspect = this.#canvas.width / this.#canvas.height;
@@ -306,27 +319,4 @@ export async function prepareAppearance(model: Model, catalog: TextureCatalog, s
     disposeAppearance(appearance);
     throw error;
   }
-}
-
-export function disposeModel(model: Model) {
-  model.scene.removeFromParent();
-  const textures = new Set<Texture>(), materials = new Set<Material>(), geometries = new Set<BufferGeometry>();
-  const bitmaps = new Set<ImageBitmap>(), skeletons = new Set<SkinnedMesh['skeleton']>();
-  model.scene.traverse(object => {
-    if (!(object instanceof Mesh)) return;
-    geometries.add(object.geometry);
-    if (object instanceof SkinnedMesh) skeletons.add(object.skeleton);
-    for (const material of Array.isArray(object.material) ? object.material : [object.material]) {
-      materials.add(material);
-      for (const property of Object.values(material)) if (property instanceof Texture) textures.add(property);
-    }
-  });
-  for (const geometry of geometries) geometry.dispose();
-  for (const skeleton of skeletons) skeleton.dispose();
-  for (const material of materials) material.dispose();
-  for (const texture of textures) {
-    if (texture.image instanceof ImageBitmap) bitmaps.add(texture.image);
-    texture.dispose();
-  }
-  for (const bitmap of bitmaps) bitmap.close();
 }

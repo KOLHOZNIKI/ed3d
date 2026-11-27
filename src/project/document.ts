@@ -10,6 +10,8 @@ export interface OriginalFile {
   readonly data: Blob;
 }
 
+export type TextureAssignments = Readonly<Record<string, string>>;
+
 export interface SceneEntry {
   readonly id: string;
   readonly parent: string | null;
@@ -35,6 +37,7 @@ export class AssetDocument<T extends object> {
   readonly id: string;
   readonly name: string;
   readonly originals: readonly OriginalFile[];
+  readonly textureAssignments?: TextureAssignments;
   readonly scene: readonly SceneEntry[];
   readonly topology: ReadonlyMap<string, Topology>;
   #historyBudget: number;
@@ -47,10 +50,12 @@ export class AssetDocument<T extends object> {
   #retained: (state: T) => Iterable<ArrayBuffer>;
 
   constructor(data: { id: string; name: string; revision: number; originals: readonly OriginalFile[]; scene: readonly SceneEntry[];
-    topology: ReadonlyMap<string, Topology>; historyBudget: number; state: T }, retained: (state: T) => Iterable<ArrayBuffer>) {
+    topology: ReadonlyMap<string, Topology>; historyBudget: number; state: T; textureAssignments?: TextureAssignments },
+    retained: (state: T) => Iterable<ArrayBuffer>) {
     this.id = data.id;
     this.name = data.name;
     this.originals = data.originals;
+    this.textureAssignments = data.textureAssignments;
     this.scene = data.scene;
     this.topology = data.topology;
     this.#historyBudget = this.#savedBudget = data.historyBudget;

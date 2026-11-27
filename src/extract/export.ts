@@ -8,6 +8,7 @@ import type { Model, ModelAdapter } from '../project/adapter';
 import type { WorkingState } from '../project/state';
 import { applyViews, disposeAppearance, sourceAppearance } from '../texture/appearance';
 import type { TextureCatalog } from '../texture/bindings';
+import { extractedReport, reportText, type ExportReport } from '../diagnostics/report';
 
 const encode = new TextEncoder();
 
@@ -36,7 +37,7 @@ function trimmedMesh(source: Mesh, format: Model['format']) {
   return mesh;
 }
 
-export async function exportExtract(model: Model, adapter: ModelAdapter, catalog: TextureCatalog, state: WorkingState, object: string) {
+export async function exportExtract(model: Model, adapter: ModelAdapter, catalog: TextureCatalog, state: WorkingState, object: string, report?: ExportReport) {
   const asset = state.extracts?.[object], source = adapter.objects.get(object);
   if (!asset || !(source instanceof Mesh)) throw new Error('Select an independent asset to export.');
   adapter.mesh.validateExtract(object);
@@ -72,6 +73,7 @@ export async function exportExtract(model: Model, adapter: ModelAdapter, catalog
     scene.add(branch);
     if (model.format === 'glb') {
       const result = await exportGlb({ ...model, name, scene, skins: new Map(), images: new Map([...model.images, ...bound.glb]) });
+      report?.files.push(`${name}.glb`);
       return { name: `${name}.glb`, bytes: new Uint8Array(result.bytes), pivot: pivot.toArray(), rebased: asset.zeroOrigin };
     }
     const images = new Map<string, Uint8Array<ArrayBuffer>>();
@@ -84,7 +86,7 @@ export async function exportExtract(model: Model, adapter: ModelAdapter, catalog
     }
     const result = await exportAsset({ ...model, scene, name, images, stats: sceneStats(scene, 'FBX'), deformation: sourceDeformation(scene),
       uvAtlas: undefined, textureBake: undefined, texturePaint: undefined }, bound.fbx,
-    { layout: asset.layout, originAtZero: asset.zeroOrigin, pivot: pivot.toArray(), auxiliary });
+    { layout: asset.layout, originAtZero: asset.zeroOrigin, pivot: pivot.toArray(), auxiliary }, undefined, report);
     return { ...result, pivot: pivot.toArray(), rebased: asset.zeroOrigin };
   } finally {
     if (extracted && extracted.geometry !== source.geometry) extracted.geometry.dispose();
@@ -94,12 +96,12 @@ export async function exportExtract(model: Model, adapter: ModelAdapter, catalog
 }
 
 export async function exportBatch(model: Model, adapter: ModelAdapter, catalog: TextureCatalog, state: WorkingState,
-  objects: readonly string[], signal?: AbortSignal) {
+  objects: readonly string[], signal?: AbortSignal, report?: ExportReport) {
   if (!objects.length) throw new Error('Choose at least one independent asset for batch export.');
   const files: Files = new Map(), assets = [];
   for (const [i, object] of objects.entries()) {
     signal?.throwIfAborted();
-    const result = await exportExtract(model, adapter, catalog, state, object);
+    const result = await exportExtract(model, adapter, catalog, state, object, report && extractedReport(report, [object], 'asset'));
     const path = `${String(i + 1).padStart(2, '0')}/${result.name}`;
     files.set(path, result.bytes);
     assets.push({ object, name: state.objects[object]?.name, ...state.extracts?.[object] && {
@@ -108,5 +110,10 @@ export async function exportBatch(model: Model, adapter: ModelAdapter, catalog: 
   }
   signal?.throwIfAborted();
   files.set('manifest.json', encode.encode(JSON.stringify({ stage: 'E07', format: model.format, assets }, null, 2)));
+  if (report) {
+    report.files.push(...files.keys(), 'report.json', 'report.txt');
+    files.set('report.json', encode.encode(JSON.stringify(report, null, 2) + '\n'));
+    files.set('report.txt', encode.encode(reportText(report)));
+  }
   return { name: 'AssetFixer-extracted.zip', bytes: await pack(files) };
 }

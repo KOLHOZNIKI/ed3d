@@ -24,7 +24,7 @@ export async function readPackage(bytes: Uint8Array, limits: { input: number; en
     const normalized = name.replaceAll('\\', '/');
     const path = normalized.replace(/\/$/, '');
     const key = path.toLowerCase();
-    if (path.split('/').some(isInvalidSegment)) throw new Error(`Invalid ZIP path: ${name}`);
+    if (!validLocalPath(path)) throw new Error(`Invalid ZIP path: ${name}`);
     if (paths.has(key)) throw new Error(`Duplicate ZIP path: ${name}`);
     paths.add(key);
     total += originalSize;
@@ -45,9 +45,9 @@ export async function readPackage(bytes: Uint8Array, limits: { input: number; en
   }));
 }
 
-function isInvalidSegment(part: string): boolean {
-  return !part || /[ .]$/.test(part) || /[<>:"|?*\x00-\x1f\x7f]/.test(part)
-    || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part);
+export function validLocalPath(path: string): boolean {
+  return path.split('/').every(part => !!part && !/[ .]$/.test(part) && !/[\\<>:"|?*\x00-\x1f\x7f]/.test(part)
+    && !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part));
 }
 
 function readZip(bytes: Uint8Array, filter: import('fflate').UnzipFileFilter): Promise<import('fflate').Unzipped> {

@@ -105,7 +105,10 @@ try {
   assert.equal(packed.manifest.meshes.triangles, 6);
   assert.equal(packed.manifest.textures.length, 1);
   assert.deepEqual(packed.manifest.unassignedTextures, []);
-  assert.equal(Object.keys(packed.files).length, 3);
+  assert.equal(Object.keys(packed.files).length, 5);
+  const singleReport = JSON.parse(strFromU8(packed.files['report.json']));
+  assert.equal(singleReport.target.scope, 'asset');
+  assert.equal(singleReport.scene.triangles, 6);
   const base = png(packed);
   assert.equal(decode(base).width, 256);
   await run('undo-stroke', /Undid/);
@@ -148,6 +151,9 @@ try {
   const batch = readZip(await download('extract-export-batch', 'independent-assets.zip'));
   assert.equal(batch.manifest.assets.length, 2);
   assert.deepEqual(batch.manifest.assets.map(item => item.path), ['01/Assembly.zip', '02/Rebased.zip']);
+  const batchReport = JSON.parse(strFromU8(batch.files['report.json']));
+  assert.equal(batchReport.target.scope, 'batch');
+  assert.equal(batchReport.scene.objects.length, 2);
   assert.deepEqual(png(readZip(batch.files['01/Assembly.zip'])), painted);
 
   await download('save-project', 'extraction.assetfixer');

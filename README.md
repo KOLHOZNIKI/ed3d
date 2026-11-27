@@ -22,9 +22,11 @@ npm ci
 npm run dev
 ```
 
-Open the localhost URL printed by Vite. Choose a self-contained GLB and use **Export GLB** to download a new binary. For FBX, choose a Tripo ZIP or select a binary FBX and its PNG or JPEG textures together. **Export FBX ZIP** downloads the reconstructed FBX, external maps, and `manifest.json`. Extract the package into Unity's `Assets` folder to import it. The manifest identifies textures that require manual assignment.
+Open the localhost URL printed by Vite. Choose a self-contained GLB and use **Export GLB** to download a new binary. For FBX, open a ZIP, select the binary FBX and its PNG/JPEG maps together, or use **Open folder** to preserve the folder structure. When a map is missing or ambiguous, choose an input map or a local replacement and click **Open with assignments**. **Export FBX ZIP** downloads the reconstructed FBX, external maps, manifest and export reports. Extract the package into Unity's `Assets` folder. The manifest identifies textures that require manual assignment. **Export Original** downloads the original bytes, packaged together when the input consisted of multiple files.
 
 Use **Save Project** to download a self-contained `.assetfixer` file. **Save As** creates a copy with a new project ID. Open the saved file from the same file picker after restarting the app. The project restores its original source bytes and current working state. Undo and Redo begin with the reopened state. After an edit the browser keeps local checkpoints and offers **Restore autosave** at startup. Save a project file to keep a backup outside browser storage.
+
+In a Release or Debug build served on HTTPS or localhost, open **Offline launch** and click **Save application for offline launch**. Return to the same browser profile and URL to launch from the cache without a connection. Use **Asset diagnostics and export report** to review material bindings, run the geometry, UV and weight scan, focus a finding and save a text or JSON report. GLB export keeps its report available through this panel.
 
 Drag the viewport to orbit, use the right mouse button to pan, and scroll to zoom. Click a mesh or choose one in **Objects**, then use **Frame selection** or `F`. The viewport also offers orthographic projection and axis views. Project labels and viewport visibility are saved as project state. Format export uses the source object names and complete scene.
 
@@ -80,14 +82,18 @@ Choose one of the ten diagnostic clips and use play, scrub, frame step, or repea
 | `@types/three` | MIT | Type definitions matching the Three.js release. |
 | `typescript` | Apache-2.0 | Strict type checking. |
 | `vite` | MIT | Local development server and static bundling. |
-| `@comfyorg/fbx-exporter-three` | MIT | Candidate binary FBX writer for E00. |
+| `@comfyorg/fbx-exporter-three` | MIT | Patched binary FBX writer for Unity-compatible exports. |
 | `fflate` | MIT | Local ZIP reading and writing. |
 | `fast-png` | MIT | Preserve straight RGBA pixels during the alpha bake. |
 | `xatlas-wasm` | MIT | Generate and pack UV charts in a browser worker. |
 | `patch-package` | MIT | Apply the pinned loader and writer patches during installation. |
 
+The static distribution includes notices for xatlas and its WASM wrapper, iobuffer, the Meshopt decoder and MikkTSpace alongside the directly bundled packages. [xatlas license](https://github.com/jpcy/xatlas/blob/master/LICENSE) · [WASM wrapper license](https://github.com/mode777/xatlas-wasm/blob/main/LICENSE)
+
 ## Verification
 
+- [E12 full acceptance](Docs/E12_Report.md) records the V1 workflows, Unity Generic and Humanoid checks, independent reads and performance measurements.
+- [Format and project support](Docs/Formats_and_Projects.md) describes the supported import and export profiles and the `.assetfixer` schema and migrations.
 - [E11 humanoid diagnostics verification](Docs/E11_Report.md) covers mapping, calibration, all ten clips, frozen weight painting, and FBX and GLB export.
 - [E10 weight editing verification](Docs/E10_Report.md) covers locks, fifth-influence conflicts, frozen-frame smoothing, UV seams, weight transfer, and FBX and GLB exports.
 - [E09 rig and manual pose verification](Docs/E09_Report.md) covers shared binding, pose persistence, clip compatibility, and FBX and GLB exports.

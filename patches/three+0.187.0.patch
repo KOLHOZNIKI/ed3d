@@ -30,6 +30,14 @@ index fc155a4..2d9acb1 100644
  
  	}
  
+@@ -312,6 +321,6 @@ class FBXTreeParser {
+ 			if ( blobs[ filename ] !== undefined ) images[ id ] = blobs[ filename ];
+-			else images[ id ] = images[ id ].split( '\\' ).pop();
++			// Preserve external reference paths for the host's local-file resolver.
+ 
+ 		}
+ 
+ 		return images;
 @@ -1119,27 +1128,19 @@ class FBXTreeParser {
  
  					if ( rawBone.ID === parent.ID ) {

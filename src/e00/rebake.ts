@@ -8,6 +8,7 @@ import { bakeScale, chartPadding } from './atlas-raster';
 import { renderControlPoints, sourceMesh } from './fbx-topology';
 import { faceComponents } from './topology-components';
 import type { UvAtlasEdit } from './uv-atlas';
+import { rgbaBytes, type TextureImage } from '../texture/image';
 
 export interface TextureBake {
   maps: { slot: string; source: string; png: Uint8Array<ArrayBuffer> }[];
@@ -68,7 +69,7 @@ export async function rebakeAsset(asset: ImportedAsset, signal?: AbortSignal, ba
 }
 
 export async function originalFbxMaps(asset: ImportedAsset, material: MeshPhongMaterial | MeshLambertMaterial,
-  baseColor?: Uint8Array<ArrayBuffer>, auxiliary = true) {
+  baseColor?: Uint8Array<ArrayBuffer> | TextureImage, auxiliary = true) {
   if (!material.map) throw new Error('The FBX material has no linked Base Color.');
   const normal = material instanceof MeshPhongMaterial ? material.normalMap : null;
   for (const [slot, value] of Object.entries(material)) {
@@ -155,7 +156,8 @@ function bakeTarget(atlas: UvAtlasEdit) {
     padding: chartPadding * bakeScale, targetUv };
 }
 
-async function readLinkedMap(asset: ImportedAsset, slot: string, texture: Texture, edited?: Uint8Array<ArrayBuffer>): Promise<BakeMap> {
+async function readLinkedMap(asset: ImportedAsset, slot: string, texture: Texture,
+  edited?: Uint8Array<ArrayBuffer> | TextureImage): Promise<BakeMap> {
   const image = texture.image;
   const source = image instanceof HTMLImageElement && asset.imagePathsByUrl.get(image.src);
   if (!source || texture.channel !== 0 || !texture.flipY) {
@@ -168,9 +170,11 @@ async function readLinkedMap(asset: ImportedAsset, slot: string, texture: Textur
   if (slot === 'normalMap' && uvTransform.some((value, i) => value !== Number(i === 0 || i === 4))) {
     throw new Error('The E00 bake does not yet support a normal map with its own UV transform.');
   }
-  const bytes = edited ?? asset.images.get(source)!;
   const preserveAlpha = slot === 'map' && (!!asset.alphaProfile || !!edited);
-  const imageData = preserveAlpha ? readRgbaPng(bytes) : await readPixels(bytes);
+  const bytes = edited instanceof Uint8Array ? edited : asset.images.get(source)!;
+  const imageData = edited && !(edited instanceof Uint8Array)
+    ? { width: edited.width, height: edited.height, pixels: rgbaBytes(edited) }
+    : preserveAlpha ? readRgbaPng(bytes) : await readPixels(bytes);
   return { slot, source, mode: slot === 'normalMap' ? 'normal' : 'srgb', uvTransform, preserveAlpha,
     wrapS: samplerWrap(texture.wrapS), wrapT: samplerWrap(texture.wrapT), ...imageData };
 }

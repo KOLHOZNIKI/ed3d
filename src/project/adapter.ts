@@ -3,7 +3,7 @@ import { sourceMesh } from '../e00/fbx-topology';
 import { importGlb, type ImportedGlb } from '../e00/glb-round-trip';
 import { importAsset, sourceDeformation, type ImportedAsset } from '../e00/round-trip';
 import type { UvAtlasEdit } from '../e00/uv-atlas';
-import type { OriginalFile, SceneEntry } from './document';
+import type { OriginalFile, SceneEntry, TextureAssignments } from './document';
 import type { AtlasState, WorkingState } from './state';
 import { buildTopology, type CornerAttribute, type Topology } from './topology';
 import { MeshSession } from '../mesh/session';
@@ -13,14 +13,11 @@ import type { RigState } from '../rig/state';
 
 export type Model = ImportedAsset | ImportedGlb;
 
-async function importModel(input: readonly File[]): Promise<Model> {
+export function importOriginals(files: readonly OriginalFile[], assignments?: TextureAssignments): Promise<Model> {
+  const input = files.map(file => new File([file.data], file.name));
   const glb = input.find(file => /\.glb$/i.test(file.name));
   if (glb && input.length !== 1) throw new Error('Select one GLB file at a time.');
-  return glb ? importGlb(glb) : importAsset(input);
-}
-
-export function importOriginals(files: readonly OriginalFile[]) {
-  return importModel(files.map(file => new File([file.data], file.name)));
+  return glb ? importGlb(glb) : importAsset(input, assignments);
 }
 
 export class ModelAdapter {

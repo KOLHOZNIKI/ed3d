@@ -56,8 +56,36 @@ export function validatePatch(mesh: MeshData, patch: readonly Face[], boundary: 
 
 function facet(mesh: MeshData, ids: number[]): Facet {
   const points = ids.map(id => vector(mesh, id));
+  return makeFacet(ids, points);
+}
+
+function makeFacet(ids: number[], points: Vector3[]): Facet {
   const area = new Triangle(points[0], points[1], points[2]);
   return { ids, points, area, normal: area.getNormal(new Vector3()), bounds: new Box3().setFromPoints(points) };
+}
+
+export function scanIntersections(positions: Float64Array, triangles: Uint32Array, budget = 800_000) {
+  const facets: { index: number; facet: Facet }[] = [];
+  const bounds = new Box3();
+  for (let i = 0; i < triangles.length; i += 3) {
+    const ids = Array.from(triangles.subarray(i, i + 3)), points = ids.map(id => new Vector3().fromArray(positions, id * 3));
+    const facet = makeFacet(ids, points);
+    if (!facet.normal.lengthSq()) continue;
+    bounds.union(facet.bounds);
+    facets.push({ index: i / 3, facet });
+  }
+  const epsilon = Math.max(1e-12, bounds.getSize(new Vector3()).length() * tolerance);
+  const size = bounds.getSize(new Vector3());
+  const axis = size.x >= size.y && size.x >= size.z ? 'x' : size.y >= size.z ? 'y' : 'z';
+  facets.sort((a, b) => a.facet.bounds.min[axis] - b.facet.bounds.min[axis]);
+  let tested = 0;
+  for (const [i, a] of facets.entries()) for (let j = i + 1; j < facets.length; j++) {
+    const b = facets[j];
+    if (b.facet.bounds.min[axis] > a.facet.bounds.max[axis] + epsilon) break;
+    if (++tested > budget) return { reachedLimit: true };
+    if (intersects(a.facet, b.facet, epsilon)) return { triangle: a.index, reachedLimit: false };
+  }
+  return { reachedLimit: false };
 }
 
 function intersects(a: Facet, b: Facet, epsilon: number) {

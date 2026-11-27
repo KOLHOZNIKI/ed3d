@@ -581,7 +581,8 @@ export class UvTool {
       const stats = [...this.#groups!.islands.values()].filter(list => !this.#selection.size || list.some(i => this.#selection.has(i)))
         .map(list => density(surface, layout.uv, list, size)).sort((a, b) => a - b);
       ui('diagnostics').textContent = `${this.#groups!.islands.size} islands · ${finding.outside} outside · ${finding.overlaps} overlapping · ${finding.flipped} flipped · ${finding.degenerate} degenerate` +
-        (stats.length ? ` · Density ${Math.round(stats[0])}–${Math.round(stats.at(-1)!)} px/unit` : '');
+        (stats.length ? ` · Density ${Math.round(stats[0])}–${Math.round(stats.at(-1)!)} px/unit` : '') +
+        (this.#wireStride(layout) > 1 ? ' · Zoom in to see more UV edges.' : '');
       const state = this.#context!.state;
       const bake = this.#target?.transfer?.bake ?? state.bake;
       const info = dirty ? 'UV draft.' : 'Drag a selection or its transform handle. Middle-drag to pan.';
@@ -625,13 +626,20 @@ export class UvTool {
     ctx.restore();
     ctx.strokeStyle = '#a2b4cc';
     ctx.strokeRect(x, y, s, s);
+    const stride = this.#wireStride(layout);
     for (const highlighted of [false, true]) {
+      if (highlighted && !this.#selection.size) continue;
       ctx.beginPath();
       for (let i = 0; i < layout.uv.length / 2; i += 3) {
-        if (!this.#visible(i) || [i, i + 1, i + 2].some(j => this.#selection.has(j)) !== highlighted) continue;
-        ctx.moveTo(...this.#project(read(layout.uv, i)));
-        ctx.lineTo(...this.#project(read(layout.uv, i + 1)));
-        ctx.lineTo(...this.#project(read(layout.uv, i + 2)));
+        const picked = this.#selection.has(i) || this.#selection.has(i + 1) || this.#selection.has(i + 2);
+        const sampled = (i / 3) % stride === 0;
+        if (picked !== highlighted || !this.#visible(i) || !sampled && (!picked || this.#selection.size > 60000)) continue;
+        const a = this.#project(read(layout.uv, i)), b = this.#project(read(layout.uv, i + 1)), c = this.#project(read(layout.uv, i + 2));
+        if (Math.max(a[0], b[0], c[0]) < 0 || Math.min(a[0], b[0], c[0]) > width ||
+            Math.max(a[1], b[1], c[1]) < 0 || Math.min(a[1], b[1], c[1]) > height) continue;
+        ctx.moveTo(...a);
+        ctx.lineTo(...b);
+        ctx.lineTo(...c);
         ctx.closePath();
       }
       ctx.strokeStyle = highlighted ? '#ffbe62' : '#51d8ecd5';
@@ -650,9 +658,11 @@ export class UvTool {
       ctx.lineWidth = 2;
       ctx.stroke();
     }
-    for (const i of this.#selection) {
-      const [x, y] = this.#project(read(layout.uv, i));
-      ctx.fillRect(x - 2, y - 2, 4, 4);
+    if (this.#selection.size <= 60000) {
+      for (const i of this.#selection) {
+        const [x, y] = this.#project(read(layout.uv, i));
+        if (x >= -2 && x <= width + 2 && y >= -2 && y <= height + 2) ctx.fillRect(x - 2, y - 2, 4, 4);
+      }
     }
     const control = this.#handle(this.#gesture?.base ?? layout);
     if (control) {
@@ -663,6 +673,11 @@ export class UvTool {
       ctx.stroke();
       ctx.fillRect(control.handle[0] - 5, control.handle[1] - 5, 10, 10);
     }
+  }
+
+  #wireStride(layout: Layout) {
+    const visibleFraction = Math.min(1, this.#canvas.width * this.#canvas.height / this.#zoom ** 2);
+    return Math.max(1, Math.ceil(layout.uv.length / 6 * visibleFraction / 18000));
   }
 
   #drawWire() {

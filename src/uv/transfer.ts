@@ -6,7 +6,7 @@ import type { ProjectionInput } from '../e00/projection-rays';
 import type { Model, ModelAdapter } from '../project/adapter';
 import type { WorkingState } from '../project/state';
 import type { TextureCatalog } from '../texture/bindings';
-import { decodeImage, decodePng, encodeImage, rgbaBytes, type TextureImage } from '../texture/image';
+import { decodeImage, decodePng, rgbaBytes, type TextureImage } from '../texture/image';
 import { diagnose, type Layout, type Surface } from './layout';
 import { flatten, uvName } from './surface';
 
@@ -77,7 +77,7 @@ export async function transfer(adapter: ModelAdapter, model: Model, catalog: Tex
       if ((material.transparent || material.alphaTest > 0) && !model.alphaProfile) {
         throw new Error('This transparent FBX needs an explicit alpha profile for transfer.');
       }
-      maps.push(...await originalFbxMaps(model, material, currentColor ? encodeImage(currentColor) : undefined, !scope || !Array.isArray(mesh.material)));
+      maps.push(...await originalFbxMaps(model, material, currentColor || undefined, !scope || !Array.isArray(mesh.material)));
     }
   } else {
     for (const [slot, texture] of glbMaps(material)) {

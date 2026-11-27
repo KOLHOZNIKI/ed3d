@@ -8,11 +8,11 @@ import {
 } from 'three';
 
 const [profile] = process.argv.slice(2);
-if (profile && profile !== '--heavy-paint' && profile !== '--heavy-bake') {
-  throw new Error('Usage: node tools/e00/memory-fixture.mjs [--heavy-paint | --heavy-bake]');
+if (profile && !['--heavy-paint', '--heavy-bake', '--single-2k', '--single-4k'].includes(profile)) {
+  throw new Error('Usage: node tools/e00/memory-fixture.mjs [--heavy-paint | --heavy-bake | --single-2k | --single-4k]');
 }
-const heavy = !!profile;
-const paint = profile === '--heavy-paint';
+const heavy = profile?.startsWith('--heavy-') ?? false;
+const paint = profile === '--heavy-paint' || (profile?.startsWith('--single-') ?? false);
 const columns = heavy ? 500 : 200;
 const rows = heavy ? 250 : 125;
 const boneCount = 100;
@@ -72,12 +72,13 @@ if (heavy) {
   });
 }
 
-const name = paint ? 'f18_paint' : heavy ? 'f18_four_maps' : 'typical_memory';
+const name = heavy ? paint ? 'f18_paint' : 'f18_four_maps'
+  : paint ? profile.slice(2).replace('-', '_') : 'typical_memory';
 const fbx = new FBXExporter().register(plan => {
   for (const entry of plan.textures.textures.values()) entry.fileName = `${name}.fbm/${entry.texture.name}.png`;
 }).parseSync(scene, { preset: 'unity', axisForward: '-Z', unitScale: 100, embedTextures: false, bakeSpaceTransform: false });
 const files = { [`${name}.fbx`]: new Uint8Array(fbx) };
-const size = heavy ? 4096 : 2048;
+const size = heavy || profile === '--single-4k' ? 4096 : 2048;
 function writeMap(textureName, channels, pixel) {
   const data = new Uint8Array(size * size * channels);
   let seed = 1337;

@@ -135,7 +135,7 @@ try {
   await ready();
   const project = 'shared.assetfixer';
   const archive = manifest(await download('save-project', project));
-  assert.equal(archive.schemaVersion, 11);
+  assert.equal(archive.schemaVersion, 12);
   assert.equal(archive.working.poses.saved[0].name, 'Twist');
   assert.ok(Math.abs(archive.working.poses.current[spineId][2] - Math.sin(35 * Math.PI / 360)) < 1e-8);
   await open(join(dir, project), /Project restored/);

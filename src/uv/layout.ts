@@ -135,22 +135,70 @@ export function inspectLayout(uv: Float32Array, topDown: boolean) {
     const points = [read(uv, i), read(uv, i + 1), read(uv, i + 2)];
     const area = cross(points[0], points[1], points[2]);
     if (points.some(p => p.some(v => v < 0 || v > 1))) result.outside++;
-    if (Math.abs(area) < 1e-12) { result.degenerate++; continue; }
+    if (!Number.isFinite(area) || Math.abs(area) < 1e-12) { result.degenerate++; continue; }
     if (topDown ? area > 0 : area < 0) result.flipped++;
     triangles.push({ box: bounds(uv, [i, i + 1, i + 2]), points: area < 0 ? points.reverse() : points, id: i / 3 });
   }
-  triangles.sort((a, b) => a.box.x0 - b.box.x0);
+  return { result, conflicts: findOverlaps(triangles) };
+}
+
+type UvTriangle = { box: Box; points: Pair[]; id: number };
+
+function findOverlaps(triangles: UvTriangle[]) {
   const overlaps = new Set<number>();
-  for (let i = 0; i < triangles.length; i++) {
-    const a = triangles[i];
-    for (let j = i + 1; j < triangles.length; j++) {
-      const b = triangles[j];
-      if (a.box.x1 <= b.box.x0) break;
-      if (a.box.y1 <= b.box.y0 || b.box.y1 <= a.box.y0 || overlaps.has(a.id) && overlaps.has(b.id)) continue;
-      if (overlap(a.points, b.points)) { overlaps.add(a.id); overlaps.add(b.id); }
+  if (triangles.length < 2) return overlaps;
+  const extent = triangles.reduce((box, entry) => mergeBox(box, entry.box), triangles[0].box);
+  const sx = 32767 / (extent.x1 - extent.x0 || 1), sy = 32767 / (extent.y1 - extent.y0 || 1);
+  // Interleave centroid coordinates to keep both axes local in the hierarchy.
+  const ordered = triangles.map(triangle => {
+    const { x0, y0, x1, y1 } = triangle.box;
+    const x = ((x0 + x1) * .5 - extent.x0) * sx, y = ((y0 + y1) * .5 - extent.y0) * sy;
+    return { triangle, key: mortonAxis(x) | (mortonAxis(y) << 1) };
+  }).sort((a, b) => a.key - b.key).map(entry => entry.triangle);
+  const tree: Box[] = [];
+  const build = (node: number, start: number, end: number): Box => {
+    if (end - start > 8) {
+      const middle = (start + end) >>> 1;
+      return tree[node] = mergeBox(build(node * 2, start, middle), build(node * 2 + 1, middle, end));
     }
+    let box = ordered[start].box;
+    for (let i = start + 1; i < end; i++) box = mergeBox(box, ordered[i].box);
+    return tree[node] = box;
+  };
+  build(1, 0, ordered.length);
+  const visit = (a: UvTriangle, node: number, start: number, end: number): number | undefined => {
+    if (!boxesIntersect(a.box, tree[node])) return;
+    if (end - start > 8) {
+      const middle = (start + end) >>> 1;
+      return visit(a, node * 2, start, middle) ?? visit(a, node * 2 + 1, middle, end);
+    }
+    for (let i = start; i < end; i++) {
+      const b = ordered[i];
+      if (a !== b && boxesIntersect(a.box, b.box) && overlap(a.points, b.points)) return b.id;
+    }
+  };
+  for (const triangle of ordered) {
+    if (overlaps.has(triangle.id)) continue;
+    const other = visit(triangle, 1, 0, ordered.length);
+    if (other !== undefined) { overlaps.add(triangle.id); overlaps.add(other); }
   }
-  return { result, conflicts: overlaps };
+  return overlaps;
+}
+
+function mortonAxis(coordinate: number) {
+  let value = coordinate & 0x7fff;
+  value = (value | (value << 8)) & 0x00ff00ff;
+  value = (value | (value << 4)) & 0x0f0f0f0f;
+  value = (value | (value << 2)) & 0x33333333;
+  return (value | (value << 1)) & 0x55555555;
+}
+
+function mergeBox(a: Box, b: Box): Box {
+  return { x0: Math.min(a.x0, b.x0), y0: Math.min(a.y0, b.y0), x1: Math.max(a.x1, b.x1), y1: Math.max(a.y1, b.y1) };
+}
+
+function boxesIntersect(a: Box, b: Box) {
+  return a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
 }
 
 function overlap(a: Pair[], b: Pair[]) {

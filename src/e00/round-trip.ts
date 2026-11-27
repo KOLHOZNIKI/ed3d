@@ -10,6 +10,9 @@ import type { RepairPatch } from './repair';
 import type { UvAtlasEdit } from './uv-atlas';
 import { inputLimit, pack, unpack, type Files } from './zip';
 import { readAlphaProfile, type AlphaProfile } from './alpha-profile';
+import { reportText, type ExportReport } from '../diagnostics/report';
+import { disposeModel } from '../project/resources';
+import type { TextureAssignments } from '../project/document';
 
 const imagePattern = /\.(png|jpe?g)$/i;
 const emptyImage = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
@@ -40,16 +43,29 @@ export interface ImportedAsset {
   texturePaint?: TexturePaint;
 }
 
-export async function importAsset(input: readonly File[]): Promise<ImportedAsset> {
+export class TextureAssignmentError extends Error {
+  constructor(readonly requests: readonly string[], readonly candidates: readonly string[]) {
+    super(`Missing or ambiguous textures: ${requests.join(', ')}`);
+  }
+}
+
+export async function importAsset(input: readonly File[], assignments?: TextureAssignments): Promise<ImportedAsset> {
   if (input.reduce((size, file) => size + file.size, 0) > inputLimit) {
     throw new Error('Input exceeds the 160 MiB limit.');
   }
   const archive = input.find(file => /\.zip$/i.test(file.name));
-  if (archive && input.length !== 1) throw new Error('Open one ZIP at a time.');
+  const loose = input.filter(file => file !== archive);
+  if (archive && loose.some(file => !assignments || !imagePattern.test(file.name))) throw new Error('Open one ZIP at a time.');
   const files = archive
     ? await unpack(new Uint8Array(await archive.arrayBuffer()))
-    : new Map(await Promise.all(input.map(async file => [file.name, new Uint8Array(await file.arrayBuffer())] as const)));
-  if (!archive && files.size !== input.length) throw new Error('Two selected files share the same name.');
+    : new Map<string, Uint8Array<ArrayBuffer>>();
+  const names = new Set([...files.keys()].map(path => path.toLowerCase()));
+  for (const file of loose) {
+    const key = file.name.toLowerCase();
+    if (names.has(key)) throw new Error(`Two source files share the same path: ${file.name}.`);
+    names.add(key);
+    files.set(file.name, new Uint8Array(await file.arrayBuffer()));
+  }
   const paths = [...files.keys()].filter(path => /\.fbx$/i.test(path));
   if (paths.length !== 1) throw new Error('Select exactly one FBX with its PNG/JPEG maps, or a ZIP containing them.');
   const [modelPath] = paths;
@@ -61,6 +77,7 @@ export async function importAsset(input: readonly File[]): Promise<ImportedAsset
   const urls = new Map<string, string>();
   const embedded = new Set<string>();
   const broken = new Set<string>();
+  const unresolved = new Set<string>();
   const manager = new LoadingManager();
   let hasImages = false;
   manager.onStart = () => { hasImages = true; };
@@ -73,9 +90,10 @@ export async function importAsset(input: readonly File[]): Promise<ImportedAsset
       return request;
     }
     if (/^data:image\/(png|jpeg|webp|bmp);base64,/i.test(request)) return request;
-    const path = resolveImage(request, modelPath, images);
-    if (!path) {
-      broken.add(request);
+    const path = assignments && Object.hasOwn(assignments, request)
+      ? assignments[request] : resolveImage(request, modelPath, images);
+    if (!path || !images.has(path)) {
+      unresolved.add(request);
       return emptyImage;
     }
     const existing = urls.get(path);
@@ -87,10 +105,12 @@ export async function importAsset(input: readonly File[]): Promise<ImportedAsset
     return url;
   });
 
+  let scene: Group | undefined;
   try {
-    const scene = new FBXLoader(manager).parse(bytes.byteLength === bytes.buffer.byteLength ? bytes.buffer : bytes.slice().buffer, '');
+    scene = new FBXLoader(manager).parse(bytes.byteLength === bytes.buffer.byteLength ? bytes.buffer : bytes.slice().buffer, '');
     if (hasImages) await loaded;
-    if (broken.size) throw new Error(`Missing, ambiguous or unreadable textures: ${[...broken].join(', ')}`);
+    if (broken.size) throw new Error(`Unreadable textures: ${[...broken].join(', ')}`);
+    if (unresolved.size) throw new TextureAssignmentError([...unresolved], [...images.keys()]);
 
     const unitScale = scene.userData.unitScaleFactor;
     if (typeof unitScale !== 'number' || !Number.isFinite(unitScale) || unitScale <= 0) {
@@ -100,6 +120,9 @@ export async function importAsset(input: readonly File[]): Promise<ImportedAsset
     const deformation = sourceDeformation(scene);
     const alphaProfile = readAlphaProfile(files.get('manifest.json'), modelPath, scene);
     return { format: 'fbx', name: basename(modelPath).slice(0, -4), scene, unitScale, stats, deformation, images, imagePathsByUrl, alphaProfile };
+  } catch (error) {
+    if (scene) disposeModel({ scene });
+    throw error;
   } finally {
     for (const url of [...urls.values(), ...embedded]) URL.revokeObjectURL(url);
   }
@@ -131,7 +154,7 @@ export function moveControlPointY(asset: ImportedAsset, controlPoint: number, of
 export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMap<Texture, Uint8Array<ArrayBuffer>>,
   extract?: { layout: string; originAtZero: boolean; pivot: number[];
     auxiliary: { semantic: string; file: string; colorSpace: string; channel: string; png: Uint8Array<ArrayBuffer> }[] },
-  transfers?: readonly { object: string; bake: TextureBake }[],
+  transfers?: readonly { object: string; bake: TextureBake }[], report?: ExportReport,
 ): Promise<{ name: string; bytes: Uint8Array<ArrayBuffer> }> {
   if (asset.deformation.hasMorphTargets) {
     throw new Error('FBX export blocked. The current exporter cannot preserve source morph targets.');
@@ -265,8 +288,8 @@ export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMa
     texturePaint: paint && { semantic: 'BaseColor', channel: 'uv0', strokes: paint.strokes, lastStrokeTexels: paint.lastStrokeTexels },
     textures: linked, unassignedTextures: unassigned,
     warnings: [
-      'Prototype export. FBX material properties and rig representation may change.',
-      'Unassigned textures are carried as files and require manual assignment in Unity.',
+      'FBX uses the documented Unity-compatible material and animation profile.',
+      ...(unassigned.length ? ['Unassigned textures require manual assignment in Unity.'] : []),
       ...(asset.deformation.pointsOverPreviewLimit > 0
         ? ['The preview is approximate above four skin influences. Export retains all source skin weights.'] : []),
       ...(asset.alphaProfile ? ['Use assetFixerMaterial in this manifest to configure the Unity material alpha mode and cutoff.'] : []),
@@ -276,6 +299,12 @@ export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMa
           : 'Atlas export writes triangles with the new UV0.'] : []),
     ],
   }, null, 2) + '\n'));
+  if (report) {
+    report.files.push(...files.keys(), 'report.json', 'report.txt');
+    const encoder = new TextEncoder();
+    files.set('report.json', encoder.encode(JSON.stringify(report, null, 2) + '\n'));
+    files.set('report.txt', encoder.encode(reportText(report)));
+  }
   return { name: `${name}.zip`, bytes: await pack(files) };
 }
 
@@ -287,7 +316,14 @@ function resolveImage(request: string, modelPath: string, images: Files): string
   const reference = request.replaceAll('\\', '/').toLowerCase();
   const prefix = modelPath.slice(0, modelPath.lastIndexOf('/') + 1).toLowerCase();
   const paths = [...images.keys()];
-  const exact = paths.find(path => path.toLowerCase() === prefix + reference);
+  const relative: string[] = [];
+  if (!reference.startsWith('/') && !/^[a-z][a-z0-9+.-]*:/.test(reference)) {
+    for (const part of (prefix + reference).split('/')) {
+      if (part === '..' && relative.length) relative.pop();
+      else if (part && part !== '.') relative.push(part);
+    }
+  }
+  const exact = paths.find(path => path.toLowerCase() === relative.join('/'));
   if (exact) return exact;
   const byName = paths.filter(path => basename(path).toLowerCase() === basename(reference));
   return byName.length === 1 ? byName[0] : undefined;

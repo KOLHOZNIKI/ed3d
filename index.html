@@ -55,6 +55,12 @@
       #diag-map th, #diag-map td { padding: .25rem; border-bottom: 1px solid #80808042; }
       #diag-tools p { font-size: .875rem; }
       #diag-scrub { width: 100%; margin: .5rem 0; }
+      #asset-review li { margin: .25rem 0; }
+      #asset-review li button { margin-left: .6rem; }
+      .finding-error { color: light-dark(#b1242c,#ff9798); }
+      .finding-warning { color: light-dark(#8e5000,#ffc374); }
+      #asset-review ul { max-height: 16rem; overflow: auto; padding-left: 1.35rem; }
+      #offline-status, #asset-scan-status, #asset-summary { font-size: .875rem; }
       #paint-tools input[type=number] { width: 5.5rem; }
       #paint-target { width: 100%; margin: .35rem 0; }
       #paint-info { font-size: .875rem; margin: .5rem 0 0; }
@@ -102,10 +108,19 @@
         <label for="sources">Open project, GLB, or FBX with its maps</label>
         <div class="actions">
           <input type="file" id="sources" accept=".assetfixer,.glb,.zip,.fbx,.png,.jpg,.jpeg" multiple />
+          <label>Open folder <input type="file" id="sources-folder" webkitdirectory multiple /></label>
           <button id="save-project" type="button" disabled>Save Project</button>
           <button id="save-copy" type="button" disabled>Save As</button>
           <button id="close-model" type="button" disabled>Close model</button>
         </div>
+        <fieldset id="texture-assignment" hidden>
+          <legend>Assign local FBX textures</legend>
+          <div id="texture-assignment-rows"></div>
+          <div class="actions">
+            <button id="texture-assignment-retry" type="button">Open with assignments</button>
+            <button id="texture-assignment-cancel" type="button">Cancel import</button>
+          </div>
+        </fieldset>
         <p id="project-status">No open project</p>
         <div class="actions" id="recovery" hidden>
           <button id="restore-autosave" type="button">Restore autosave</button>
@@ -120,6 +135,7 @@
       </fieldset>
       <div class="actions">
         <button id="export" type="button" disabled>Export FBX ZIP</button>
+        <button id="export-original" type="button" disabled>Export Original</button>
         <button id="unwrap" type="button" disabled>Generate UV atlas</button>
         <button id="rebake" type="button" disabled>Rebake textures</button>
         <button id="paint" type="button" aria-pressed="false" disabled>3D Paint</button>
@@ -140,6 +156,26 @@
       <p id="status" role="status">Select a model to inspect it locally.</p>
       <div class="work-area">
       <div>
+      <details id="asset-review" hidden>
+        <summary>Asset diagnostics and export report</summary>
+        <p id="asset-summary"></p>
+        <details><summary>Materials and UV channels</summary><ul id="asset-material-list"></ul></details>
+        <fieldset id="asset-review-actions">
+          <div class="actions">
+            <button id="asset-scan" type="button">Scan mesh</button>
+            <button id="asset-intersections" type="button">Check self-intersections</button>
+            <button id="asset-report-text" type="button">Save report text</button>
+            <button id="asset-report-json" type="button">Save report JSON</button>
+          </div>
+        </fieldset>
+        <p id="asset-scan-status" aria-live="polite"></p>
+        <ul id="asset-findings"></ul>
+      </details>
+      <details id="offline-panel">
+        <summary>Offline launch</summary>
+        <button id="offline-cache" type="button">Save application for offline launch</button>
+        <p id="offline-status" aria-live="polite"></p>
+      </details>
       <fieldset id="viewer-tools" hidden>
         <legend>Viewport</legend>
         <div class="actions">

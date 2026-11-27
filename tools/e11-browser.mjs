@@ -144,7 +144,7 @@ try {
   assert.notDeepEqual(inplace, await viewport.screenshot());
   await publish('Diagnostic_Walk_Travel');
   const saved = manifest(await download('save-project', 'tripo-humanoid.assetfixer'));
-  assert.equal(saved.schemaVersion, 11);
+  assert.equal(saved.schemaVersion, 12);
   assert.equal(saved.working.humanoid.profile.mapping.leftUpperArm, left);
   assert.deepEqual(saved.working.humanoid.profile.axes.leftUpperArm, [0, 0, 5]);
   assert.equal(saved.working.humanoid.profile.corrections.pelvis[1], .035);

@@ -1,5 +1,5 @@
-import { inputLimit, pack, readPackage, type Files } from '../e00/zip';
-import { AssetDocument, defaultHistoryBudget, type ObjectOverrides, type OriginalFile, type SceneEntry } from './document';
+import { inputLimit, pack, readPackage, validLocalPath, type Files } from '../e00/zip';
+import { AssetDocument, defaultHistoryBudget, type ObjectOverrides, type OriginalFile, type SceneEntry, type TextureAssignments } from './document';
 import { atlasColor, type AtlasState, type ExtractedAsset, type TextureEdit, type WorkingState } from './state';
 import { decodePng, encodeImage } from '../texture/image';
 import { boundaryId, decodeEdit } from '../mesh/commands';
@@ -24,6 +24,7 @@ export interface ProjectData {
   name: string;
   revision: number;
   originals: readonly OriginalFile[];
+  textureAssignments?: TextureAssignments;
   scene: readonly SceneEntry[];
   historyBudget: number;
   state: WorkingState;
@@ -40,12 +41,16 @@ export async function captureOriginals(files: readonly File[]): Promise<Original
   }
   const original: OriginalFile[] = [];
   const owned = new Map<string, Blob>();
+  const names = new Set<string>();
   for (const file of files) {
+    const name = fileName(file.webkitRelativePath || file.name, true);
+    if (names.has(name.toLowerCase())) throw new Error(`Two original files share the same path: ${name}.`);
+    names.add(name.toLowerCase());
     const bytes = new Uint8Array(await file.arrayBuffer());
     const hash = await digest(bytes);
     const data = owned.get(hash) ?? new Blob([bytes]);
     owned.set(hash, data);
-    original.push({ name: fileName(file.name), hash, data });
+    original.push({ name, hash, data });
   }
   return original;
 }
@@ -110,8 +115,9 @@ export async function writeProject(document: AssetDocument<WorkingState>, option
     }
     meshEdits = await retain(bytes);
   }
-  const manifest = encoder.encode(JSON.stringify({ format: 'AssetFixer', schemaVersion: 11, id: options?.id ?? document.id,
+  const manifest = encoder.encode(JSON.stringify({ format: 'AssetFixer', schemaVersion: 12, id: options?.id ?? document.id,
     name: options?.name ?? document.name, revision, settings: { historyBudget }, scene, originals: originalRefs,
+    textureAssignments: document.textureAssignments && Object.entries(document.textureAssignments),
     resources, working: { objects: state.objects, geometry, bake, paint, textures, meshEdits, keepOpen: state.keepOpen, uvBakes, extracts,
       rig: state.rig, poses: state.poses, weightLocks: state.weightLocks, humanoid: state.humanoid } }));
   if (manifest.byteLength > MiB || expanded + manifest.byteLength > limits.total) throw new Error('The project manifest exceeds its size limit.');
@@ -130,7 +136,7 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
   const manifest = record(JSON.parse(decoder.decode(encoded)));
   if (manifest.format !== 'AssetFixer') throw new Error('This file is not an AssetFixer project.');
   const version = integer(manifest.schemaVersion, 1);
-  if (version > 11) throw new Error(`Project schema ${version} is newer than this application supports.`);
+  if (version > 12) throw new Error(`Project schema ${version} is newer than this application supports.`);
   // Version 1 had a fixed history budget. Version 2 persists the project setting.
   const historyBudget = version === 1 ? defaultHistoryBudget : integer(record(manifest.settings).historyBudget, MiB, projectLimit);
   if (historyBudget % MiB) throw new Error('Invalid project history budget.');
@@ -154,13 +160,22 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
   const originalNames = new Set<string>(), originals: OriginalFile[] = [];
   let originalBytes = 0;
   for (const entry of list(manifest.originals, 256).map(record)) {
-    const name = fileName(entry.name), hash = text(entry.hash, 64), bytes = resource(hash);
+    const name = fileName(entry.name, version >= 12), hash = text(entry.hash, 64), bytes = resource(hash);
+    const key = version >= 12 ? name.toLowerCase() : name;
     originalBytes += bytes.byteLength;
-    if (originalNames.has(name) || originalBytes > inputLimit) throw new Error('Invalid original files in project.');
-    originalNames.add(name);
+    if (originalNames.has(key) || originalBytes > inputLimit) throw new Error('Invalid original files in project.');
+    originalNames.add(key);
     originals.push({ name, hash, data: new Blob([bytes]) });
   }
   if (!originals.length) throw new Error('The project has no original files.');
+  const assignments = new Map<string, string>();
+  if (version >= 12 && manifest.textureAssignments !== undefined) {
+    for (const value of list(manifest.textureAssignments, 256)) {
+      const pair = list(value, 2), key = text(pair[0], 4096), path = fileName(pair[1], true);
+      if (assignments.has(key) || !/\.(png|jpe?g)$/i.test(path)) throw new Error('Invalid project texture assignment.');
+      assignments.set(key, path);
+    }
+  }
   const entries = new Set<string>();
   const extracted = new Map<string, string>();
   const scene = list(manifest.scene, 10000).map(value => {
@@ -331,6 +346,7 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
   if (weightLocks && new Set(weightLocks).size !== weightLocks.length) throw new Error('Duplicate saved weight lock.');
   const humanoid = version >= 11 && working.humanoid !== undefined ? readHumanoid(working.humanoid) : undefined;
   return { id, name: text(manifest.name, 160), revision: integer(manifest.revision, 0, 1e12), originals, historyBudget, scene,
+    textureAssignments: assignments.size ? Object.fromEntries(assignments) : undefined,
     state: { objects, atlas, bake, paint, textures, meshEdits, keepOpen, uvBakes, extracts, rig, poses, weightLocks, humanoid } };
 }
 
@@ -453,9 +469,10 @@ function text(value: unknown, max: number): string {
   if (typeof value !== 'string' || !value.length || value.length > max) throw new Error('Invalid project text value.');
   return value;
 }
-function fileName(value: unknown): string {
-  const name = text(value, 255);
-  if (/[\\/\x00-\x1f]/.test(name) || name === '.' || name === '..') throw new Error('Invalid original filename.');
+function fileName(value: unknown, paths: boolean): string {
+  const name = text(value, paths ? 1024 : 255);
+  const valid = paths ? validLocalPath(name) : !/[\\/\x00-\x1f]/.test(name) && name !== '.' && name !== '..';
+  if (!valid) throw new Error('Invalid original filename.');
   return name;
 }
 function bool(value: unknown): boolean {

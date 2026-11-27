@@ -10,8 +10,8 @@
     "postinstall": "patch-package --error-on-fail",
     "dev": "vite",
     "typecheck": "tsc --noEmit",
-    "build": "npm run typecheck && vite build",
-    "build:debug": "npm run typecheck && vite build --mode debug --outDir dist-debug --no-minify --sourcemap",
+    "build": "npm run typecheck && vite build && node tools/build-offline.mjs dist",
+    "build:debug": "npm run typecheck && vite build --mode debug --outDir dist-debug --no-minify --sourcemap && node tools/build-offline.mjs dist-debug",
     "preview": "vite preview"
   },
   "dependencies": {

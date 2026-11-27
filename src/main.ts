@@ -6,11 +6,14 @@ import { blankPaintMesh, createPaintAtlas, rebakeAsset } from './e00/rebake';
 import { sourceMesh } from './e00/fbx-topology';
 import { captureAtlas, importOriginals, ModelAdapter, type Model } from './project/adapter';
 import { captureOriginals, readProject, writeProject, type ProjectData } from './project/archive';
+import { TextureAssignmentError } from './e00/round-trip';
+import type { OriginalFile, TextureAssignments } from './project/document';
 import { autosaveDelay, latestCheckpoint, saveCheckpoint } from './project/autosave';
 import { AssetDocument, defaultHistoryBudget } from './project/document';
 import { atlasColor, type WorkingState, workingBuffers } from './project/state';
 import { elementId } from './project/topology';
-import { disposeModel, prepareAppearance, Viewer } from './project/viewer';
+import { prepareAppearance, Viewer } from './project/viewer';
+import { disposeModel } from './project/resources';
 import { applyViews, disposeAppearance, sourceAppearance, type Appearance } from './texture/appearance';
 import { projectedModel, TextureCatalog, withoutAtlasEdits, type TextureTarget } from './texture/bindings';
 import { TextureEditor } from './texture/editor';
@@ -31,6 +34,10 @@ import type { Layout } from './uv/layout';
 import { ExtractTool } from './extract/tool';
 import { buildExtraction } from './extract/build';
 import { exportBatch, exportExtract } from './extract/export';
+import { AssetPanel } from './diagnostics/panel';
+import { exportReport, extractedReport, reportText, scanAsset } from './diagnostics/report';
+import { offlineSetup } from './project/offline';
+import { pack } from './e00/zip';
 
 function element<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -41,6 +48,10 @@ function element<T extends HTMLElement>(id: string): T {
 const canvas = element<HTMLCanvasElement>('viewport');
 const status = element('status'), projectStatus = element('project-status'), historyStatus = element('history-status');
 const sources = element<HTMLInputElement>('sources');
+const folder = element<HTMLInputElement>('sources-folder'), originalButton = element<HTMLButtonElement>('export-original');
+const assignmentPanel = element('texture-assignment'), assignmentRows = element('texture-assignment-rows');
+const assignmentRetry = element<HTMLButtonElement>('texture-assignment-retry');
+const assignmentCancel = element<HTMLButtonElement>('texture-assignment-cancel');
 const close = element<HTMLButtonElement>('close-model'), save = element<HTMLButtonElement>('save-project');
 const saveAs = element<HTMLButtonElement>('save-copy'), exportButton = element<HTMLButtonElement>('export');
 const unwrap = element<HTMLButtonElement>('unwrap'), rebake = element<HTMLButtonElement>('rebake');
@@ -72,6 +83,8 @@ const viewer = new Viewer(canvas, lost => {
   controls();
   resumeAutosave();
 });
+const assetPanel = new AssetPanel(viewer, selectObject);
+offlineSetup(element('offline-cache'), element('offline-status'));
 
 interface Workspace {
   adapter: ModelAdapter;
@@ -214,9 +227,13 @@ const extractTool = new ExtractTool(viewer, canvas, {
   export(ids, batch) {
     return locked(async signal => {
       const { model, adapter, textures, document } = current!;
-      const output = batch ? await exportBatch(model, adapter, textures, document.state, ids, signal)
-        : await exportExtract(model, adapter, textures, document.state, ids[0]);
+      const report = extractedReport(exportReport(adapter, model, document, assetPanel.findings), ids, batch ? 'batch' : 'asset');
+      const problem = report.findings.find(finding => finding.severity === 'Error');
+      if (problem) throw new Error(problem.message);
+      const output = batch ? await exportBatch(model, adapter, textures, document.state, ids, signal, report)
+        : await exportExtract(model, adapter, textures, document.state, ids[0], report);
       signal?.throwIfAborted();
+      assetPanel.exported(report);
       download(new Blob([output.bytes], { type: output.name.endsWith('.glb') ? 'model/gltf-binary' : 'application/zip' }), output.name);
       status.textContent = `Exported ${output.name}.`;
     }, 'Exporting independent assets…', true);
@@ -262,6 +279,9 @@ const diagnosticTool = new HumanoidTool(viewer, {
 
 function commitUv(request: UvRequest) {
   return locked(async signal => {
+    // Let the status and cancel control paint before preparing a large snapshot.
+    await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    signal?.throwIfAborted();
     const work = current!, { object, revision, layout, channel, options } = request;
     work.document.assertRevision(revision);
     const state = work.document.state, mesh = work.adapter.objects.get(object), model = work.model;
@@ -373,7 +393,11 @@ function controls() {
   if (!availablePaint || !current?.adapter.rig.available) diagnostic = false;
   if (!availableWeights) weighting = false;
   sources.disabled = locked;
+  folder.disabled = locked;
+  assignmentRetry.disabled = assignmentCancel.disabled = locked;
   close.disabled = save.disabled = saveAs.disabled = exportButton.disabled = locked || !document;
+  originalButton.disabled = locked || !document;
+  assetPanel.configure(current, locked);
   unwrap.disabled = locked || !fbx || !!current?.adapter.mesh.geometryActive;
   const canCreatePaintAtlas = !!(fbx && !model.textureBake && painting && !editedMesh && blankPaintMesh(model));
   rebake.disabled = locked || !fbx || !model.uvAtlas || canCreatePaintAtlas;
@@ -630,7 +654,7 @@ function install(workspace: Workspace, appearance?: Appearance) {
   recovery.hidden = true;
 }
 
-async function makeWorkspace(model: Model, data?: ProjectData, originals = data?.originals) {
+async function makeWorkspace(model: Model, data?: ProjectData, originals = data?.originals, textureAssignments = data?.textureAssignments) {
   if (!originals) throw new Error('The project has no captured originals.');
   let adapter: ModelAdapter | undefined;
   try {
@@ -642,7 +666,7 @@ async function makeWorkspace(model: Model, data?: ProjectData, originals = data?
     }))) throw new Error('The saved object hierarchy does not match the original assets.');
     const document = new AssetDocument<WorkingState>({ id: data?.id ?? crypto.randomUUID(), name: data?.name ?? model.name.slice(0, 160),
       revision: data?.revision ?? 0, originals, historyBudget: data?.historyBudget ?? defaultHistoryBudget,
-      scene: adapter.entries, topology: adapter.topology, state: data?.state ?? { objects: {} } }, workingBuffers);
+      scene: adapter.entries, topology: adapter.topology, textureAssignments, state: data?.state ?? { objects: {} } }, workingBuffers);
     const working = adapter.materialize(document.state);
     const textures = new TextureCatalog(adapter);
     textures.validate(document.state);
@@ -657,28 +681,102 @@ async function makeWorkspace(model: Model, data?: ProjectData, originals = data?
   }
 }
 
-sources.addEventListener('change', () => {
-  const input = Array.from(sources.files ?? []);
-  sources.value = '';
+function openFiles(input: File[]) {
   if (!input.length) return;
   void locked(async () => {
+    clearAssignments();
     const project = input.find(file => /\.assetfixer$/i.test(file.name));
     if (project && input.length !== 1) throw new Error('Open one .assetfixer project at a time.');
     const data = project && await readProject(project);
     const originals = data?.originals ?? await captureOriginals(input);
-    const model = await importOriginals(originals);
-    const { workspace, appearance } = await makeWorkspace(model, data, originals);
+    await openCaptured(originals, data?.textureAssignments, data || undefined);
+  }, `Opening local asset · ${(input.reduce((bytes, file) => bytes + file.size, 0) / 1048576).toFixed(1)} MiB input…`);
+}
+
+async function openCaptured(originals: readonly OriginalFile[], assignments?: TextureAssignments, data?: ProjectData) {
+  try {
+    const model = await importOriginals(originals, assignments);
+    const { workspace, appearance } = await makeWorkspace(model, data, originals, assignments);
     if (!canReplace()) {
       if (appearance) disposeAppearance(appearance);
       workspace.adapter.dispose();
       disposeModel(workspace.model);
+      clearAssignments();
       status.textContent = 'Open cancelled.';
       return;
     }
+    clearAssignments();
     install(workspace, appearance);
     if (data) status.textContent += ' · Project restored. Undo history starts here.';
     else scheduleAutosave();
-  }, 'Opening local asset…');
+  } catch (error) {
+    if (error instanceof TextureAssignmentError && !data) showAssignments(error, originals, assignments);
+    throw error;
+  }
+}
+
+let retryAssignments: (() => Promise<void>) | undefined;
+
+function clearAssignments() {
+  assignmentPanel.hidden = true;
+  assignmentRows.replaceChildren();
+  retryAssignments = undefined;
+}
+
+function showAssignments(error: TextureAssignmentError, originals: readonly OriginalFile[], assignments?: TextureAssignments) {
+  assignmentRows.replaceChildren();
+  const rows = error.requests.map(request => {
+    const row = document.createElement('div');
+    row.className = 'actions';
+    const label = document.createElement('label'), select = document.createElement('select');
+    label.append(request + ' ', select);
+    select.add(new Option('Choose a map from the input', ''));
+    for (const path of error.candidates) select.add(new Option(path, path));
+    const local = document.createElement('input'), localLabel = document.createElement('label');
+    local.type = 'file';
+    local.accept = '.png,.jpg,.jpeg';
+    localLabel.append('Or choose a local map ', local);
+    row.append(label, localLabel);
+    assignmentRows.append(row);
+    return { request, select, local };
+  });
+  assignmentPanel.hidden = false;
+  retryAssignments = async () => {
+    const next = new Map(Object.entries(assignments ?? {})), extra: File[] = [];
+    for (const { request, select, local } of rows) {
+      const file = local.files?.[0];
+      if (!file && !select.value) throw new Error(`Choose a local map for ${request}.`);
+      const path = file ? `assigned/${crypto.randomUUID()}/${file.name}` : select.value;
+      if (file) extra.push(new File([file], path));
+      next.set(request, path);
+    }
+    const added = extra.length ? await captureOriginals(extra) : [];
+    const source = [...originals, ...added];
+    if (source.length > 256 || next.size > 256) throw new Error('The source file or texture assignment count exceeds 256.');
+    await openCaptured(source, Object.fromEntries(next));
+  };
+}
+
+assignmentRetry.addEventListener('click', () => {
+  if (retryAssignments) void locked(retryAssignments, 'Opening local asset with assigned textures…');
+});
+assignmentCancel.addEventListener('click', () => {
+  clearAssignments();
+  status.textContent = 'Open cancelled.';
+});
+
+for (const picker of [sources, folder]) picker.addEventListener('change', () => {
+  const input = Array.from(picker.files ?? []).filter(file => /\.(assetfixer|glb|zip|fbx|png|jpe?g)$/i.test(file.name));
+  picker.value = '';
+  openFiles(input);
+});
+window.addEventListener('dragover', event => {
+  if (event.dataTransfer?.types.includes('Files')) event.preventDefault();
+});
+window.addEventListener('drop', event => {
+  if (!event.dataTransfer?.types.includes('Files')) return;
+  event.preventDefault();
+  openFiles(Array.from(event.dataTransfer.files));
 });
 
 close.addEventListener('click', () => {
@@ -701,6 +799,39 @@ function download(data: Blob, name: string) {
   link.download = name;
   link.click();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+originalButton.addEventListener('click', () => void locked(async () => {
+  const { originals, name } = current!.document;
+  if (originals.length === 1) download(originals[0].data, originals[0].name.split('/').at(-1)!);
+  else {
+    const entries = await Promise.all(originals.map(async file => [file.name, new Uint8Array(await file.data.arrayBuffer())] as const));
+    const bytes = await pack(new Map(entries));
+    download(new Blob([bytes], { type: 'application/zip' }), `${name.replace(/[^a-zA-Z0-9_-]/g, '_')}_originals.zip`);
+  }
+  status.textContent = 'Exported immutable original files.';
+}, 'Preparing original files…'));
+
+for (const [id, global] of [['asset-scan', false], ['asset-intersections', true]] as const) {
+  element(id).addEventListener('click', () => void locked(async signal => {
+    const work = current!, revision = work.document.revision;
+    await new Promise(requestAnimationFrame);
+    signal?.throwIfAborted();
+    const findings = await scanAsset(work.adapter, global, signal);
+    work.document.assertRevision(revision);
+    signal?.throwIfAborted();
+    if (current !== work) throw new Error('The active project changed during the scan.');
+    assetPanel.scanned(findings, global);
+    status.textContent = `Asset scan complete · ${findings.length} findings.`;
+  }, global ? 'Checking mesh self-intersections…' : 'Checking mesh topology, UVs and weights…', true));
+}
+for (const [id, extension] of [['asset-report-text', 'txt'], ['asset-report-json', 'json']] as const) {
+  element(id).addEventListener('click', () => void locked(async () => {
+    const report = assetPanel.report;
+    const contents = extension === 'json' ? JSON.stringify(report, null, 2) + '\n' : reportText(report);
+    download(new Blob([contents], { type: extension === 'json' ? 'application/json' : 'text/plain' }), `AssetFixer-r${report.project.revision}-report.${extension}`);
+    status.textContent = 'Saved the compatibility report.';
+  }));
 }
 
 function saveFile(copy: boolean) {
@@ -736,6 +867,9 @@ exportButton.addEventListener('click', () => void locked(async () => {
   adapter.applyVisibility({ objects: {} });
   try {
     if (published.length) model.scene.animations = [...animation, ...published];
+    const report = exportReport(adapter, model, document, assetPanel.findings);
+    const problem = report.findings.find(finding => finding.severity === 'Error');
+    if (problem) throw new Error(problem.message);
     const bound = sourceAppearance(textures, document.state, model.format === 'glb' ? 'glb' : 'fbx');
     const restore = applyViews(bound.appearance.views);
     let output;
@@ -747,13 +881,15 @@ exportButton.addEventListener('click', () => void locked(async () => {
         if (projected.format !== 'fbx') throw new Error('Invalid FBX export state.');
         const transfers = Object.entries(document.state.uvBakes ?? {}).map(([object, transfer]) => ({ object, bake: transfer.bake }));
         output = await exportAsset(published.length ? { ...projected, stats: { ...projected.stats, clips: model.scene.animations.length } } : projected,
-          bound.fbx, undefined, transfers.length ? transfers : undefined);
+          bound.fbx, undefined, transfers.length ? transfers : undefined, report);
       }
     } finally {
       restore();
       disposeAppearance(bound.appearance);
     }
+    if (glb) report.files.push(output.name);
     download(new Blob([output.bytes], { type: glb ? 'model/gltf-binary' : 'application/zip' }), output.name);
+    assetPanel.exported(report);
     status.textContent = `Exported ${output.name}.` + (glb ? '' : ' See manifest.json for material assignments and scope.');
   } finally {
     model.scene.animations = animation;
@@ -812,7 +948,7 @@ restore.addEventListener('click', () => void locked(async () => {
   const data = pendingRecovery;
   if (!data) return;
   if (!canReplace()) return;
-  const { workspace, appearance } = await makeWorkspace(await importOriginals(data.originals), data);
+  const { workspace, appearance } = await makeWorkspace(await importOriginals(data.originals, data.textureAssignments), data);
   workspace.document.markRecovered();
   install(workspace, appearance);
   status.textContent += ' · Autosave restored. Undo history starts here.';
