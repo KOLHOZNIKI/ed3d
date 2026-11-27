@@ -23,18 +23,23 @@ export function flatten(geometry: BufferGeometry, name: string, size: number) {
 }
 
 export function uvSurface(adapter: ModelAdapter, object: string, original = false): Surface {
+  const { geometry, points, faces, slots } = uvTopology(adapter, object, original);
+  const positions = flatten(geometry, 'position', 3)!;
+  return { positions, normals: flatten(geometry, 'normal', 3) ?? new Float32Array(positions.length), points, faces, slots };
+}
+
+export function uvTopology(adapter: ModelAdapter, object: string, original = false) {
   const node = adapter.objects.get(object);
   if (!(node instanceof Mesh)) throw new Error('Select a mesh object.');
   const geometry = original ? adapter.mesh.originalGeometry(object) : node.geometry;
   if (!geometry) throw new Error('The selected object has no original imported geometry.');
-  const positions = flatten(geometry, 'position', 3)!;
-  const count = positions.length / 3, edited = !original ? adapter.mesh.render.get(object)?.render : undefined;
+  const count = geometry.index?.count ?? geometry.getAttribute('position').count;
+  const edited = !original ? adapter.mesh.render.get(object)?.render : undefined;
   const topology = original ? adapter.topology.get(object) : adapter.workingTopology(object);
   if (!topology || topology.renderFaces.length !== count / 3) throw new Error('The mesh has no stable triangle correspondence.');
   const points = edited?.renderVertices ?? (adapter.model.format === 'fbx'
     ? renderControlPoints(sourceMesh(geometry)) : Uint32Array.from({ length: count }, (_, i) => geometry.index?.getX(i) ?? i));
-  return { positions, normals: flatten(geometry, 'normal', 3) ?? new Float32Array(positions.length),
-    points: Uint32Array.from(points), faces: Uint32Array.from(topology.renderFaces, id => edited?.faceIds[id] ?? id),
+  return { geometry, points: Uint32Array.from(points), faces: Uint32Array.from(topology.renderFaces, id => edited?.faceIds[id] ?? id),
     slots: Uint32Array.from(topology.renderFaces, id => topology.faceMaterials[id]) };
 }
 

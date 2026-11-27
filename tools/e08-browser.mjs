@@ -65,8 +65,9 @@ try {
     await open(join(corpus, 'f03_boundaries.glb'), /80 triangles/);
     await select('object-selection', 'NonPlanar');
     await enter('repair');
-    const revision = await text('project-status');
     await previewRepair('smooth', 'B8', /1 to fill/);
+    const revision = await text('project-status');
+    assert.match(revision, /Revision 0\b/);
     await click('repair-cancel');
     assert.equal(await text('project-status'), revision);
     await previewRepair('smooth', 'B8', /1 to fill/);

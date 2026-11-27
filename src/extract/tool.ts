@@ -63,7 +63,6 @@ export class ExtractTool {
     if (prior?.adapter === context?.adapter && prior?.object === context?.object && prior?.revision === context?.revision) return;
     if (prior?.adapter !== context?.adapter) {
       this.#excluded.clear();
-      ui<HTMLSelectElement>('copy').value = 'copy';
     }
     this.#data = undefined;
     const node = context?.adapter.objects.get(context.object);

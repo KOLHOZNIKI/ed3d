@@ -162,7 +162,7 @@ export function moveControlPointY(asset: ImportedAsset, controlPoint: number, of
 export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMap<Texture, Uint8Array<ArrayBuffer>>,
   extract?: { layout: string; originAtZero: boolean; pivot: number[];
     auxiliary: { semantic: string; file: string; colorSpace: string; channel: string; png: Uint8Array<ArrayBuffer> }[] },
-  transfers?: readonly { object: string; bake: TextureBake }[], report?: ExportReport,
+  transfers?: readonly { object: string; bake: TextureBake }[], report?: ExportReport, pngTextures = false,
 ): Promise<{ name: string; bytes: Uint8Array<ArrayBuffer> }> {
   if (asset.deformation.hasMorphTargets) {
     throw new Error('FBX export blocked. The current exporter cannot preserve source morph targets.');
@@ -178,7 +178,8 @@ export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMa
   const files: Files = new Map();
   const linked: { semantic: string; file: string; source: string | null; rebaked?: true }[] = [];
   const assigned = new Set<string>();
-  const pending: Promise<void>[] = [];
+  const pending: { file: string; image: HTMLImageElement }[] = [];
+  const conversions: { source: string; file: string }[] = [];
   const writer = new FBXExporter().register((plan: ExportPlan) => {
     for (const mesh of plan.meshes) useSourceTopology(mesh, edit?.geometry === mesh.geometry ? edit.positions : undefined,
       atlas?.inputGeometry === mesh.geometry ? atlas : undefined, !!bake, repair?.inputGeometry === mesh.geometry ? repair : undefined);
@@ -206,15 +207,17 @@ export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMa
         continue;
       }
       const edited = sourceEdits?.get(entry.texture);
-      const extension = edited ? 'png' : source?.match(imagePattern)?.[1].toLowerCase() ?? 'png';
+      const originalExtension = source?.match(imagePattern)?.[1].toLowerCase();
+      const extension = edited || pngTextures ? 'png' : originalExtension ?? 'png';
       const location = `${name}.fbm/texture_${linked.length + 1}.${extension}`;
       entry.fileName = location;
       linked.push({ semantic: textureSemantics[entry.slotName], file: location, source });
-      if (source) {
-        assigned.add(source);
-        files.set(location, edited ?? asset.images.get(source)!);
-      } else if (image instanceof HTMLImageElement) {
-        pending.push(encodePng(image).then(bytes => { files.set(location, bytes); }));
+      if (source) assigned.add(source);
+      if (edited) files.set(location, edited);
+      else if (source && extension === originalExtension) files.set(location, asset.images.get(source)!);
+      else if (image instanceof HTMLImageElement) {
+        pending.push({ file: location, image });
+        if (source) conversions.push({ source, file: location });
       }
     }
   });
@@ -239,7 +242,7 @@ export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMa
       generated.mesh.material = generated.material;
     }
   }
-  await Promise.all(pending);
+  for (const { file, image } of pending) files.set(file, await encodePng(image));
 
   const unassigned = [];
   const auxiliaryMaps: { semantic: string; file: string; source: string; colorSpace: string; channel: string }[] = [];
@@ -259,9 +262,20 @@ export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMa
       auxiliaryMaps.push({ semantic: edit.semantic, file, source, colorSpace: 'linear', channel: 'uv0' });
       continue;
     }
-    const file = `unassigned/${source}`;
+    const convert = pngTextures && /\.jpe?g$/i.test(source);
+    const file = convert ? `converted/texture_${conversions.length + 1}.png` : `unassigned/${source}`;
     unassigned.push({ source, file });
-    files.set(file, bytes);
+    if (convert) {
+      textureImportBudget()(bytes, source, 'image/jpeg');
+      const url = URL.createObjectURL(new Blob([bytes], { type: 'image/jpeg' }));
+      try {
+        const image = new Image();
+        image.src = url;
+        await image.decode();
+        files.set(file, await encodePng(image));
+      } finally { URL.revokeObjectURL(url); }
+      conversions.push({ source, file });
+    } else files.set(file, bytes);
   }
   const extractMetadata = extract && { layout: extract.layout, originAtZero: extract.originAtZero, pivot: extract.pivot,
     auxiliaryMaps: extract.auxiliary.map(({ png, ...map }) => { files.set(map.file, png); return map; }) };
@@ -302,6 +316,7 @@ export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMa
     },
     texturePaint: paint && { semantic: 'BaseColor', channel: 'uv0', strokes: paint.strokes, lastStrokeTexels: paint.lastStrokeTexels },
     textures: linked, unassignedTextures: unassigned, auxiliaryMaps,
+    textureFiles: pngTextures ? 'png' : 'source', textureConversions: conversions,
     warnings: [
       'FBX uses the documented Unity-compatible material and animation profile.',
       ...(unassigned.length ? ['Unassigned textures require manual assignment in Unity.'] : []),
@@ -315,6 +330,7 @@ export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMa
     ],
   }, null, 2) + '\n'));
   if (report) {
+    if (conversions.length) report.conversions.push(`Converted ${conversions.length} source JPEG texture files to PNG at their decoded dimensions.`);
     report.files.push(...files.keys(), 'report.json', 'report.txt');
     const encoder = new TextEncoder();
     files.set('report.json', encoder.encode(JSON.stringify(report, null, 2) + '\n'));

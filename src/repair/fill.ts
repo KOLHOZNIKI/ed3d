@@ -20,7 +20,9 @@ export interface Fill {
   readonly bridge?: BridgeSettings & { other: string };
 }
 
-export function applyRepairs(source: MeshData, fills: readonly Fill[]) {
+type RecordVertex = (vertex: number, sources: readonly Influence[]) => void;
+
+export function applyRepairs(source: MeshData, fills: readonly Fill[], recordVertex?: RecordVertex) {
   let mesh = source;
   const boundaries = new Map(boundaryContours(mesh).map(contour => [contour.id, contour]));
   for (const fill of fills) {
@@ -29,15 +31,15 @@ export function applyRepairs(source: MeshData, fills: readonly Fill[]) {
     if (fill.method === 'bridge') {
       const other = boundaries.get(fill.bridge!.other);
       if (!other) throw new Error('The second saved Bridge boundary no longer exists.');
-      mesh = bridgeBoundaries(mesh, boundary, other, fill);
+      mesh = bridgeBoundaries(mesh, boundary, other, fill, recordVertex);
       boundaries.delete(other.id);
-    } else mesh = fillBoundary(mesh, boundary, fill);
+    } else mesh = fillBoundary(mesh, boundary, fill, recordVertex);
     boundaries.delete(fill.id);
   }
   return mesh;
 }
 
-export function fillBoundary(mesh: MeshData, boundary: Boundary, fill: Fill): MeshData {
+export function fillBoundary(mesh: MeshData, boundary: Boundary, fill: Fill, recordVertex?: RecordVertex): MeshData {
   if (boundary.kind !== 'loop') throw new Error(boundary.reason ?? 'Select a simple closed boundary.');
   const vertices = boundary.vertices;
   const plane = boundaryPlane(mesh, vertices, boundary.diameter);
@@ -47,7 +49,7 @@ export function fillBoundary(mesh: MeshData, boundary: Boundary, fill: Fill): Me
   if (fill.method === 'smooth' || fill.method === 'grid') {
     const rim = [...vertices];
     const recipe = fill.method === 'smooth' ? smoothRecipe(mesh, rim, fill.smooth!) : gridRecipe(mesh, rim, boundary, fill.grid!);
-    return buildPatch(mesh, fill, recipe, [boundary], plane.normal, plane.project);
+    return buildPatch(mesh, fill, recipe, [boundary], plane.normal, plane.project, recordVertex);
   }
   if (fill.method === 'bridge') throw new Error('Select two compatible boundaries for Bridge.');
   if (fill.project) mesh = ensureUvChannel(mesh);
@@ -81,6 +83,7 @@ export function fillBoundary(mesh: MeshData, boundary: Boundary, fill: Fill): Me
     }
     if (Math.abs(plane.distance(center)) > boundary.diameter) throw new Error('The Fan center is too far from the boundary plane.');
     const id = positions.length / 3;
+    recordVertex?.(id, vertices.map(vertex => [vertex, 1 / vertices.length]));
     positions = new Float64Array(mesh.positions.length + 3);
     positions.set(mesh.positions);
     center.toArray(positions, 3 * id);
@@ -122,15 +125,15 @@ export function fillBoundary(mesh: MeshData, boundary: Boundary, fill: Fill): Me
   return { ...points, faces: [...mesh.faces, ...patch], nextFace: mesh.nextFace + patch.length };
 }
 
-export function bridgeBoundaries(mesh: MeshData, a: Boundary, b: Boundary, fill: Fill): MeshData {
+export function bridgeBoundaries(mesh: MeshData, a: Boundary, b: Boundary, fill: Fill, recordVertex?: RecordVertex): MeshData {
   const settings = fill.bridge!;
   if (a.id === b.id) throw new Error('Choose two different boundaries.');
   const recipe = settings.reverse ? bridgeRecipe(mesh, b, a, settings) : bridgeRecipe(mesh, a, b, settings);
-  return buildPatch(mesh, fill, recipe, [a, b]);
+  return buildPatch(mesh, fill, recipe, [a, b], undefined, undefined, recordVertex);
 }
 
 function buildPatch(mesh: MeshData, fill: Fill, recipe: Recipe, boundaries: readonly Boundary[],
-  reference?: Vector3, project?: (point: Vector3) => { x: number; y: number }): MeshData {
+  reference?: Vector3, project?: (point: Vector3) => { x: number; y: number }, recordVertex?: RecordVertex): MeshData {
   if (fill.project) mesh = ensureUvChannel(mesh);
   const edges = edgesOf(mesh), { samples, rim, cells } = recipe;
   const witness = new Map<number, Corner['attributes']>(), materials = new Map<number, number>();
@@ -153,6 +156,7 @@ function buildPatch(mesh: MeshData, fill: Fill, recipe: Recipe, boundaries: read
     const id = mesh.positions.length / 3 + i - rim.length;
     if (!sample.point.toArray().every(value => Number.isFinite(Math.fround(value)))) throw new Error('The repair produced a nonfinite point.');
     sample.point.toArray(positions, id * 3);
+    recordVertex?.(id, sample.weights.map(([index, factor]) => [rim[index], factor]));
     weights?.push(blendWeights(mesh, rim, sample.weights));
     return id;
   });

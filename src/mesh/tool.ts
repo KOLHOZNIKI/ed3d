@@ -229,8 +229,16 @@ export class MeshTool {
   async apply() {
     const preview = this.#preview;
     if (!preview || this.#locked) return;
+    const selection = this.#selection;
     const ok = await this.applyEdit(preview.edit, preview.revision);
     if (!ok) return;
+    const topology = preview.geometry.topology;
+    if (topology && this.#context?.id === preview.edit.object) {
+      const remap = <T>(items: readonly T[], replacements: ReadonlyMap<T, readonly T[]>) =>
+        [...new Set(items.flatMap(item => replacements.get(item) ?? [item]))];
+      this.#selection = { vertex: remap(selection.vertex, topology.vertices), edge: remap(selection.edge, topology.edges),
+        face: remap(selection.face, topology.faces) };
+    }
     if (preview.edit.type === 'create' && toggle('chain')) {
       const { vertices } = preview.edit;
       this.#kind.value = 'vertex';

@@ -24,6 +24,8 @@ npm run dev
 
 Open the localhost URL printed by Vite. Choose a self-contained GLB and use **Export GLB** to download a new binary. For FBX, open a ZIP, select the binary FBX and its PNG/JPEG maps together, or use **Open folder** to preserve the folder structure. When a map is missing or ambiguous, choose an input map or a local replacement and click **Open with assignments**. **Export FBX ZIP** downloads the reconstructed FBX, external maps, manifest and export reports. Extract the package into Unity's `Assets` folder. The manifest identifies textures that require manual assignment. **Export Original** downloads the original bytes, packaged together when the input consisted of multiple files.
 
+Choose **FBX maps → PNG** for an all-PNG FBX ZIP. The manifest lists JPEG conversions and the new external paths. **Source files** keeps the encoding of unchanged textures.
+
 Use **Save Project** to download a self-contained `.assetfixer` file. **Save As** creates a copy with a new project ID. Open the saved file from the same file picker after restarting the app. The project restores its original source bytes and current working state. Undo and Redo begin with the reopened state. After an edit the browser keeps local checkpoints and offers **Restore autosave** at startup. If an edit would exceed the history budget, the browser saves the new revision before releasing old history. A storage failure keeps the current edit history intact. Save a project file to keep a backup outside browser storage.
 
 In a Release or Debug build served on HTTPS or localhost, open **Offline launch** and click **Save application for offline launch**. Return to the same browser profile and URL to launch from the cache without a connection. Use **Asset diagnostics and export report** to review material bindings, run the geometry, UV and weight scan, focus a finding and save a text or JSON report. GLB export keeps its report available through this panel.
@@ -34,6 +36,8 @@ In **Object** mode, select static meshes or groups and enter Move, Rotate or Sca
 
 Use **Display** for textured, unlit, solid, wireframe, wire overlay, checker, normals or bone weights. **Guides and lighting** controls the floor grid, axes, bounds, light exposure and background. **Compare** shows the original import or a captured working revision with the same camera. **Isolate object** scopes the 3D preview to the selected mesh. [Workspace guide and verification](Docs/Workspace_Report.md)
 
+In **Compare**, use **Pin snapshot** to keep the current revision as a comparison source. Pins are included in `.assetfixer` and autosaves. Pick a revision in **Reference** to compare it. Removing a pin is undoable.
+
 For a single FBX mesh with one UV set, use **Generate UV atlas** to add UV1. **Rebake textures** transfers the maps from the original import. The baked FBX promotes the atlas to the primary UV channel for Unity and retains the original coordinates in the second channel.
 
 Turn on **3D Paint**, choose a Base Color binding and drag on the model. **Surface** measures brush diameter along connected faces in scene units. **Screen projection** reaches visible faces in the selected binding within a viewport-pixel diameter. **Texture pixels** snaps a square brush to the image grid. Right-drag to orbit and scroll to zoom inside Paint mode.
@@ -41,6 +45,8 @@ Turn on **3D Paint**, choose a Base Color binding and drag on the model. **Surfa
 To restrict writes, choose **Selected faces** or **Selected UV islands**, then use **Pick mask regions** to toggle the regions on the model. Turn off region picking before painting. Shared images require confirmation, or you can use **Copy for this binding** in the texture editor. Use **Frozen pose** and **Time** to inspect and paint a specific frame of a skinned mesh. **Create paint atlas** unwraps eligible FBX meshes that have no UVs and gives them a blank Base Color map.
 
 Open **Texture editor** and choose a material map. Use **Edit alpha** on Base Color, or choose the Roughness, Metallic, or AO channel on a supported data map. The 2D view has Brush, Clone Stamp, Eyedropper, Pixel Brush and a rectangular mask. Set the stamp source with `Alt` + click. Use **Resize texture** for an undoable resize with nearest or bilinear sampling. **Focus UVs** frames the current material's sampling region. Use **Export PNG** to download the image at its working dimensions. 2D and 3D edits share Undo and Redo.
+
+Choose **Face mask** or **UV island mask** and click within the UV overlay. Shift-click adds or removes regions. Switch to Brush, Pixel Brush or Clone Stamp, or click **Fill selection**. Writes are clipped to the selected texels. The stamp can sample beyond the mask. Overlapping UVs still share pixel data.
 
 Open **Mesh Edit** and choose an object. Click a vertex, edge or face in the viewport, use Shift-click to extend the selection, or enter element IDs. Move, Rotate and Scale support axis handles, numeric values and a pivot. Use **Preview** to inspect an edit, then **Apply** or Enter. Press Esc to cancel. Use the ordered vertex selection for **Create Face**. **Separate** creates another object with the selected faces and their existing material bindings.
 

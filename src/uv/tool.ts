@@ -173,7 +173,6 @@ export class UvTool {
     if (context && node instanceof Mesh) {
       this.#mesh = node;
       this.#surface = uvSurface(context.adapter, context.object);
-      if (old?.adapter !== context.adapter) ui<HTMLSelectElement>('source').value = 'working';
       const targets = context.catalog.targets(context.state).filter(item => item.binding.object === context.object);
       const materials = Array.isArray(node.material) ? node.material : [node.material];
       ui<HTMLSelectElement>('material').replaceChildren(new Option('All faces', ''),

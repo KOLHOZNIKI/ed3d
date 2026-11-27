@@ -382,6 +382,66 @@ static ufbx_vec3 posed_point(const ufbx_scene *scene, uint32_t mesh_id, size_t i
     return (ufbx_vec3){ .x = point.x * meters, .y = point.y * meters, .z = point.z * meters };
 }
 
+static bool check_clip_extrema;
+
+typedef struct { double *times; size_t count, capacity; } time_list;
+
+static void add_time(time_list *list, double time, const ufbx_anim_stack *stack)
+{
+    if (time < stack->time_begin || time > stack->time_end) return;
+    if (list->count == list->capacity) {
+        list->capacity = list->capacity ? list->capacity * 2 : 128;
+        double *times = realloc(list->times, list->capacity * sizeof(double));
+        if (!times) { fputs("Could not allocate clip sample times.\n", stderr); exit(1); }
+        list->times = times;
+    }
+    list->times[list->count++] = (time - stack->time_begin) / (stack->time_end - stack->time_begin);
+}
+
+static void collect_extrema(time_list *list, const ufbx_anim_stack *stack)
+{
+    if (stack->time_end <= stack->time_begin) return;
+    for (size_t l = 0; l < stack->layers.count; l++) {
+        const ufbx_anim_value_list values = stack->layers.data[l]->anim_values;
+        for (size_t v = 0; v < values.count; v++) for (size_t axis = 0; axis < 3; axis++) {
+            const ufbx_anim_curve *curve = values.data[v]->curves[axis];
+            if (!curve) continue;
+            const ufbx_keyframe_list keys = curve->keyframes;
+            for (size_t k = 0; k < keys.count; k++) {
+                const ufbx_keyframe a = keys.data[k];
+                if (k == 0 || k + 1 == keys.count || (a.value - keys.data[k-1].value) * (keys.data[k+1].value - a.value) <= 0)
+                    add_time(list, a.time, stack);
+                if (a.interpolation != UFBX_INTERPOLATION_CUBIC || k + 1 == keys.count) continue;
+                const ufbx_keyframe b = keys.data[k+1];
+                const double p = a.right.dy, q = b.value - b.left.dy - (a.value + a.right.dy), r = b.left.dy;
+                const double A = p - 2.0 * q + r, B = 2.0 * (q - p), C = p;
+                double roots[2] = { -1, -1 };
+                if (fabs(A) < 1e-12) { if (fabs(B) > 1e-12) roots[0] = -C / B; }
+                else {
+                    const double discriminant = B * B - 4.0 * A * C;
+                    if (discriminant >= 0) {
+                        roots[0] = (-B - sqrt(discriminant)) / (2.0 * A);
+                        roots[1] = (-B + sqrt(discriminant)) / (2.0 * A);
+                    }
+                }
+                for (size_t i = 0; i < 2; i++) {
+                    const double t = roots[i], s = 1.0 - t;
+                    if (t <= 0 || t >= 1) continue;
+                    const double time = s*s*s*a.time + 3.0*s*s*t*(a.time + a.right.dx) +
+                        3.0*s*t*t*(b.time - b.left.dx) + t*t*t*b.time;
+                    add_time(list, time, stack);
+                }
+            }
+        }
+    }
+}
+
+static int by_time(const void *p, const void *q)
+{
+    const double a = *(const double *)p, b = *(const double *)q;
+    return (a > b) - (a < b);
+}
+
 static bool compare_clips(const ufbx_scene *original, const ufbx_scene *exported,
                           const ufbx_mesh *mesh, const ufbx_mesh *target_mesh)
 {
@@ -398,7 +458,8 @@ static bool compare_clips(const ufbx_scene *original, const ufbx_scene *exported
     const double tolerance = fmax(1e-6, 1e-4 * original->settings.unit_meters * point_distance(min, max));
     bool names_match = original->anim_stacks.count == exported->anim_stacks.count;
     double max_start_error = 0, max_duration_error = 0, max_error = 0, source_deformation = 0;
-    size_t samples = 0;
+    size_t samples = 0, extrema = 0;
+    double extrema_error = 0;
     for (size_t i = 0; i < original->anim_stacks.count; i++) {
         const ufbx_anim_stack *a = original->anim_stacks.data[i], *b = NULL;
         for (size_t j = 0; j < exported->anim_stacks.count; j++) {
@@ -429,12 +490,35 @@ static bool compare_clips(const ufbx_scene *original, const ufbx_scene *exported
             ufbx_free_scene(left);
         }
         ufbx_free_scene(first);
+        if (check_clip_extrema) {
+            time_list list = { 0 };
+            collect_extrema(&list, a);
+            collect_extrema(&list, b);
+            if (list.count) qsort(list.times, list.count, sizeof(double), by_time);
+            double previous = -1;
+            for (size_t k = 0; k < list.count; k++) {
+                const double t = list.times[k];
+                if (fabs(t - previous) < 1e-8) continue;
+                previous = t;
+                ufbx_scene *left = evaluate(original, a, a->time_begin + duration * t);
+                ufbx_scene *right = evaluate(exported, b, b->time_begin + target_duration * t);
+                for (size_t vertex = 0; vertex < mesh->num_vertices; vertex++) {
+                    extrema_error = fmax(extrema_error, point_distance(posed_point(left, mesh->typed_id, vertex),
+                        posed_point(right, target_mesh->typed_id, vertex)));
+                }
+                extrema++;
+                ufbx_free_scene(right);
+                ufbx_free_scene(left);
+            }
+            free(list.times);
+        }
     }
     printf(",\"animation\":{\"sameNames\":%s,\"samples\":%zu,\"maxStartErrorSeconds\":%.9g,"
            "\"maxDurationErrorSeconds\":%.9g,\"maxDeformationErrorMeters\":%.9g,"
-           "\"sourceShapeChangeMeters\":%.9g,\"deformationToleranceMeters\":%.9g}",
-           names_match ? "true" : "false", samples, max_start_error, max_duration_error, max_error, source_deformation, tolerance);
-    return names_match && max_start_error <= 1e-5 && max_duration_error <= 1e-5 && max_error <= tolerance && source_deformation > tolerance;
+           "\"sourceShapeChangeMeters\":%.9g,\"deformationToleranceMeters\":%.9g,\"extremaSamples\":%zu,\"maxExtremaErrorMeters\":%.9g}",
+           names_match ? "true" : "false", samples, max_start_error, max_duration_error, max_error, source_deformation, tolerance, extrema, extrema_error);
+    return names_match && max_start_error <= 1e-5 && max_duration_error <= 1e-5 && max_error <= tolerance && source_deformation > tolerance &&
+        (!check_clip_extrema || (extrema > 0 && extrema_error <= tolerance));
 }
 
 static const ufbx_mesh *find_mesh(const ufbx_scene *scene, const char *name)
@@ -908,12 +992,13 @@ int main(int argc, char **argv)
         return matches ? 0 : 1;
     }
     const bool selected = argc == 4 && strcmp(argv[3], "--selected-skin") == 0;
+    check_clip_extrema = argc == 4 && strcmp(argv[3], "--clip-extrema") == 0;
     const bool shared = argc == 4 && (selected || strcmp(argv[3], "--shared-skin") == 0);
     const bool rig = argc == 4 && (!strcmp(argv[3], "--rig-moved") || !strcmp(argv[3], "--rig-renamed") || !strcmp(argv[3], "--rig-deleted"));
     const bool weight = argc == 4 && (!strcmp(argv[3], "--weight-stroke") || !strcmp(argv[3], "--weight-wide"));
     const bool stitch = argc == 4 && strcmp(argv[3], "--uv-stitch") == 0;
-    if (argc != 3 && argc != 5 && !shared && !rig && !weight && !stitch) {
-        fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx [--shared-skin | --selected-skin | --rig-moved | --rig-renamed | --rig-deleted | --weight-stroke | --weight-wide | --uv-stitch | control-point offset-y | --seams offset-y | --atlas source-corners.bin | --baked source-corners.bin | --smooth center | --grid center]\n");
+    if (argc != 3 && argc != 5 && !shared && !rig && !weight && !stitch && !check_clip_extrema) {
+        fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx [--shared-skin | --selected-skin | --clip-extrema | --rig-moved | --rig-renamed | --rig-deleted | --weight-stroke | --weight-wide | --uv-stitch | control-point offset-y | --seams offset-y | --atlas source-corners.bin | --baked source-corners.bin | --smooth center | --grid center]\n");
         return 2;
     }
     const bool baked = argc == 5 && strcmp(argv[3], "--baked") == 0;

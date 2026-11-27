@@ -260,6 +260,73 @@ try {
   assert.match(await field('project-status').textContent(), new RegExp(`Revision ${manifest.revision}\\b`));
   report.resizeAndDurableCheckpoint = true;
 
+  await push(asset, /6 triangles/);
+  await tree('Front').click();
+  if (await field('texture-panel').isHidden()) await click('toggle-texture');
+  await selectMap(/Front.*Base Color/);
+  const texel = async (x, y, modifiers = []) => {
+    const box = await field('texture-picture').boundingBox();
+    for (const modifier of modifiers) await page.keyboard.down(modifier);
+    await page.mouse.click(box.x + box.width * (x + .5) / 8, box.y + box.height * (y + .5) / 8, { delay: 20 });
+    for (const modifier of modifiers) await page.keyboard.up(modifier);
+    await ready();
+  };
+  async function texture(name) { return decode(await download('texture-export', name)); }
+  await choose('texture-tool', 'select-face');
+  await texel(1, 1);
+  assert.match(await field('texture-info').textContent(), /1 selected faces/);
+  await field('texture-color').fill('#ed2514');
+  await click('texture-fill'); await ready();
+  const face = await texture('face-mask.png');
+  assert.deepEqual(colors(face, 1, 1), [237,37,20,240]);
+  assert.deepEqual(colors(face, 6, 6), [91,82,73,240]);
+  await choose('texture-tool', 'stamp');
+  await field('texture-size').fill('1');
+  await texel(6, 6, ['Alt']); await texel(2, 2);
+  assert.deepEqual(colors(await texture('masked-clone.png'), 2, 2), [91,82,73,240], 'Stamp reads outside its write mask.');
+  await click('undo-stroke'); await ready();
+  assert.deepEqual(colors(await texture('undo-mask.png'), 2, 2), [237,37,20,240]);
+
+  await field('view-comparison').locator('summary').click();
+  await click('view-capture'); await ready();
+  const firstPin = await field('view-reference').inputValue();
+  await choose('texture-tool', 'select-island');
+  await texel(6, 6);
+  assert.match(await field('texture-info').textContent(), /1 selected UV islands/);
+  await field('texture-color').fill('#32bf45');
+  await click('texture-fill'); await ready();
+  const island = await texture('island-mask.png');
+  assert.deepEqual(colors(island, 1, 1), [50,191,69,240]);
+  assert.deepEqual(colors(island, 6, 6), [50,191,69,240]);
+  await click('view-capture'); await ready();
+  const secondPin = await field('view-reference').inputValue();
+  assert.notEqual(firstPin, secondPin);
+  const pinnedPath = join(output, 'pinned.assetfixer');
+  const pinned = unzipSync(await download('save-project', 'pinned.assetfixer'));
+  const pinManifest = JSON.parse(strFromU8(pinned['manifest.json']));
+  assert.equal(pinManifest.schemaVersion, 14);
+  assert.deepEqual(pinManifest.snapshots.map(snapshot => snapshot.id), [firstPin, secondPin]);
+  const pixelsAtPin = pin => decode(pinned[`blobs/${pinManifest.snapshots.find(snapshot => snapshot.id === pin).working.textures[0].hash}`]);
+  assert.deepEqual(colors(pixelsAtPin(firstPin), 6, 6), [91,82,73,240]);
+  assert.deepEqual(colors(pixelsAtPin(secondPin), 6, 6), [50,191,69,240]);
+  assert.equal(pinManifest.snapshots[1].working.textures[0].hash, pinManifest.working.textures[0].hash);
+  assert.equal(pinManifest.settings.operations['texture-color'], '#32bf45');
+  assert.equal(pinManifest.settings.operations['texture-tool'], 'select-island');
+  await context.setOffline(true);
+  await push(pinnedPath, /Project restored/);
+  assert.equal(await field('texture-tool').inputValue(), 'select-island');
+  if (await field('view-comparison').getAttribute('open') === null) await field('view-comparison').locator('summary').click();
+  await choose('view-reference', firstPin);
+  await choose('view-compare', 'split'); await ready();
+  assert.match(await field('view-reference-label').textContent(), new RegExp(`revision ${pinManifest.snapshots[0].revision}\\b`));
+  await choose('view-compare', 'working');
+  await click('view-remove-snapshot'); await ready();
+  assert.equal(await field('view-reference').locator(`option[value="${firstPin}"]`).count(), 0);
+  await click('undo-stroke'); await ready();
+  assert.equal(await field('view-reference').locator(`option[value="${firstPin}"]`).count(), 1);
+  await context.setOffline(false);
+  report.faceIslandMasksAndOfflinePins = true;
+
   await click('shortcuts-open');
   const move = page.getByRole('textbox', { name: 'Move shortcut' });
   await move.press('G');
@@ -279,6 +346,9 @@ try {
   await choose('object-selection', { label: meshes[0] });
   assert.equal(await field('object-apply-transform').isDisabled(), true);
   const skin = unzipSync(await download('export-selection', 'skinned-selection.zip'));
+  assert.equal(await field('job-progress').getAttribute('data-status'), 'completed');
+  assert.match(await field('job-progress').getAttribute('data-job-id'), /^[0-9a-f-]{36}$/);
+  assert.match(await field('job-progress').getAttribute('data-input-hashes'), /^[0-9a-f]{64}/);
   const skinManifest = JSON.parse(strFromU8(skin['manifest.json']));
   assert.equal(skinManifest.meshes.meshes, 1);
   assert.equal(skinManifest.meshes.bones, 3);
@@ -289,6 +359,30 @@ try {
   const full = unzipSync(await readFile(join(output, 'skinned-full.zip')));
   await writeFile(join(output, 'full.fbx'), full[Object.keys(full).find(path => /\.fbx$/i.test(path))]);
   report.fbxSelectedSkin = skinManifest.meshes;
+
+  for (const [name, input, modelStatus] of [
+    ['plate', 'ceramic plate 3d model.zip', /9[,\s]?138 triangles/],
+    ['character', 'tripo_convert_8b04a473-804b-41a0-ab47-e84ae233629b.zip', /bones/],
+  ]) {
+    const path = `D:/downloads/Tripo/${input}`;
+    await push(path, modelStatus);
+    await choose('fbx-texture-files', 'png');
+    const bundle = unzipSync(await download('export', `${name}-external-png.zip`));
+    const manifest = JSON.parse(strFromU8(bundle['manifest.json']));
+    assert.equal(manifest.textureFiles, 'png');
+    assert.ok(manifest.textureConversions.length);
+    assert.equal(Object.keys(bundle).filter(name => /\.jpe?g$/i.test(name)).length, 0);
+    for (const map of [...manifest.textures, ...manifest.unassignedTextures]) {
+      assert.match(map.file, /\.png$/i);
+      assert.deepEqual([...bundle[map.file].subarray(0, 8)], [137,80,78,71,13,10,26,10]);
+    }
+    await push(join(output, `${name}-external-png.zip`), modelStatus);
+  }
+  report.fbxExternalPngReimport = true;
+
+  await push(resolve('test-results/e00/ufbx/data/maya_kenney_character_7700_binary.fbx'), /45 bones · 1 clips/);
+  const authored = unzipSync(await download('export', 'authored-current.zip'));
+  await writeFile(join(output, 'authored-current.fbx'), authored[Object.keys(authored).find(path => /\.fbx$/i.test(path))]);
 
   await context.setOffline(true);
   await push('D:/downloads/Tripo/man character 3d model.glb', /67 bones/);

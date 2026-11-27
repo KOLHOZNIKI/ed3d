@@ -95,7 +95,7 @@ try {
   assert.match(await field('view-reference-label').textContent(), /Snapshot · revision 0/);
   await click('object-visibility');
   await ready();
-  assert.match(await field('project-status').textContent(), /Revision 1/i);
+  assert.match(await field('project-status').textContent(), /Revision 2/i);
   await viewport.screenshot({ path: join(output, 'compare.png') });
   await choose('view-display', 'wire');
   const [exported] = await Promise.all([page.waitForEvent('download'), click('export')]);

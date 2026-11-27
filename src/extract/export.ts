@@ -37,7 +37,8 @@ export function trimmedMesh(source: Mesh, format: Model['format'], extracted = t
   return mesh;
 }
 
-export async function exportExtract(model: Model, adapter: ModelAdapter, catalog: TextureCatalog, state: WorkingState, object: string, report?: ExportReport) {
+export async function exportExtract(model: Model, adapter: ModelAdapter, catalog: TextureCatalog, state: WorkingState, object: string,
+  report?: ExportReport, pngTextures = false) {
   const asset = state.extracts?.[object], source = adapter.objects.get(object);
   if (!asset || !(source instanceof Mesh)) throw new Error('Select an independent asset to export.');
   adapter.mesh.validateExtract(object);
@@ -86,7 +87,7 @@ export async function exportExtract(model: Model, adapter: ModelAdapter, catalog
     }
     const result = await exportAsset({ ...model, scene, name, images, stats: sceneStats(scene, 'FBX'), deformation: sourceDeformation(scene),
       uvAtlas: undefined, textureBake: undefined, texturePaint: undefined }, bound.fbx,
-    { layout: asset.layout, originAtZero: asset.zeroOrigin, pivot: pivot.toArray(), auxiliary }, undefined, report);
+    { layout: asset.layout, originAtZero: asset.zeroOrigin, pivot: pivot.toArray(), auxiliary }, undefined, report, pngTextures);
     return { ...result, pivot: pivot.toArray(), rebased: asset.zeroOrigin };
   } finally {
     if (extracted && extracted.geometry !== source.geometry) extracted.geometry.dispose();
@@ -96,12 +97,12 @@ export async function exportExtract(model: Model, adapter: ModelAdapter, catalog
 }
 
 export async function exportBatch(model: Model, adapter: ModelAdapter, catalog: TextureCatalog, state: WorkingState,
-  objects: readonly string[], signal?: AbortSignal, report?: ExportReport) {
+  objects: readonly string[], signal?: AbortSignal, report?: ExportReport, pngTextures = false) {
   if (!objects.length) throw new Error('Choose at least one independent asset for batch export.');
   const files: Files = new Map(), assets = [];
   for (const [i, object] of objects.entries()) {
     signal?.throwIfAborted();
-    const result = await exportExtract(model, adapter, catalog, state, object, report && extractedReport(report, [object], 'asset'));
+    const result = await exportExtract(model, adapter, catalog, state, object, report && extractedReport(report, [object], 'asset'), pngTextures);
     const path = `${String(i + 1).padStart(2, '0')}/${result.name}`;
     files.set(path, result.bytes);
     assets.push({ object, name: state.objects[object]?.name, ...state.extracts?.[object] && {

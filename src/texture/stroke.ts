@@ -12,6 +12,7 @@ export interface BrushSettings {
   alpha: boolean;
   channel?: 0 | 1 | 2 | 'rgb';
   region?: Region;
+  allows?: (x: number, y: number) => boolean;
   sourceOffset?: Point;
 }
 
@@ -113,7 +114,7 @@ export class TextureStroke {
   }
 
   #write(x: number, y: number, strength: number, changed: Set<number>) {
-    if (strength <= 0) return;
+    if (strength <= 0 || this.settings.allows && !this.settings.allows(x, y)) return;
     const { sourceOffset, alpha, channel: scalar, color } = this.settings;
     let replacement = color;
     if (sourceOffset) {

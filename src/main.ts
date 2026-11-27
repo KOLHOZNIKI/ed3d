@@ -10,7 +10,7 @@ import { TextureAssignmentError } from './e00/round-trip';
 import type { OriginalFile, TextureAssignments } from './project/document';
 import { autosaveDelay, latestCheckpoint, saveCheckpoint } from './project/autosave';
 import { AssetDocument, defaultHistoryBudget } from './project/document';
-import { atlasColor, type WorkingState, workingBuffers } from './project/state';
+import { atlasColor, maxPinnedSnapshots, type PinnedSnapshot, type WorkingState, workingBuffers } from './project/state';
 import { elementId } from './project/topology';
 import { prepareAppearance, Viewer, type CompareMode, type DisplayMode } from './project/viewer';
 import { disposeModel } from './project/resources';
@@ -39,6 +39,8 @@ import { exportReport, extractedReport, reportText, scanAsset } from './diagnost
 import { offlineSetup } from './project/offline';
 import { WorkspaceLayout, type LayoutChoice } from './project/workspace';
 import { SceneHierarchy } from './project/hierarchy';
+import { settingIds, type OperationSettings } from './project/operation-settings';
+import { identifyWorkingInputs, startJob } from './project/job';
 import { transformObjects, validateObject, type TransformSpec } from './project/object-transform';
 import { exportSelection, selectedMeshes } from './project/export-selection';
 import { drawSelection, projectedSelection, selectionPath, SelectionArea, type PickShape } from './project/selection';
@@ -52,6 +54,13 @@ function element<T extends HTMLElement>(id: string): T {
   return node as T;
 }
 
+const operationFields = settingIds.map(id => {
+  const input = element<HTMLInputElement | HTMLSelectElement>(id);
+  const checkbox = input instanceof HTMLInputElement && input.type === 'checkbox';
+  const read = () => checkbox ? (input as HTMLInputElement).checked : input.value;
+  return { id, input, checkbox, read, defaultValue: read() };
+});
+
 const canvas = element<HTMLCanvasElement>('viewport');
 const status = element('status'), projectStatus = element('project-status'), historyStatus = element('history-status');
 const sources = element<HTMLInputElement>('sources');
@@ -62,6 +71,7 @@ const assignmentCancel = element<HTMLButtonElement>('texture-assignment-cancel')
 const close = element<HTMLButtonElement>('close-model'), save = element<HTMLButtonElement>('save-project');
 const saveAs = element<HTMLButtonElement>('save-copy'), exportButton = element<HTMLButtonElement>('export');
 const exportSelected = element<HTMLButtonElement>('export-selection');
+const fbxTextureFiles = element<HTMLSelectElement>('fbx-texture-files');
 const unwrap = element<HTMLButtonElement>('unwrap'), rebake = element<HTMLButtonElement>('rebake');
 const paintButton = element<HTMLButtonElement>('paint');
 const objectButton = element<HTMLButtonElement>('object-mode');
@@ -75,6 +85,7 @@ const diagnosticButton = element<HTMLButtonElement>('diag-mode');
 const paintUnwrap = element<HTMLButtonElement>('paint-unwrap');
 const undo = element<HTMLButtonElement>('undo-stroke'), redo = element<HTMLButtonElement>('redo');
 const cancel = element<HTMLButtonElement>('cancel-job');
+const jobProgress = element<HTMLProgressElement>('job-progress');
 const autosaveStatus = element('autosave-status'), restore = element<HTMLButtonElement>('restore-autosave');
 const recovery = element('recovery');
 const objects = element<HTMLSelectElement>('object-selection'), objectLabel = element<HTMLInputElement>('object-label');
@@ -87,6 +98,7 @@ const viewBounds = element<HTMLInputElement>('view-bounds'), viewExposure = elem
 const viewBackground = element<HTMLInputElement>('view-background');
 const viewReference = element<HTMLSelectElement>('view-reference'), viewCompare = element<HTMLSelectElement>('view-compare');
 const viewCapture = element<HTMLButtonElement>('view-capture');
+const viewRemoveSnapshot = element<HTMLButtonElement>('view-remove-snapshot');
 const frameSelection = element<HTMLButtonElement>('frame-selection');
 const frameAll = element<HTMLButtonElement>('frame-all');
 const pickShape = element<HTMLSelectElement>('view-selection-mode');
@@ -131,8 +143,7 @@ interface Workspace {
 }
 
 let current: Workspace | undefined;
-let comparisonSnapshot: ProjectData | undefined;
-let comparison: { model: Model; adapter?: ModelAdapter; appearance?: Appearance; snapshot?: ProjectData } | undefined;
+let comparison: { model: Model; adapter?: ModelAdapter; appearance?: Appearance; snapshot?: PinnedSnapshot } | undefined;
 let displayMode: DisplayMode = 'textured';
 let selected = '';
 let selectedIds = new Set<string>();
@@ -282,8 +293,9 @@ const extractTool = new ExtractTool(viewer, canvas, {
       const report = extractedReport(exportReport(adapter, model, document, assetPanel.findings), ids, batch ? 'batch' : 'asset');
       const problem = report.findings.find(finding => finding.severity === 'Error');
       if (problem) throw new Error(problem.message);
-      const output = batch ? await exportBatch(model, adapter, textures, document.state, ids, signal, report)
-        : await exportExtract(model, adapter, textures, document.state, ids[0], report);
+      const png = fbxTextureFiles.value === 'png';
+      const output = batch ? await exportBatch(model, adapter, textures, document.state, ids, signal, report, png)
+        : await exportExtract(model, adapter, textures, document.state, ids[0], report, png);
       signal?.throwIfAborted();
       assetPanel.exported(report);
       download(new Blob([output.bytes], { type: output.name.endsWith('.glb') ? 'model/gltf-binary' : 'application/zip' }), output.name);
@@ -472,7 +484,14 @@ function controls() {
   }
   viewDisplay.value = weighting ? 'weights' : displayMode;
   viewDisplay.querySelector<HTMLOptionElement>('option[value=weights]')!.disabled = !availableWeights;
-  viewReference.querySelector<HTMLOptionElement>('option[value=snapshot]')!.disabled = !comparisonSnapshot;
+  const snapshots = document?.state.snapshots ?? [];
+  const reference = viewReference.value;
+  if (viewReference.options.length !== snapshots.length + 1 || snapshots.some((snapshot, i) => viewReference.options[i + 1]?.value !== snapshot.id)) {
+    viewReference.replaceChildren(new Option('Original import', 'original'), ...snapshots.map(snapshot => new Option(`Snapshot · revision ${snapshot.revision}`, snapshot.id)));
+    if (snapshots.some(snapshot => snapshot.id === reference)) viewReference.value = reference;
+  }
+  viewCapture.disabled ||= snapshots.length >= maxPinnedSnapshots;
+  viewRemoveSnapshot.disabled = locked || reference === 'original' || !snapshots.some(snapshot => snapshot.id === reference);
   undo.disabled = locked || !document?.undoDepth;
   redo.disabled = locked || !document?.redoDepth;
   restore.disabled = locked;
@@ -495,6 +514,8 @@ function controls() {
   viewer.setPainting(painting || meshEditing || repairing || uvEditing || extracting || rigging || weighting,
     busy || !!stroke || weightsStroke !== undefined || meshTool.dragging || rigTool.dragging);
   exportButton.textContent = model?.format === 'glb' ? 'Export GLB' : 'Export FBX ZIP';
+  element('fbx-texture-files-label').hidden = !fbx;
+  fbxTextureFiles.disabled = locked || !fbx;
   exportSelected.disabled = locked || !selectedIds.size;
   const transformFields = element<HTMLFieldSetElement>('object-transform-tools');
   transformFields.hidden = !document || !objectMode();
@@ -641,7 +662,8 @@ function syncTextureEditor() {
   if (!targets.some(target => target.binding.id === textureBinding && (!selected || target.binding.object === selected))) {
     textureBinding = targets.find(target => target.binding.object === selected)?.binding.id ?? paintBinding;
   }
-  editor.setSession({ targets, atlas: work.model.format === 'fbx' ? work.model.uvAtlas?.geometry : undefined,
+  const atlas = work.model.format === 'fbx' ? work.model.uvAtlas : undefined;
+  editor.setSession({ targets, adapter: work.adapter, atlas: atlas?.geometry, atlasSeams: atlas?.seams,
     load: target => work.textures.load(target, state) }, textureBinding);
 }
 
@@ -742,15 +764,37 @@ async function locked(action: (signal?: AbortSignal) => Promise<void>, message?:
   busy = true;
   if (cancellable) abort = new AbortController();
   const signal = abort?.signal;
+  const document = current?.document;
+  const job = signal && document ? startJob(document) : undefined;
   if (message) status.textContent = message;
   controls();
+  const showJob = () => {
+    if (!job) return;
+    jobProgress.hidden = job.status !== 'preparing' && job.status !== 'running';
+    jobProgress.dataset.jobId = job.id;
+    jobProgress.dataset.baseRevision = String(job.baseRevision);
+    jobProgress.dataset.status = job.status;
+    jobProgress.dataset.inputHashes = job.inputHashes.join(' ');
+    jobProgress.setAttribute('aria-label', job.status === 'preparing' ? 'Identifying operation inputs' : message || 'Processing asset');
+  };
   try {
+    if (job) {
+      showJob();
+      await identifyWorkingInputs(job, document!.state, signal!);
+      signal!.throwIfAborted();
+      document!.assertRevision(job.baseRevision);
+      job.status = 'running';
+      showJob();
+    }
     await action(signal);
+    if (job) job.status = 'completed';
     return true;
   } catch (error) {
+    if (job) job.status = signal?.aborted ? 'cancelled' : 'failed';
     status.textContent = signal?.aborted ? 'Operation cancelled. The document is unchanged.' : errorMessage(error);
     return false;
   } finally {
+    showJob();
     abort = undefined;
     busy = false;
     controls();
@@ -767,7 +811,6 @@ function canReplace() {
 function closeWorkspace() {
   diagnosticTool.reset();
   releaseComparison();
-  comparisonSnapshot = undefined;
   viewCompare.value = 'working';
   viewReference.value = 'original';
   viewer.close();
@@ -803,6 +846,13 @@ function install(workspace: Workspace, appearance?: Appearance) {
   const layout = workspaceLayout.initialLayout();
   closeWorkspace();
   current = workspace;
+  for (const field of operationFields) {
+    const value = workspace.document.operations?.[field.id] ?? field.defaultValue;
+    if (field.checkbox) (field.input as HTMLInputElement).checked = typeof value === 'boolean' ? value : field.defaultValue === true;
+    else if (typeof value === 'string' && (!(field.input instanceof HTMLSelectElement) || [...field.input.options].some(option => option.value === value))) {
+      field.input.value = value;
+    } else field.input.value = String(field.defaultValue);
+  }
   workspace.adapter.applyVisibility(workspace.document.state);
   viewer.setPainting(false);
   viewer.install(workspace.model.scene, appearance);
@@ -824,9 +874,13 @@ async function makeWorkspace(model: Model, data?: ProjectData, originals = data?
       return entry.id !== source.id || entry.parent !== source.parent || entry.mesh !== source.mesh ||
         entry.name !== source.name || entry.visible !== source.visible || entry.transform.some((value, i) => value !== source.transform[i]);
     }))) throw new Error('The saved object hierarchy does not match the original assets.');
+    const { 'uv-source': _source, 'extract-copy': _copy, ...defaults } = current?.document.operations ?? {};
+    const operations = data ? data.operations : Object.keys(defaults).length ? defaults : undefined;
     const document = new AssetDocument<WorkingState>({ id: data?.id ?? crypto.randomUUID(), name: data?.name ?? model.name.slice(0, 160),
       revision: data?.revision ?? 0, originals, historyBudget: data?.historyBudget ?? defaultHistoryBudget,
-      scene: adapter.entries, topology: adapter.topology, textureAssignments, state: data?.state ?? { objects: {} } }, workingBuffers,
+      scene: adapter.entries, topology: adapter.topology, textureAssignments,
+      operations,
+      state: data?.state ?? { objects: {} } }, workingBuffers,
     async (document, snapshot) => {
       const { revision } = snapshot;
       try {
@@ -1033,7 +1087,7 @@ historyBudget.addEventListener('change', () => void (async () => {
 exportButton.addEventListener('click', () => saveModel());
 exportSelected.addEventListener('click', () => saveModel(new Set(selectedIds)));
 
-function saveModel(selection?: ReadonlySet<string>) { void locked(async () => {
+function saveModel(selection?: ReadonlySet<string>) { void locked(async signal => {
   const { model, adapter, document, textures } = current!;
   const selected = selection && selectedMeshes(adapter, selection);
   if (!selected || [...selected].some(mesh => mesh instanceof SkinnedMesh)) adapter.rig.assertExportable();
@@ -1066,8 +1120,10 @@ function saveModel(selection?: ReadonlySet<string>) { void locked(async () => {
       const transfers = Object.entries(state.uvBakes ?? {}).filter(([object]) => !scoped || scoped.objects.has(object))
         .map(([object, transfer]) => ({ object, bake: textures.workingBake(state, object, 0, transfer.bake) }));
       output = await exportAsset({ ...outputModel, name, auxiliaryEdits: bound.auxiliary,
-        stats: { ...outputModel.stats, clips: outputModel.scene.animations.length } }, bound.fbx, undefined, transfers.length ? transfers : undefined, report);
+        stats: { ...outputModel.stats, clips: outputModel.scene.animations.length } }, bound.fbx, undefined, transfers.length ? transfers : undefined,
+      report, fbxTextureFiles.value === 'png');
     }
+    signal?.throwIfAborted();
     if (glb) report.files.push(output.name);
     download(new Blob([output.bytes], { type: glb ? 'model/gltf-binary' : 'application/zip' }), output.name);
     assetPanel.exported(report);
@@ -1079,7 +1135,7 @@ function saveModel(selection?: ReadonlySet<string>) { void locked(async () => {
     model.scene.animations = animation;
     adapter.applyVisibility(document.state);
   }
-}, 'Preparing export…'); }
+}, 'Preparing export…', true); }
 
 function scheduleAutosave() {
   const document = current?.document;
@@ -1101,10 +1157,10 @@ function resumeAutosave() {
 async function writeAutosave() {
   if (!current || busy || stroke || textureGesture || writingCheckpoint) return;
   const { document } = current;
-  const revision = document.revision;
+  const { revision, operations } = document;
   autosaveDue = undefined;
   writingCheckpoint = true;
-  const isCurrent = () => current?.document === document && document.revision === revision;
+  const isCurrent = () => current?.document === document && document.revision === revision && document.operations === operations;
   try {
     const archive = await writeProject(document);
     if (!isCurrent()) return;
@@ -1260,7 +1316,7 @@ function navigate(direction: 'undo' | 'redo') {
     await applyWorking(work, work.document.revision, target.state, () => work.document.navigate(direction));
     if (direction === 'undo' && target.label === 'Brush stroke') status.textContent = 'Undid the last stroke.';
     else status.textContent = `${direction === 'undo' ? 'Undid' : 'Redid'} ${target.label}.`;
-  });
+  }).then(ok => { if (ok && viewer.comparing) showComparison(); });
 }
 undo.addEventListener('click', () => navigate('undo'));
 redo.addEventListener('click', () => navigate('redo'));
@@ -1388,11 +1444,13 @@ function showComparison() {
     releaseComparison();
     return;
   }
-  const snapshot = viewReference.value === 'snapshot' ? comparisonSnapshot : undefined;
+  const snapshot = work.document.state.snapshots?.find(item => item.id === viewReference.value);
   void locked(async () => {
     if (!comparison || comparison.snapshot !== snapshot) {
       const model = await importOriginals(work.document.originals, work.document.textureAssignments);
-      const copy = snapshot && await makeWorkspace(model, snapshot);
+      const copy = snapshot && await makeWorkspace(model, { id: work.document.id, name: work.document.name, scene: work.document.scene,
+        historyBudget: work.document.historyBudget, originals: work.document.originals, textureAssignments: work.document.textureAssignments,
+        revision: snapshot.revision, state: snapshot.state });
       if (copy) copy.workspace.adapter.applyVisibility(snapshot.state);
       releaseComparison();
       comparison = { model: copy ? copy.workspace.model : model, adapter: copy ? copy.workspace.adapter : undefined,
@@ -1410,15 +1468,30 @@ function showComparison() {
 }
 
 viewCompare.addEventListener('change', showComparison);
-viewReference.addEventListener('change', showComparison);
+viewReference.addEventListener('change', () => { controls(); showComparison(); });
 viewCapture.addEventListener('click', () => {
-  if (!current) return;
-  const { id, name, revision, originals, textureAssignments, scene, historyBudget, state } = current.document;
-  comparisonSnapshot = { id, name, revision, originals, textureAssignments, scene, historyBudget, state };
-  controls();
-  viewReference.value = 'snapshot';
-  if (viewer.comparing) showComparison();
-  else status.textContent = `Captured comparison snapshot at revision ${revision}.`;
+  const work = current;
+  if (!work) return;
+  const { revision, state } = work.document;
+  const { snapshots = [], ...captured } = state;
+  if (snapshots.length >= maxPinnedSnapshots) return;
+  const snapshot = { id: crypto.randomUUID(), revision, state: captured };
+  void locked(async () => {
+    await edit(work, revision, { ...state, snapshots: [...snapshots, snapshot] }, 'Pin snapshot', 'snapshots');
+    viewReference.value = snapshot.id;
+    status.textContent = `Pinned snapshot from revision ${revision}.`;
+  }).then(ok => { if (ok && viewer.comparing) showComparison(); });
+});
+
+viewRemoveSnapshot.addEventListener('click', () => {
+  const work = current, id = viewReference.value;
+  if (!work || id === 'original') return;
+  void locked(async () => {
+    const { revision, state } = work.document;
+    const snapshots = state.snapshots?.filter(snapshot => snapshot.id !== id);
+    await edit(work, revision, { ...state, snapshots }, 'Remove pinned snapshot', 'snapshots');
+    status.textContent = 'Removed the pinned snapshot.';
+  }).then(ok => { if (ok && viewer.comparing) showComparison(); });
 });
 
 window.addEventListener('keydown', event => {
@@ -1743,6 +1816,20 @@ canvas.addEventListener('pointerup', event => {
       textures: { ...state.textures, [target.key]: { image, paint } } }, 'Brush stroke', target.key, signal);
     status.textContent = `Painted ${texels.toLocaleString()} Base Color texels.`;
   }, 'Projecting the stroke onto visible faces…', true);
+});
+
+for (const field of operationFields) field.input.addEventListener('change', () => {
+  const document = current?.document;
+  if (!document || busy) return;
+  const value = field.read();
+  const settings: { -readonly [Key in keyof OperationSettings]: OperationSettings[Key] } = { ...document.operations };
+  if (value === (settings[field.id] ?? field.defaultValue)) return;
+  if (value === field.defaultValue) delete settings[field.id];
+  else settings[field.id] = value;
+  document.setOperations(settings);
+  historyCheckpoint = undefined;
+  scheduleAutosave();
+  controls();
 });
 
 controls();

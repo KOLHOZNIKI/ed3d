@@ -71,6 +71,7 @@
           <button id="redo" type="button" disabled>Redo</button>
           <button id="export" type="button" disabled>Export FBX ZIP</button>
           <button id="export-selection" type="button" disabled>Export selection</button>
+          <label id="fbx-texture-files-label" hidden>FBX maps <select id="fbx-texture-files"><option value="source">Source files</option><option value="png">PNG</option></select></label>
           <button id="export-original" type="button" disabled>Export Original</button>
         </div>
       </header>
@@ -189,9 +190,10 @@
                 <details id="view-comparison">
                   <summary>Compare</summary>
                   <div class="actions">
-                    <label>Reference <select id="view-reference"><option value="original">Original import</option><option value="snapshot" disabled>Captured snapshot</option></select></label>
+                    <label>Reference <select id="view-reference"><option value="original">Original import</option></select></label>
                     <label>View <select id="view-compare"><option value="working">Working</option><option value="reference">Reference</option><option value="split">Side by side</option></select></label>
-                    <button id="view-capture" type="button">Capture snapshot</button>
+                    <button id="view-capture" type="button">Pin snapshot</button>
+                    <button id="view-remove-snapshot" type="button" disabled>Remove snapshot</button>
                   </div>
                 </details>
             </fieldset>
@@ -291,7 +293,7 @@
                 <p id="texture-info"></p>
                 <div class="actions">
                   <label for="texture-tool">Tool</label>
-                  <select id="texture-tool"><option value="brush">Brush</option><option value="stamp">Clone Stamp</option><option value="eyedropper">Eyedropper</option><option value="pixel">Pixel Brush</option><option value="select">Rectangle</option><option value="pan">Pan</option></select>
+                  <select id="texture-tool"><option value="brush">Brush</option><option value="stamp">Clone Stamp</option><option value="eyedropper">Eyedropper</option><option value="pixel">Pixel Brush</option><option value="select">Rectangle</option><option value="select-face">Face mask</option><option value="select-island">UV island mask</option><option value="pan">Pan</option></select>
                   <label for="texture-color" id="texture-color-label">Color</label><input id="texture-color" type="color" value="#15e4f2" />
                   <span id="texture-scalar-tool" class="actions" hidden>
                     <label>Channel <select id="texture-channel"></select></label>
@@ -809,6 +811,7 @@
       </div>
       <footer class="statusbar" aria-label="Project status">
         <p id="status" role="status">Select a model to inspect it locally.</p>
+        <progress id="job-progress" aria-label="Asset operation" hidden></progress>
         <button id="cancel-job" type="button" hidden>Cancel operation</button>
         <p id="selection-details"></p>
         <p id="project-status">No open project</p>

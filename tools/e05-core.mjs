@@ -21,6 +21,13 @@ try {
     triangle.map((_, i) => [(i + 1) % 3, i, i + 3, 3 + (i + 1) % 3]));
   assert.equal(applyMeshEdit(frame, { type: 'create', object: 'object-0', vertices: [0, 1, 2], material: 0, project: false })
     .mesh.faces.length, 4);
+  const split = applyMeshEdit(frame, { type: 'splitEdge', object: 'object-0', edge: '0/1', fraction: .25 });
+  assert.deepEqual(split.topology.vertexSources.get(6), [[0, .75], [1, .25]]);
+  assert.deepEqual(split.topology.edges.get('0/1'), ['0/6', '1/6']);
+  const aperture = boundaryContours(frame).find(contour => contour.id === 'B0');
+  const fan = applyMeshEdit(frame, { type: 'repair', object: 'object-0', patches: [{ id: aperture.id, method: 'fan', tolerance: .025, project: false }] });
+  assert.equal(fan.topology.vertexSources.get(6).length, 3);
+  assert.equal(fan.topology.addedFaces.length, 3);
 
   const touching = geometry([...inner, ...inner.slice(0, 2), [0, -2, 0]], [[0, 1, 2, 3], [5, 4, 6]]);
   assert.ok(boundaryContours(touching).every(contour => contour.kind === 'ambiguous' && /coincides/.test(contour.reason)));

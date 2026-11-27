@@ -1,4 +1,5 @@
 import type { Topology } from './topology';
+import type { OperationSettings } from './operation-settings';
 
 export const defaultHistoryBudget = 256 * 1024 * 1024;
 const minBudget = 1024 * 1024;
@@ -44,6 +45,8 @@ export class AssetDocument<T extends object> {
   #historyBudget: number;
   #savedBudget: number;
   #revision: number;
+  #operations?: OperationSettings;
+  #savedOperations?: OperationSettings;
   #state: T;
   #saved?: WeakRef<T>;
   #undo: Version<T>[] = [];
@@ -52,7 +55,8 @@ export class AssetDocument<T extends object> {
   #retained: (state: T) => Iterable<ArrayBuffer>;
 
   constructor(data: { id: string; name: string; revision: number; originals: readonly OriginalFile[]; scene: readonly SceneEntry[];
-    topology: ReadonlyMap<string, Topology>; historyBudget: number; state: T; textureAssignments?: TextureAssignments },
+    topology: ReadonlyMap<string, Topology>; historyBudget: number; state: T; textureAssignments?: TextureAssignments;
+    operations?: OperationSettings },
     retained: (state: T) => Iterable<ArrayBuffer>,
     readonly checkpoint?: (document: AssetDocument<T>, snapshot: HistoryCheckpoint<T>) => Promise<void>) {
     this.id = data.id;
@@ -64,6 +68,7 @@ export class AssetDocument<T extends object> {
     this.#historyBudget = this.#savedBudget = data.historyBudget;
     this.#revision = data.revision;
     this.#state = data.state;
+    this.#operations = data.operations;
     this.markSaved();
     this.#retained = retained;
   }
@@ -71,7 +76,8 @@ export class AssetDocument<T extends object> {
   get revision() { return this.#revision; }
   get state() { return this.#state; }
   get historyBudget() { return this.#historyBudget; }
-  get dirty() { return this.#state !== this.#saved?.deref() || this.#historyBudget !== this.#savedBudget; }
+  get operations() { return this.#operations; }
+  get dirty() { return this.#state !== this.#saved?.deref() || this.#historyBudget !== this.#savedBudget || this.#operations !== this.#savedOperations; }
   get undoDepth() { return this.#undo.length; }
   get redoDepth() { return this.#redo.length; }
   get undoTarget() { return this.#undo.at(-1); }
@@ -99,6 +105,13 @@ export class AssetDocument<T extends object> {
   markSaved() {
     this.#saved = new WeakRef(this.#state);
     this.#savedBudget = this.#historyBudget;
+    this.#savedOperations = this.#operations;
+  }
+
+  setOperations(settings: OperationSettings) {
+    const keys = Object.keys(settings) as (keyof OperationSettings)[];
+    this.#operations = keys.length === Object.keys(this.#savedOperations ?? {}).length &&
+      keys.every(key => settings[key] === this.#savedOperations?.[key]) ? this.#savedOperations : keys.length ? settings : undefined;
   }
   markRecovered() { this.#saved = undefined; }
 

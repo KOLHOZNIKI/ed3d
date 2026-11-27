@@ -8,11 +8,51 @@ import { validatePatch } from '../repair/intersections';
 import { applyUvLayout } from '../uv/mesh-layout';
 import { applyWeightEdits } from '../weights/data';
 
-export function applyMeshEdit(mesh: MeshData, edit: MeshEdit): { mesh: MeshData; piece?: MeshData } {
+type VertexSource = readonly [vertex: number, factor: number];
+// Missing replacement entries keep their stable ID. Empty lists remove it from the source object.
+interface TopologyChanges {
+  readonly vertices: ReadonlyMap<number, readonly number[]>;
+  readonly edges: ReadonlyMap<string, readonly string[]>;
+  readonly faces: ReadonlyMap<number, readonly number[]>;
+  readonly vertexSources: ReadonlyMap<number, readonly VertexSource[]>;
+  readonly addedFaces: readonly number[];
+  readonly pieceVertices?: ReadonlyMap<number, number>;
+  readonly pieceFaces?: readonly number[];
+}
+
+interface MeshResult { mesh: MeshData; piece?: MeshData; topology?: TopologyChanges }
+
+function topologyChange(source: MeshData, result: MeshResult, changes: Partial<TopologyChanges> = {}): MeshResult {
+  const survivingFaces = new Set(result.mesh.faces.map(face => face.id));
+  const faces = new Map(changes.faces);
+  for (const face of source.faces) if (!survivingFaces.has(face.id) && !faces.has(face.id)) faces.set(face.id, []);
+  const liveVertices = new Set(usedVertices(result.mesh.faces));
+  const vertices = new Map(changes.vertices);
+  for (const vertex of usedVertices(source.faces)) {
+    if (!liveVertices.has(vertex) && !vertices.has(vertex)) vertices.set(vertex, []);
+  }
+  const survivingEdges = edgesOf(result.mesh), edges = new Map(changes.edges);
+  for (const key of edgesOf(source).keys()) {
+    if (survivingEdges.has(key) || edges.has(key)) continue;
+    const [a, b] = edgeVertices(key);
+    const x = vertices.has(a) ? vertices.get(a)?.[0] : a, y = vertices.has(b) ? vertices.get(b)?.[0] : b;
+    const target = x !== undefined && y !== undefined && edgeKey(x, y);
+    edges.set(key, target && survivingEdges.has(target) ? [target] : []);
+  }
+  return { ...result, topology: { vertices, edges, faces, vertexSources: changes.vertexSources ?? new Map(),
+    addedFaces: result.mesh.faces.filter(face => face.id >= source.nextFace).map(face => face.id),
+    pieceVertices: changes.pieceVertices, pieceFaces: result.piece?.faces.map(face => face.id) } };
+}
+
+export function applyMeshEdit(mesh: MeshData, edit: MeshEdit): MeshResult {
   switch (edit.type) {
     case 'weights': return { mesh: applyWeightEdits(mesh, edit.rows) };
     case 'uv': return { mesh: applyUvLayout(mesh, edit) };
-    case 'repair': return { mesh: applyRepairs(mesh, edit.patches) };
+    case 'repair': {
+      const vertexSources = new Map<number, readonly VertexSource[]>();
+      const repaired = applyRepairs(mesh, edit.patches, (vertex, sources) => vertexSources.set(vertex, sources));
+      return topologyChange(mesh, { mesh: repaired }, { vertexSources });
+    }
     case 'extract': {
       const ids = pickFaces(mesh, edit.faces);
       const faces = mesh.faces.filter(face => ids.has(face.id));
@@ -24,24 +64,48 @@ export function applyMeshEdit(mesh: MeshData, edit: MeshEdit): { mesh: MeshData;
       const corners = faces.map(face => ({ ...face, corners: face.corners.map(corner => ({ ...corner, vertex: remap.get(corner.vertex)! })) }));
       const uvSeams = selected.uvSeams && Object.fromEntries(Object.entries(selected.uvSeams).map(([channel, edges]) =>
         [channel, edges.map(key => { const [a, b] = edgeVertices(key); return edgeKey(remap.get(a)!, remap.get(b)!); })]));
-      return { mesh: edit.cut ? filterFaces(mesh, mesh.faces.filter(face => !ids.has(face.id))) : mesh,
-        piece: { ...selected, positions, faces: corners, uvSeams } };
+      return topologyChange(mesh, { mesh: edit.cut ? filterFaces(mesh, mesh.faces.filter(face => !ids.has(face.id))) : mesh,
+        piece: { ...selected, positions, faces: corners, uvSeams } }, { pieceVertices: remap });
     }
     case 'move': case 'rotate': case 'scale': return { mesh: transform(mesh, edit) };
     case 'delete': case 'separate': {
       const faces = pickFaces(mesh, edit.faces);
       if (faces.size === mesh.faces.length) throw new Error('Keep at least one face in the source object.');
-      return { mesh: { ...mesh, faces: mesh.faces.filter(face => !faces.has(face.id)) },
-        piece: edit.type === 'separate' ? { ...mesh, faces: mesh.faces.filter(face => faces.has(face.id)) } : undefined };
+      const piece = edit.type === 'separate' ? filterFaces(mesh, mesh.faces.filter(face => faces.has(face.id))) : undefined;
+      return topologyChange(mesh, { mesh: filterFaces(mesh, mesh.faces.filter(face => !faces.has(face.id))), piece },
+        { pieceVertices: piece && new Map(usedVertices(piece.faces).map(id => [id, id])) });
     }
     case 'recalculate': return { mesh: recalculate(mesh, pickFaces(mesh, edit.faces)) };
     case 'flipNormals':
       return { mesh: flipNormals(mesh, pickFaces(mesh, edit.faces)) };
-    case 'create': return { mesh: create(mesh, edit) };
-    case 'splitEdge': return { mesh: splitEdge(mesh, requireEdge(mesh, edit.edge), edit.fraction) };
-    case 'splitFace': return { mesh: splitFace(mesh, edit) };
-    case 'dissolve': case 'flipEdge': return { mesh: combine(mesh, requireEdge(mesh, edit.edge), edit.type === 'flipEdge') };
-    case 'weld': return { mesh: weld(mesh, edit) };
+    case 'create': return topologyChange(mesh, { mesh: create(mesh, edit) });
+    case 'splitEdge': {
+      const [a, b] = edgeVertices(edit.edge), vertex = mesh.positions.length / 3;
+      return topologyChange(mesh, { mesh: splitEdge(mesh, requireEdge(mesh, edit.edge), edit.fraction) }, {
+        edges: new Map([[edit.edge, [edgeKey(a, vertex), edgeKey(b, vertex)]]]),
+        vertexSources: new Map([[vertex, [[a, 1 - edit.fraction], [b, edit.fraction]]]]),
+      });
+    }
+    case 'splitFace': return topologyChange(mesh, { mesh: splitFace(mesh, edit) }, { faces: new Map([[edit.face, [edit.face, mesh.nextFace]]]) });
+    case 'dissolve': case 'flipEdge': {
+      const sides = requireEdge(mesh, edit.edge), flip = edit.type === 'flipEdge', result = combine(mesh, sides, flip);
+      const ids = sides.map(side => side.face.id), replacements = flip ? ids : ids.slice(0, 1);
+      const nextEdge = flip ? edgeKey(...sides.map(({ face, corner }) => face.corners[(corner + 2) % 3].vertex) as [number, number]) : undefined;
+      return topologyChange(mesh, { mesh: result }, { faces: new Map(ids.map(id => [id, replacements])),
+        edges: new Map([[edit.edge, nextEdge ? [nextEdge] : []]]) });
+    }
+    case 'weld': {
+      pickVertices(mesh, edit.vertices);
+      const groups = weldGroups(mesh, edit), result = weld(mesh, edit, groups);
+      const live = new Set(usedVertices(result.faces));
+      const vertices = new Map<number, readonly number[]>(), sources = new Map<number, readonly VertexSource[]>();
+      for (const group of groups) {
+        const target = group[0];
+        for (const vertex of group) vertices.set(vertex, live.has(target) ? [target] : []);
+        if (edit.mode !== 'first' && live.has(target)) sources.set(target, group.map(id => [id, 1 / group.length]));
+      }
+      return topologyChange(mesh, { mesh: result }, { vertices, vertexSources: sources });
+    }
   }
 }
 
@@ -279,9 +343,7 @@ function sameCorner(a: Corner, b: Corner) {
   return a.vertex === b.vertex && a.attributes.every((tuple, i) => tuple.every((value, k) => Math.abs(value - b.attributes[i][k]) <= 1e-6));
 }
 
-function weld(mesh: MeshData, edit: MeshEdit & { type: 'weld' }) {
-  pickVertices(mesh, edit.vertices);
-  const groups = weldGroups(mesh, edit);
+function weld(mesh: MeshData, edit: MeshEdit & { type: 'weld' }, groups: readonly number[][]) {
   if (!groups.length) throw new Error('There are no selected vertices within the weld tolerance.');
   const target = new Map<number, number>(), positions = mesh.positions.slice(), weights = mesh.weights?.slice();
   for (const group of groups) {

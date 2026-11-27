@@ -4,10 +4,14 @@ import { TextureStroke, type BrushSettings, type Point, type Region } from './st
 import { uvOverlay } from './overlay';
 import { scalarChannels, type TextureTarget } from './bindings';
 import { shortcut } from '../project/shortcuts';
+import type { ModelAdapter } from '../project/adapter';
+import { maskRegions, pickMask, rasterMask, type MaskKind } from './mask';
 
 interface Session {
   targets: TextureTarget[];
+  adapter: ModelAdapter;
   atlas?: BufferGeometry;
+  atlasSeams?: readonly string[];
   load(target: TextureTarget): Promise<TextureImage>;
 }
 
@@ -52,6 +56,8 @@ export class TextureEditor {
   #pointer?: Point;
   #gesture?: Gesture;
   #region?: Region;
+  #maskRegions?: ReturnType<typeof maskRegions>;
+  #mask?: { kind: MaskKind; ids: ReadonlySet<number>; path: Path2D; raster: ReturnType<typeof rasterMask> };
   #source?: Point;
   #aligned?: Point;
   #sharedAllowed = new Set<string>();
@@ -86,12 +92,12 @@ export class TextureEditor {
       if (!this.#locked && this.#image && this.#target) this.#actions.export(this.#target, this.#image);
     });
     byId('clear').addEventListener('click', () => {
-      this.#region = undefined;
+      this.#region = this.#mask = undefined;
       this.#refresh();
       this.#paintOverlay();
     });
     byId('fill').addEventListener('click', () => {
-      if (!this.#image || !this.#region || !this.#canWrite()) return;
+      if (!this.#image || !this.#region && !this.#mask || !this.#canWrite()) return;
       const draft = new TextureStroke(this.#image, this.#brush('brush'));
       draft.fill();
       void this.#apply('Fill texture selection', draft.finish());
@@ -116,7 +122,7 @@ export class TextureEditor {
     }, { passive: false });
     this.#view.addEventListener('keydown', event => {
       const action = shortcut(event);
-      if (action === 'cancel') { this.cancel(); this.#region = undefined; this.#refresh(); this.#paintOverlay(); }
+      if (action === 'cancel') { this.cancel(); this.#region = this.#mask = undefined; this.#refresh(); this.#paintOverlay(); }
       if (this.#locked) return;
       if (action === 'space') {
         event.preventDefault();
@@ -147,6 +153,7 @@ export class TextureEditor {
     this.panel.hidden = true;
     this.#session = this.#target = this.#image = this.#atlas = this.#paths = this.#scaledPaths = this.#geometry = undefined;
     this.#region = this.#source = this.#aligned = undefined;
+    this.#mask = this.#maskRegions = undefined;
     this.#sharedAllowed.clear();
     this.picture.width = this.picture.height = 1;
     this.#load++;
@@ -208,6 +215,7 @@ export class TextureEditor {
       byId<HTMLSelectElement>('channel').replaceChildren(...channels.map(({ label, channel }) => new Option(label, String(channel))));
       this.#image = this.#paths = this.#scaledPaths = undefined;
       this.#region = this.#source = this.#aligned = undefined;
+      this.#mask = this.#maskRegions = undefined;
       this.#fitMode = true;
       this.#say('');
       this.picture.width = this.picture.height = 1;
@@ -222,6 +230,7 @@ export class TextureEditor {
         this.#image = image;
         if (resize) {
           this.#region = this.#source = this.#aligned = undefined;
+          this.#mask = undefined;
           this.picture.width = image.width;
           this.picture.height = image.height;
           byId<HTMLInputElement>('width').value = String(image.width);
@@ -230,8 +239,9 @@ export class TextureEditor {
         drawImage(this.picture.getContext('2d')!, image);
       }
       if (!this.#paths || this.#atlas !== this.#session.atlas || this.#geometry !== target.binding.mesh.geometry ||
-          this.#target?.shared.length !== target.shared.length) {
+          this.#target?.shared.length !== target.shared.length || this.#target?.transfer !== target.transfer) {
         this.#paths = uvOverlay(target, this.#session.atlas);
+        this.#mask = this.#maskRegions = undefined;
         this.#atlas = this.#session.atlas;
         this.#geometry = target.binding.mesh.geometry;
       }
@@ -255,8 +265,8 @@ export class TextureEditor {
     byId('sharing').hidden = (target?.shared.length ?? 0) < 2;
     byId<HTMLButtonElement>('edit-shared').disabled = !ready || (!!target && this.#sharedAllowed.has(target.key));
     byId<HTMLButtonElement>('copy').disabled = !ready;
-    byId<HTMLButtonElement>('fill').disabled = !ready || !this.#canWrite() || !this.#region;
-    byId<HTMLButtonElement>('clear').disabled = !ready || !this.#region;
+    byId<HTMLButtonElement>('fill').disabled = !ready || !this.#canWrite() || !this.#region && !this.#mask;
+    byId<HTMLButtonElement>('clear').disabled = !ready || !this.#region && !this.#mask;
     byId<HTMLButtonElement>('export').disabled = !ready;
     byId<HTMLButtonElement>('focus').disabled = !ready || !this.#paths?.bounds;
     byId<HTMLInputElement>('import').disabled = !ready || !this.#canWrite();
@@ -267,6 +277,7 @@ export class TextureEditor {
     byId('info').textContent = this.#image && target
       ? `${this.#image.width} × ${this.#image.height} · RGBA8 · ${name} · ${target.atlas ? 'Baked atlas' : `Sampling UV${target.transfer?.channel ?? target.binding.texture.channel}`}` +
         (target.shared.length > 1 ? ` · Shared by ${target.shared.length} bindings` : '') +
+        (this.#mask ? ` · ${this.#mask.ids.size} selected ${this.#mask.kind === 'face' ? 'faces' : 'UV islands'}` : '') +
         (this.#paths?.overlaps ? ' · Shared UVs detected' : '')
       : target ? 'Loading map…' : 'No editable material maps on this model.';
   }
@@ -364,7 +375,28 @@ export class TextureEditor {
     return { tool, color: channel === undefined ? [rgb >> 16, (rgb >> 8) & 255, rgb & 255, number('alpha-value', 0, 255, 255)] : [v, v, v, 255],
       opacity: number('opacity', 0, 100, 100) / 100, hardness: number('hardness', 0, 100, 75) / 100,
       size: Math.round(number('size', 1, 512, 24)), square: value('shape') === 'Square', alpha: channel === undefined && checked('alpha'), channel,
-      region: this.#region, sourceOffset };
+      region: this.#mask?.raster.region ?? this.#region, allows: this.#mask?.raster.allows, sourceOffset };
+  }
+
+  #pickMask(kind: MaskKind, point: Point, toggle: boolean) {
+    const { width, height } = this.#image!;
+    const { adapter, atlas, atlasSeams } = this.#session!;
+    const regions = (this.#maskRegions ??= maskRegions(adapter, this.#target!, atlas, atlasSeams))[kind];
+    const hits = pickMask(regions, { x: point.x / width, y: point.y / height });
+    const ids = new Set(toggle && this.#mask?.kind === kind ? this.#mask.ids : []);
+    for (const id of hits) if (!toggle || !ids.delete(id)) ids.add(id);
+    this.#region = undefined;
+    const triangles = [...ids].flatMap(id => regions.get(id) ?? []);
+    const path = new Path2D();
+    for (const [a, b, c] of triangles) {
+      const clockwise = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x) > 0;
+      const [q, r] = clockwise ? [b, c] : [c, b];
+      path.moveTo(a.x, a.y); path.lineTo(q.x, q.y); path.lineTo(r.x, r.y); path.closePath();
+    }
+    // Keep an empty surface mask active until explicitly cleared.
+    this.#mask = { kind, ids, path, raster: rasterMask(triangles, width, height) };
+    this.#refresh();
+    this.#paintOverlay();
   }
 
   #channel() {
@@ -379,6 +411,11 @@ export class TextureEditor {
     if (!pan && !this.#inside(point)) return;
     event.preventDefault();
     this.#view.focus({ preventScroll: true });
+    if (!pan && (tool === 'select-face' || tool === 'select-island')) {
+      try { this.#pickMask(tool === 'select-face' ? 'face' : 'island', point, event.shiftKey); }
+      catch (error) { this.#say(error instanceof Error ? error.message : String(error)); }
+      return;
+    }
     if (!pan && tool === 'stamp' && event.altKey) {
       this.#source = texel(point);
       this.#aligned = undefined;
@@ -450,6 +487,7 @@ export class TextureEditor {
     this.#gesture = undefined;
     this.#actions.busy(false);
     if (gesture.mode === 'select') {
+      this.#mask = undefined;
       const region = this.#selection(gesture.origin, gesture.last);
       this.#region = region.x1 > region.x0 && region.y1 > region.y0 ? region : undefined;
     }
@@ -505,6 +543,17 @@ export class TextureEditor {
       ctx.restore();
     }
     const g = this.#gesture;
+    if (this.#mask && g?.mode !== 'select') {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(this.#offset.x, this.#offset.y, image.width * this.#zoom, image.height * this.#zoom);
+      ctx.clip();
+      const path = new Path2D();
+      path.addPath(this.#mask.path, new DOMMatrix([this.#zoom * image.width, 0, 0, this.#zoom * image.height, this.#offset.x, this.#offset.y]));
+      ctx.fillStyle = '#42eaff48'; ctx.fill(path);
+      ctx.strokeStyle = '#8eefff'; ctx.stroke(path);
+      ctx.restore();
+    }
     const region = g?.mode === 'select' ? this.#selection(g.origin, g.last) : this.#region;
     if (region) {
       const p = screen({ x: region.x0, y: region.y0 });

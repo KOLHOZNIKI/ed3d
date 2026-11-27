@@ -7,6 +7,13 @@ import type { PoseState, RigState } from '../rig/state';
 import type { HumanoidState } from '../humanoid/profile';
 
 export const atlasColor = 'atlas-color';
+export const maxPinnedSnapshots = 8;
+
+export interface PinnedSnapshot {
+  readonly id: string;
+  readonly revision: number;
+  readonly state: Omit<WorkingState, 'snapshots'>;
+}
 
 export interface TextureEdit {
   readonly image: TextureImage;
@@ -36,6 +43,7 @@ export interface ExtractedAsset {
 
 export interface WorkingState {
   readonly objects: ObjectOverrides;
+  readonly snapshots?: readonly PinnedSnapshot[];
   readonly objectTransforms?: import('./object-transform').ObjectTransforms;
   readonly atlas?: AtlasState;
   readonly bake?: TextureBake;
@@ -71,4 +79,5 @@ export function* workingBuffers(state: WorkingState): Iterable<ArrayBuffer> {
   if (state.paint) yield state.paint.png.buffer;
   for (const edit of Object.values(state.textures ?? {})) for (const tile of edit.image.tiles) yield tile.buffer;
   for (const edit of state.meshEdits ?? []) yield edit.buffer;
+  for (const snapshot of state.snapshots ?? []) yield* workingBuffers(snapshot.state);
 }

@@ -13,6 +13,8 @@
 
 The local module accepts one scene or one FBX model per import. **Export selection** includes selected meshes or groups, required ancestor transforms, referenced skin joints and surviving animation tracks. Standalone and batch exports target independent static objects created in **Extract**. Project labels and viewport visibility remain editor state. Whole-scene export retains source visibility. Resource scope, known conversions, and original SHA-256 hashes appear in the compatibility reports.
 
+Choose **PNG** under **FBX maps** to write external PNG images in whole-scene, selection, standalone and batch packages. Source JPEGs are decoded at their original dimensions and recorded in `textureConversions`. Linked paths in the FBX and the material manifest point to the PNG files. Existing PNGs and working lossless maps are used directly. Choose **Source files** to retain unchanged source image encodings.
+
 ## Project archives
 
 `.assetfixer` is a ZIP with one UTF-8 `manifest.json` and content-addressed `blobs/<sha256>` entries. The manifest holds the document ID, name, revision, history budget, saved object hierarchy, original file references and working state. Each blob reference resolves through the resource table. The loader verifies its SHA-256 and length before rebuilding the document from the immutable originals. Equal blobs share one archive entry. Jobs, Undo and Redo history, current selection and playback state are session resources.
@@ -29,13 +31,15 @@ The local module accepts one scene or one FBX model per import. **Export selecti
 | 11 | Humanoid role mapping, calibration, offsets, and published clip recipes. |
 | 12 | Relative original paths and local FBX material-map assignments. |
 | 13 | Object transform overrides and editable scalar texture bindings. |
+| 14 | Pinned source snapshots, their working manifests, and shared resource references. |
 
-The reader accepts schemas 1 through 13. Older archives without texture assignments continue to use the local path and unique basename resolver. Saves use schema 13 for data that uses its new fields and schema 12 for earlier document features. A future schema is refused before replacing the open project. Reopen uses the archived originals and working state, requires no Tripo or Meshy connection, and starts a new Undo history.
+The reader accepts schemas 1 through 14. Saves use schema 14 when the document contains pins and use the relevant earlier schema for projects without pins. Each pin references a captured revision and an independent working manifest. Identical resource bytes are stored once even when used by several pins and the current document. The project supports up to eight pins. The optional operation settings record restores paint, UV/bake, repair, extraction and FBX output preferences. Reopen uses the archived originals and working state and starts a new Undo history. An unknown newer schema is refused before replacing the open project.
 
 ## Resource and engine limits
 
 - Model inputs have a 160 MiB aggregate limit. FBX ZIP entries are capped at 128 MiB each and 256 MiB expanded overall, with at most 256 entries. Projects have a 512 MiB limit. Invalid or duplicate archive paths are refused.
 - Import checks texture headers before decoding. The limits are 8192 × 8192 pixels per image and 512 MiB of estimated RGBA storage across the linked or embedded maps. The 2D editor and direct UV bake support maps through 4096 × 4096. Spatial projection is capped at 2048 × 2048.
+- In schema 14, archived working and pinned image tiles share a 512 MiB decode budget. Repeated references to an identical image share its decoded tiles.
 - GLB numeric editing uses R for AO, G for Roughness and B for Metallic. The packed Roughness/Metallic image keeps its two independent channels. If an input image also supplies AO, editing can produce a separate image for that binding. Alpha editing works on the Base Color image and preserves the material's existing alpha mode. Recognized separate Tripo Roughness and Metallic maps are exported for assignment to the Unity material.
 - Object transforms accept static meshes and groups. Transform tracks, skinned objects and joint hierarchies remain in the rig workflow. A scale or rotation that would require a sheared local transform is refused before commit.
 - The diagnostic texture estimate counts four bytes per decoded texel. Mipmaps, source snapshots, Undo, GPU copies and worker buffers add to peak use.

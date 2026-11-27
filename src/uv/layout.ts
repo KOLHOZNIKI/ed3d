@@ -17,7 +17,7 @@ export interface Layout {
 export interface Box { x0: number; y0: number; x1: number; y1: number }
 export type Pair = readonly [number, number];
 
-export function groups(surface: Surface, layout: Layout) {
+export function groups(surface: Pick<Surface, 'points'>, layout: Layout) {
   const { points } = surface, { uv, seams } = layout;
   const vertex = disjoint(points.length), island = disjoint(points.length / 3);
   const sides = new Map<string, Pair[]>();
