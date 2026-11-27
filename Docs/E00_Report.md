@@ -25,6 +25,7 @@
 | F15 nearby surfaces | On two panels 7.8125 mm apart, neither the component-locked brush nor the explicit-source projection changed the neighboring pattern. The controls contaminated 45,698 brush texels and 237,120 projection texels. The selected projection marked 118,560 misses in magenta. ufbx matched source topology, positions, original UVs and normals in both exports. | [F15 isolation](E00_F15.md) |
 | Smooth and Grid Fill | Same eight-edge cavity across an original plate UV seam. Smooth rebuilt eight triangles and moved the center by 1.865 mm. Grid rebuilt four quads and moved the center by 1.569 mm. Both Unity versions retained all eight boundary joins, both center UV variants, and the 9,130 outside triangles exactly. ufbx independently reconstructed each expected patch and matched the positions and corner UVs. | [Smooth and Grid Fill](E00_Smooth_Grid.md) |
 | Typical-model memory | Eight Chrome cycles with 50,000 triangles, 100 bones and four 2K inputs. The highest private commit was 1,607 MiB during bake. The final three closes stayed within 15 MiB, and memory fell from 1,365 MiB to 736 MiB after diagnostic GC and an additional 20 seconds idle. The empty baseline was 368 MiB. A real Tripo character reached 1,785 MiB private commit during bake. | [Memory benchmark](E00_Memory.md) |
+| F18 heavy model and history | A 250,000-triangle grid with a 4K Base Color input completed three cycles of 24 brush strokes and 24 Undo operations. It restored matching exported PNGs at depths 16, 8 and 0, and peaked at 2,291 MiB private commit. The four-4K-map variant peaked at 2,554 MiB private commit. The edited ZIP reopened and reproduced its texture. | [F18 memory and checkpoints](E00_F18.md) |
 | Build and controlled failures | Release and Debug builds passed the type check. The Windows launcher served the selected build from a different working directory. The Release script installed dependencies in a clean copy. Browser probes verified missing texture, ZIP path traversal and unsupported Z-up diagnostics. The local workflows made no external requests. | [Build and launch](../README.md#local-development), [FBX input checks](E00_FBX_Round_Trip.md#results) |
 
 Unity evidence uses 2022.3.62f2 and 6000.3.9f1. Baseline FBX imports used Generic rigs, imported normals, calculated MikkTSpace tangents, four skin influences, file scale, and mesh and animation compression disabled. Humanoid validity was checked separately. Bake and brush render comparisons used fixed cameras, uncompressed maps and mipmaps. GLB evidence comes from Chrome, an independent Python reader and the Khronos validator.
@@ -84,7 +85,7 @@ The Tripo FBX and GLB fixtures and the Meshy-generated F17 GLB have no-op and ed
 
 ### Corpus inventory
 
-Nine of the 18 fixture IDs have documented results that meet their E00 expectations. Eight have partial evidence or a candidate. One still needs a matching input. Each fixture needs the §22.1 provenance record before corpus sign-off.
+Ten of the 18 fixture IDs have documented results that meet their E00 expectations. Eight have partial evidence or a candidate. Each fixture needs the §22.1 provenance record before corpus sign-off.
 
 | Fixture | State | Verified evidence or remaining preparation |
 | --- | --- | --- |
@@ -105,13 +106,13 @@ Nine of the 18 fixture IDs have documented results that meet their E00 expectati
 | F15 | Verified | The component-locked stroke leaves the other panel unchanged. Projection samples only the eligible source and visibly marks misses. Both controls demonstrate cross-contamination. [Fixture and results](E00_F15.md) |
 | F16 | Partial | Missing texture, unsafe ZIP path and unsupported-axis refusals passed. Add corrupt indices, non-manifold geometry and the applicable diagnostics. |
 | F17 | Verified | The Meshy-generated Dioramas pawn requires Meshopt, quantization and WebP. Both no-op and edited exports passed offline round-trips. The independent reader matched the one expected position edit, topology, corner data and embedded textures. [Fixture and results](E00_F17.md) |
-| F18 | Missing | Prepare large maps, a reproducible edit sequence and expected checkpoints. The current typical-asset benchmark covers four 2K inputs and repeated close. The saved-project recovery scenario uses E01's serializer. |
+| F18 | Verified for E00 | Generated heavy mesh with 4K inputs. Repeated paint and Undo restored byte-identical checkpoints, and the final edited asset reopened. Saved-project recovery and autosave use E01's serializer. [Fixture and results](E00_F18.md) |
 
 ### Outstanding acceptance evidence
 
 The standalone lossless PNG identity-transfer check still needs to demonstrate a maximum per-channel error of `1/255` on interior texels under identical sampling and format. The transformed alpha probe covers the separate constant-color tolerance. Add identity transfer to the texture fixtures. [Preservation criteria](AssetFixer_Technical_Specification_v1.0.md#sec-22) · [UV transforms and alpha](E00_UV_Transforms_Alpha.md)
 
-The separate §20.2 check requires a recorded run on the user's work PC at 1920 × 1080 and DPR 1. Use the existing recipe and include repeated paint and undo when assessing the §20.3 requirement against unbounded growth after Import/Close/Undo. The observed peaks and eight-cycle trend characterize the recorded Windows and Chrome setup. Use the wider measurements to establish resource limits. [Benchmark and memory requirements](AssetFixer_Technical_Specification_v1.0.md#sec-20) · [Memory benchmark](E00_Memory.md)
+The separate §20.2 check requires a recorded run on the user's work PC at 1920 × 1080 and DPR 1. The eight-cycle typical run and three-cycle F18 history run characterize the recorded workstation. §20.3 still requires bounded history, tile or delta storage and memory verification over wider workloads and longer sessions. [Benchmark and memory requirements](AssetFixer_Technical_Specification_v1.0.md#sec-20) · [Memory benchmark](E00_Memory.md) · [F18 memory and checkpoints](E00_F18.md)
 
 ### Work assigned to later stages
 

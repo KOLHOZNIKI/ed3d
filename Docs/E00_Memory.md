@@ -49,6 +49,8 @@ The Tripo character produced 511 charts at 1414 × 1421 and four rebaked maps at
 
 ufbx verified the final ZIP from each run. Both exports retained all control-point positions, source triangle connectivity through the atlas corner map, original UVs, and exact source skin weights. Every atlas triangle was valid. The four measured phases fit on the recorded workstation. Paint and undo memory, a budget for lower-memory machines, independent GPU VRAM measurements, and the full F18 history and recovery workload remain outside these runs.
 
+The follow-up F18 benchmark records memory during a longer brush and Undo sequence and a four-map heavy workload on a 250,000-triangle model. [F18 checkpoints and measurements](E00_F18.md)
+
 ## Reproduce on Windows
 
 Use the [pinned browser probe setup](E00_FBX_Round_Trip.md#reproduce-on-windows), locally installed Chrome and Python. Run one benchmark at a time.
