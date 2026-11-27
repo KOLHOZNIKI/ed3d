@@ -41,10 +41,23 @@ try {
 
   await page.screenshot({ path: join(output, 'empty.png') });
   await open(page, plate);
+  const viewport = field('viewport');
+  const statusbar = page.locator('.statusbar');
+  const statusHeight = (await statusbar.boundingBox()).height;
+  const initialViewport = await viewport.boundingBox();
+  const selectionDetails = field('selection-details');
   await field('scene-hierarchy').locator('button').first().click();
   assert.match(await field('status').textContent(), /9[\s,]?138 triangles/);
   assert.match(await field('scene-materials').textContent(), /Base Color/);
-  const viewport = field('viewport');
+  const description = await selectionDetails.textContent();
+  assert.match(description, /vertices.*faces/);
+  assert.equal((await statusbar.boundingBox()).height, statusHeight);
+  assert.deepEqual(await viewport.boundingBox(), initialViewport);
+  await selectionDetails.evaluate(node => { node.textContent = node.textContent.repeat(40); });
+  assert.ok(await statusbar.evaluate(node => node.scrollHeight > node.clientHeight));
+  assert.equal((await statusbar.boundingBox()).height, statusHeight);
+  assert.deepEqual(await viewport.boundingBox(), initialViewport);
+  await selectionDetails.evaluate((node, value) => { node.textContent = value; }, description);
   const bounds = await viewport.boundingBox(), scene = await field('scene-panel').boundingBox();
   assert.ok(bounds.width >= 850 && bounds.height >= 600, JSON.stringify(bounds));
   assert.ok(bounds.x >= scene.x + scene.width);
@@ -159,11 +172,15 @@ try {
   await page.setViewportSize({ width: 920, height: 1000 });
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
   assert.equal(overflow, false);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const compactStatus = await statusbar.boundingBox();
+  assert.equal(compactStatus.height, statusHeight);
+  assert.ok(compactStatus.y >= 0 && compactStatus.y + compactStatus.height <= 1000);
   assert.deepEqual(errors, []);
   assert.deepEqual(external, []);
   const report = { browser: browser.version(), viewportPixels: pixels, uniqueDisplays: displays.length, guides: true,
     comparison: true, preservedExportTextures: true, resizablePanels: true, restoredLayout: 'uv-only', shortcutSave: true, meshSelection: true,
-    compactOverflow: overflow, local: true };
+    compactOverflow: overflow, statusHeight, stableViewportOnSelection: true, local: true };
   await writeFile(join(output, 'browser.json'), JSON.stringify(report, null, 2) + '\n');
   console.log(JSON.stringify(report));
 } finally {

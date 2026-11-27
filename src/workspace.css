@@ -222,10 +222,13 @@ details > summary { color: var(--muted); padding: 6px 0; font-weight: 600; }
 .statusbar {
   display: flex;
   align-items: center;
+  align-content: flex-start;
   flex-wrap: wrap;
   gap: 4px 14px;
   padding: 6px 12px;
-  min-height: 32px;
+  block-size: calc(2lh + 17px);
+  overflow: auto;
+  scrollbar-color: #4a5b69 transparent;
   border-top: 1px solid var(--border);
   background: #19232d;
   color: var(--muted);
@@ -248,4 +251,5 @@ details > summary { color: var(--muted); padding: 6px 0; font-weight: 600; }
   .model-stage { min-height: clamp(265px, 62vw, 670px); }
   #workspace:is([data-layout=uv], [data-layout=texture]) .work-area { grid-template-columns: minmax(0, 1fr); }
   .layout-actions { margin-left: 0; }
+  .statusbar { position: sticky; inset-block-end: 0; z-index: 2; }
 }
