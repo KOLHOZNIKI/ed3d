@@ -18,6 +18,8 @@ export interface MeshData {
   readonly faces: readonly Face[];
   readonly channels: readonly { name: string; size: number }[];
   readonly weights?: readonly (readonly Weight[])[];
+  readonly weightJoints?: readonly string[];
+  readonly sourceWeightSlots?: number;
   readonly nextFace: number;
   readonly materialCount: number;
   readonly glb: boolean;

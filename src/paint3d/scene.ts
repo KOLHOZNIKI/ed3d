@@ -23,8 +23,8 @@ export function paintMapping(model: Model, target: TextureTarget) {
   return { faces, shared, unsupported, overlap: !unsupported && textureOverlap(target, atlas) };
 }
 
-export function paintView(adapter: ModelAdapter, target: TextureTarget, uv: ReadonlyMap<number, UvTriangle>, camera: Camera,
-  width: number, height: number): View {
+export function paintView(adapter: ModelAdapter, target: TextureTarget | undefined, uv: ReadonlyMap<number, UvTriangle>, camera: Camera,
+  width: number, height: number, weights?: { object: string; xray: boolean }): View {
   type MutableFace = Omit<Face, 'island' | 'edges'> & { root: number; stable: string; edges: Triple<Link[]> };
   const { model } = adapter;
   camera.updateMatrixWorld();
@@ -68,12 +68,13 @@ export function paintView(adapter: ModelAdapter, target: TextureTarget, uv: Read
           keys.push(ids?.[i + corner] ?? vertex);
         }
         const id = faces.length;
-        const mapped = mesh === target.binding.mesh && (group.materialIndex ?? 0) === target.binding.slot ? uv.get(i / 3) : undefined;
+        const mapped = target && mesh === target.binding.mesh && (group.materialIndex ?? 0) === target.binding.slot ? uv.get(i / 3) : undefined;
         const polygon = topology.renderFaces[i / 3];
         const face: MutableFace = { world: world as unknown as Face['world'], clip: clip as unknown as Face['clip'],
           uv: mapped, edges: [[], [], []], root: id, stable: `${object}/triangle/${i / 3}`, source: `${object}/face/${edited?.faceIds[polygon] ?? polygon}`,
           material: material.name || `${mesh.name || object} material ${(group.materialIndex ?? 0) + 1}`,
-          orientation, side: material.side };
+          orientation, side: weights?.object === object && weights.xray ? 2 : material.side,
+          vertices: weights?.object === object ? [keys[0], keys[1], keys[2]] : undefined };
         faces.push(face);
         if (!mapped) continue;
         for (const edge of corners) {

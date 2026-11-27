@@ -16,6 +16,7 @@ export interface Face {
   readonly material: string;
   readonly orientation: number;
   readonly side: number;
+  readonly vertices?: Triple<number>;
 }
 
 export interface Link { face: number; a: number; b: number }

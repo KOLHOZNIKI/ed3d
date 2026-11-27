@@ -17,6 +17,7 @@ export class Viewer {
   #appearance?: Appearance;
   #live?: Appearance;
   #inspection?: { mesh: Mesh; geometry: BufferGeometry };
+  #skinView?: { mesh: Mesh; geometry: BufferGeometry; material: Material };
   #outline = new Box3Helper(new Box3(), 0x2ad9ed);
   #painting = false;
   #paintingStroke = false;
@@ -67,6 +68,7 @@ export class Viewer {
     this.#model?.removeFromParent();
     this.#model = undefined;
     this.#inspection = undefined;
+    this.#skinView = undefined;
     this.#pose = undefined;
     this.#manualPose = undefined;
     if (this.#appearance) disposeAppearance(this.#appearance);
@@ -97,6 +99,8 @@ export class Viewer {
     this.#inspection = mesh && geometry ? { mesh, geometry } : undefined;
     this.render();
   }
+
+  skinView(view?: { mesh: Mesh; geometry: BufferGeometry; material: Material }) { this.#skinView = view; }
 
   setPainting(active: boolean, stroke = false) {
     this.#painting = active;
@@ -182,6 +186,7 @@ export class Viewer {
   render() {
     if (!this.#renderer || !this.#camera || this.#contextLost) return;
     const restore = applyViews((this.#live ?? this.#appearance)?.views ?? []);
+    const restoreSkin = this.#skinView && applyViews([this.#skinView]);
     const inspection = this.#inspection, masked: [Mesh, number][] = [];
     const geometry = inspection?.mesh.geometry;
     if (inspection) {
@@ -198,6 +203,7 @@ export class Viewer {
     } finally {
       if (inspection && geometry) inspection.mesh.geometry = geometry;
       for (const [mesh, mask] of masked) mesh.layers.mask = mask;
+      restoreSkin?.();
       restore();
     }
   }

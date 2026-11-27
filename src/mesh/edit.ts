@@ -6,9 +6,11 @@ import { recalculate, tangentFrame } from './normals';
 import { applyRepairs } from '../repair/fill';
 import { validatePatch } from '../repair/intersections';
 import { applyUvLayout } from '../uv/mesh-layout';
+import { applyWeightEdits } from '../weights/data';
 
 export function applyMeshEdit(mesh: MeshData, edit: MeshEdit): { mesh: MeshData; piece?: MeshData } {
   switch (edit.type) {
+    case 'weights': return { mesh: applyWeightEdits(mesh, edit.rows) };
     case 'uv': return { mesh: applyUvLayout(mesh, edit) };
     case 'repair': return { mesh: applyRepairs(mesh, edit.patches) };
     case 'extract': {

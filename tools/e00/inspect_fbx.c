@@ -492,6 +492,97 @@ static double rig_weight(const ufbx_mesh *mesh, size_t vertex, const char *bone)
     return result;
 }
 
+static bool weight_target(bool wide, size_t vertex)
+{
+    return wide ? vertex == 2 || vertex == 3 : vertex == 4;
+}
+
+static double expected_weight(const ufbx_mesh *source, size_t vertex, const char *bone, bool wide)
+{
+    const double weight = rig_weight(source, vertex, bone);
+    if (!weight_target(wide, vertex)) return weight;
+    if (!wide) return !strcmp(bone, "Palm") ? .625 : !strcmp(bone, "LeftFinger") ? .375 : 0;
+    if (!strcmp(bone, "Joint1")) return weight;
+    return !strcmp(bone, "Joint5") ? 0 : weight * (22.0 / 19.0);
+}
+
+static bool compare_weight_edit(const ufbx_scene *original, const ufbx_scene *exported, bool wide)
+{
+    const ufbx_mesh *a = original->meshes.data[0], *b = exported->meshes.data[0];
+    if (!same_connectivity(a, b) || a->skin_deformers.count != 1 || b->skin_deformers.count != 1 ||
+        original->anim_stacks.count != 1 || exported->anim_stacks.count != 1) return false;
+    const ufbx_anim_stack *take = original->anim_stacks.data[0], *result = exported->anim_stacks.data[0];
+    const double duration = take->time_end - take->time_begin;
+    if (strcmp(take->name.data, result->name.data) || fabs(duration - (result->time_end - result->time_begin)) > 1e-6) return false;
+    const ufbx_skin_deformer *skin_a = a->skin_deformers.data[0], *skin_b = b->skin_deformers.data[0];
+    if (skin_a->clusters.count != (wide ? 5 : 3) || skin_b->max_weights_per_vertex > 4) return false;
+    double base = 0, weights = 0, normalized = 0, uv = 0, seam = 0, bind = 0;
+    bool got_uv = false;
+    ufbx_vec2 first_uv = { .x = 0, .y = 0 };
+    if (a->vertex_uv.exists != b->vertex_uv.exists || a->vertex_normal.exists != b->vertex_normal.exists) return false;
+    for (size_t i = 0; i < a->num_indices; i++) {
+        if (a->vertex_normal.exists && normal_angle(ufbx_get_vertex_vec3(&a->vertex_normal, i), ufbx_get_vertex_vec3(&b->vertex_normal, i)) > 1e-5) return false;
+        if (a->vertex_uv.exists) {
+            const ufbx_vec2 left = ufbx_get_vertex_vec2(&a->vertex_uv, i), right = ufbx_get_vertex_vec2(&b->vertex_uv, i);
+            uv = fmax(uv, hypot(left.x - right.x, left.y - right.y));
+            if (a->vertex_indices.data[i] == 4) {
+                if (got_uv) seam = fmax(seam, hypot(left.x - first_uv.x, left.y - first_uv.y));
+                else first_uv = left;
+                got_uv = true;
+            }
+        }
+    }
+    for (size_t i = 0; i < a->num_vertices; i++) {
+        double sum = 0;
+        base = fmax(base, point_distance(a->vertices.data[i], b->vertices.data[i]));
+        for (size_t j = 0; j < skin_a->clusters.count; j++) {
+            const ufbx_skin_cluster *source = skin_a->clusters.data[j];
+            const char *bone = source->bone_node->name.data;
+            const double observed = rig_weight(b, i, bone);
+            weights = fmax(weights, fabs(observed - expected_weight(a, i, bone, wide)));
+            sum += observed;
+            for (size_t k = 0; k < skin_b->clusters.count; k++) {
+                const ufbx_skin_cluster *target = skin_b->clusters.data[k];
+                if (strcmp(bone, target->bone_node->name.data)) continue;
+                for (size_t m = 0; m < 12; m++) bind = fmax(bind, fabs(source->geometry_to_bone.v[m] - target->geometry_to_bone.v[m]));
+            }
+        }
+        normalized = fmax(normalized, fabs(sum - 1));
+    }
+    double deformation = 0, unaffected = 0, predicted = 0;
+    const double meters = original->settings.unit_meters;
+    for (size_t t = 0; t <= 20; t++) {
+        const double time = duration * t / 20.0;
+        ufbx_scene *left = evaluate(original, take, take->time_begin + time), *right = evaluate(exported, result, result->time_begin + time);
+        const ufbx_skin_deformer *sample = left->meshes.data[0]->skin_deformers.data[0];
+        for (size_t i = 0; i < a->num_vertices; i++) {
+            const ufbx_vec3 source = posed_point(left, 0, i), target = posed_point(right, 0, i);
+            ufbx_vec3 expected = { .x = 0, .y = 0, .z = 0 };
+            for (size_t j = 0; j < sample->clusters.count; j++) {
+                const ufbx_skin_cluster *cluster = sample->clusters.data[j];
+                const ufbx_vec3 point = ufbx_transform_position(&cluster->geometry_to_world, a->vertices.data[i]);
+                const double weight = expected_weight(a, i, cluster->bone_node->name.data, wide) * meters;
+                expected.x += point.x * weight;
+                expected.y += point.y * weight;
+                expected.z += point.z * weight;
+            }
+            predicted = fmax(predicted, point_distance(expected, target));
+            const double delta = point_distance(source, target);
+            if (weight_target(wide, i)) deformation = fmax(deformation, delta);
+            else unaffected = fmax(unaffected, delta);
+        }
+        ufbx_free_scene(right);
+        ufbx_free_scene(left);
+    }
+    const bool compatible = base <= 1e-9 && uv <= 1e-9 && bind <= 1e-9 && weights <= 1e-6 && normalized <= 1e-6 &&
+        (wide || seam > .1) && deformation > .005 && unaffected <= 1e-6 && predicted <= 1e-6;
+    printf("{\"mode\":\"%s\",\"vertices\":%zu,\"samples\":21,\"maxInfluences\":%zu,\"baseDelta\":%.9g,\"uvDelta\":%.9g,"
+           "\"uvSeamSpan\":%.9g,\"bindDelta\":%.9g,\"weightError\":%.9g,\"normalizationError\":%.9g,\"changedDeformationMeters\":%.9g,"
+           "\"unaffectedDeformationMeters\":%.9g,\"predictionErrorMeters\":%.9g,\"compatible\":%s}\n", wide ? "wide" : "stroke", a->num_vertices,
+           skin_b->max_weights_per_vertex, base, uv, seam, bind, weights, normalized, deformation, unaffected, predicted, compatible ? "true" : "false");
+    return compatible;
+}
+
 static bool compare_edited_rig(const ufbx_scene *original, const ufbx_scene *exported, const char *mode)
 {
     const bool moved = !strcmp(mode, "--rig-moved"), deleted = !strcmp(mode, "--rig-deleted");
@@ -795,8 +886,9 @@ int main(int argc, char **argv)
     }
     const bool shared = argc == 4 && strcmp(argv[3], "--shared-skin") == 0;
     const bool rig = argc == 4 && (!strcmp(argv[3], "--rig-moved") || !strcmp(argv[3], "--rig-renamed") || !strcmp(argv[3], "--rig-deleted"));
-    if (argc != 3 && argc != 5 && !shared && !rig) {
-        fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx [--shared-skin | --rig-moved | --rig-renamed | --rig-deleted | control-point offset-y | --seams offset-y | --atlas source-corners.bin | --baked source-corners.bin | --smooth center | --grid center]\n");
+    const bool weight = argc == 4 && (!strcmp(argv[3], "--weight-stroke") || !strcmp(argv[3], "--weight-wide"));
+    if (argc != 3 && argc != 5 && !shared && !rig && !weight) {
+        fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx [--shared-skin | --rig-moved | --rig-renamed | --rig-deleted | --weight-stroke | --weight-wide | control-point offset-y | --seams offset-y | --atlas source-corners.bin | --baked source-corners.bin | --smooth center | --grid center]\n");
         return 2;
     }
     const bool baked = argc == 5 && strcmp(argv[3], "--baked") == 0;
@@ -818,6 +910,12 @@ int main(int argc, char **argv)
     }
     ufbx_scene *original = load(argv[1], shared || rig ? 2 : 1);
     ufbx_scene *exported = load(argv[2], shared || rig ? 2 : 1);
+    if (weight) {
+        const bool matches = compare_weight_edit(original, exported, !strcmp(argv[3], "--weight-wide"));
+        ufbx_free_scene(exported);
+        ufbx_free_scene(original);
+        return matches ? 0 : 1;
+    }
     if (shared || rig) {
         const bool matches = shared ? compare_shared_skin(original, exported) : compare_edited_rig(original, exported, argv[3]);
         ufbx_free_scene(exported);

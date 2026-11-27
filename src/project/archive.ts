@@ -108,10 +108,10 @@ export async function writeProject(document: AssetDocument<WorkingState>, option
     }
     meshEdits = await retain(bytes);
   }
-  const manifest = encoder.encode(JSON.stringify({ format: 'AssetFixer', schemaVersion: 9, id: options?.id ?? document.id,
+  const manifest = encoder.encode(JSON.stringify({ format: 'AssetFixer', schemaVersion: 10, id: options?.id ?? document.id,
     name: options?.name ?? document.name, revision, settings: { historyBudget }, scene, originals: originalRefs,
     resources, working: { objects: state.objects, geometry, bake, paint, textures, meshEdits, keepOpen: state.keepOpen, uvBakes, extracts,
-      rig: state.rig, poses: state.poses } }));
+      rig: state.rig, poses: state.poses, weightLocks: state.weightLocks } }));
   if (manifest.byteLength > MiB || expanded + manifest.byteLength > limits.total) throw new Error('The project manifest exceeds its size limit.');
   files.set('manifest.json', manifest);
   const bytes = await pack(files);
@@ -128,7 +128,7 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
   const manifest = record(JSON.parse(decoder.decode(encoded)));
   if (manifest.format !== 'AssetFixer') throw new Error('This file is not an AssetFixer project.');
   const version = integer(manifest.schemaVersion, 1);
-  if (version > 9) throw new Error(`Project schema ${version} is newer than this application supports.`);
+  if (version > 10) throw new Error(`Project schema ${version} is newer than this application supports.`);
   // Version 1 had a fixed history budget. Version 2 persists the project setting.
   const historyBudget = version === 1 ? defaultHistoryBudget : integer(record(manifest.settings).historyBudget, MiB, projectLimit);
   if (historyBudget % MiB) throw new Error('Invalid project history budget.');
@@ -325,8 +325,10 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
   if (!uuidPattern.test(id)) throw new Error('Invalid project identifier.');
   const rig = version >= 9 && working.rig !== undefined ? readRig(working.rig) : undefined;
   const poses = version >= 9 && working.poses !== undefined ? readPoses(working.poses) : undefined;
+  const weightLocks = version >= 10 && working.weightLocks !== undefined ? list(working.weightLocks, 2048).map(readJointId) : undefined;
+  if (weightLocks && new Set(weightLocks).size !== weightLocks.length) throw new Error('Duplicate saved weight lock.');
   return { id, name: text(manifest.name, 160), revision: integer(manifest.revision, 0, 1e12), originals, historyBudget, scene,
-    state: { objects, atlas, bake, paint, textures, meshEdits, keepOpen, uvBakes, extracts, rig, poses } };
+    state: { objects, atlas, bake, paint, textures, meshEdits, keepOpen, uvBakes, extracts, rig, poses, weightLocks } };
 }
 
 function readJointId(value: unknown) {

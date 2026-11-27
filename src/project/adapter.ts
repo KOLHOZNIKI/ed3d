@@ -64,6 +64,7 @@ export class ModelAdapter {
       this.#rigMeshEdits = undefined;
     }
     this.mesh.materialize(state.meshEdits);
+    if (!rematerialize && !state.rig && this.mesh.active) this.rig.apply();
     if (rematerialize) {
       this.rig.apply(state.rig);
       this.#rigState = state.rig;

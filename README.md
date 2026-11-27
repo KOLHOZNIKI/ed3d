@@ -56,6 +56,10 @@ Open **Rig & Pose** on a skinned model. Pick a joint in the viewport or hierarch
 
 In **Manual pose**, rotate joints in local or world axes and use **Reset Bone** or **Reset Pose** to return to the working rest. Save named poses in the project and reload them with the quick buttons. To inspect a finger chain, enter consecutive joint IDs and use **Curl chain** or **Preview joint sweep**. Under **Original clips and adaptations**, review each clip and choose whether to adapt or exclude incompatible clips before export. Use **Include manual pose offsets** to apply the current corrections to a separately named adaptation.
 
+Open **Weight Paint** and choose a skinned object. Select an influence to see its heatmap and use **Lock influence** to protect its weight. Set the brush radius, strength, falloff, and face mask, then paint in the working rest, a manual pose, or a frozen clip frame. **Smooth** averages only edge-connected neighbors. Use **Vertex IDs** with **Set exact weight** or **Normalize** for a numeric correction. Each stroke is one Undo step.
+
+Use **Find invalid** to locate problem vertices. Choose a fallback joint for zero sums, and use **Preview conversion** to see weight loss and the resulting deformation before converting rows with extra influences. **Mirror weights** uses the chosen world plane and explicit joint pairs. **Transfer weights** samples an original or captured working mesh using distance, normal, and source-face limits. Both operations report skipped vertices.
+
 | Command | Purpose |
 | --- | --- |
 | `npm run typecheck` | Check the application with strict TypeScript settings. |
@@ -80,6 +84,7 @@ In **Manual pose**, rotate joints in local or world axes and use **Reset Bone** 
 
 ## Verification
 
+- [E10 weight editing verification](Docs/E10_Report.md) covers locks, fifth-influence conflicts, frozen-frame smoothing, UV seams, weight transfer, and FBX and GLB exports.
 - [E09 rig and manual pose verification](Docs/E09_Report.md) covers shared binding, pose persistence, clip compatibility, and FBX and GLB exports.
 - [E08 extended repair and projection verification](Docs/E08_Report.md) covers pinned patches, bridge pairing, projected normals, missing samples, and FBX animation after Smooth Fill.
 - [E07 static asset extraction verification](Docs/E07_Report.md) covers component grouping, map ownership, pivot, scale, orientation, and batch export.

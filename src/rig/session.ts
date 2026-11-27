@@ -73,6 +73,10 @@ export class RigSession {
   get blocked() { return this.#error; }
   get clips() { return this.#clips; }
   bone(id: string) { return this.#nodes.get(id); }
+  palette(mesh: SkinnedMesh) {
+    const ids = new Map([...this.#nodes].map(([id, bone]) => [bone, id]));
+    return mesh.skeleton.bones.map(bone => ids.get(bone));
+  }
   restRotation(id: string) {
     const bone = this.#nodes.get(id);
     return bone && (this.#error ? bone.quaternion.clone() : new Quaternion(...this.#rest.get(id)!.rotation));
@@ -155,19 +159,35 @@ export class RigSession {
   }
 
   apply(state?: RigState) {
-    if (!state) return;
+    if (!state) {
+      this.model.scene.traverse(node => {
+        if (!(node instanceof SkinnedMesh)) return;
+        const written: string[] | undefined = node.geometry.userData.assetFixerJointIds;
+        if (written?.some((id, slot) => id !== this.#ids.get(node.skeleton.bones[slot]))) {
+          throw new Error('The weight history uses a working joint. Transfer its weights or undo those edits before restoring the original rig.');
+        }
+      });
+      return;
+    }
     this.#validate(state);
     const changed = this.#changed(state), affected = new Set([...changed, ...state.rebind]);
     if (affected.size && this.#error) throw new Error(this.#error);
-    const active = new Set(state.joints.map(joint => joint.id));
-    const meshes: { node: SkinnedMesh; ids: string[] }[] = [];
+    const working = new Map(state.joints.map(joint => [joint.id, joint]));
+    const meshes: { node: SkinnedMesh; ids: (string | undefined)[]; groups: Set<string> }[] = [];
     this.model.scene.traverse(node => {
       if (!(node instanceof SkinnedMesh)) return;
-      const ids = node.skeleton.bones.map(bone => this.#ids.get(bone));
-      if (!ids.some(id => id && affected.has(this.#source.get(id)!.group))) return;
-      if (ids.some(id => id === undefined)) throw new Error('A shared skin has an unresolved joint.');
-      meshes.push({ node, ids: ids as string[] });
+      const imported = node.skeleton.bones.map(bone => this.#ids.get(bone));
+      const groups = new Set(imported.flatMap(id => id && this.#source.has(id) ? [this.#source.get(id)!.group] : []));
+      const written: string[] | undefined = node.geometry.userData.assetFixerJointIds;
+      const ids = written ?? imported;
+      if (written?.some(id => {
+        const joint = working.get(id) ?? working.get(state.transfers[id]);
+        return !joint || !groups.has(joint.group);
+      })) throw new Error('A skin weight edit references a joint outside its working rig.');
+      if (written?.some((id, i) => id !== imported[i])) for (const group of groups) affected.add(group);
+      meshes.push({ node, ids, groups });
     });
+    if (affected.size && this.#error) throw new Error(this.#error);
     // Scene attachments need independent space compensation. Keep those rigs intact until that workflow is available.
     for (const joint of this.original.joints) if (affected.has(joint.group)) {
       const node = this.#nodes.get(joint.id)!;
@@ -194,9 +214,12 @@ export class RigSession {
         node.scale.fromArray(joint.scale);
         node.updateMatrix();
       }
-      for (const id of next.keys()) if (!active.has(id)) next.delete(id);
+      for (const id of next.keys()) if (!working.has(id)) next.delete(id);
       this.model.scene.updateMatrixWorld(true);
-      for (const { node, ids } of meshes) this.#bindings.push(rebindMesh(node, this.model.format, ids, state.joints, state, next));
+      for (const { node, ids, groups } of meshes) if ([...groups].some(group => affected.has(group))) {
+        if (ids.some(id => id === undefined)) throw new Error('A shared skin has an unresolved joint.');
+        this.#bindings.push(rebindMesh(node, this.model.format, ids as string[], state.joints, state, next));
+      }
       this.#rest = new Map(state.joints.map(joint => [joint.id, joint]));
       this.#rebound = affected;
       this.#clips = makeClips(this.originalClips, this.#source, state, changed, this.#anchors(changed));
@@ -299,7 +322,9 @@ export class RigSession {
     }
     for (const [id, target] of Object.entries(state.transfers)) {
       const original = this.#source.get(id), next = joints.get(target);
-      if (!original || joints.has(id) || !next || original.group !== next.group) throw new Error('Invalid deleted joint weight destination.');
+      if (joints.has(id) || !next || (original ? original.group !== next.group : !id.startsWith('joint-'))) {
+        throw new Error('Invalid deleted joint weight destination.');
+      }
     }
     for (const joint of this.original.joints) if (!joints.has(joint.id) &&
       (!state.transfers[joint.id] || !joint.parent || !this.#source.has(joint.parent))) throw new Error('An imported joint was removed without a valid weight destination.');

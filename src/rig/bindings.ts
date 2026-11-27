@@ -51,7 +51,10 @@ export function rebindMesh(mesh: SkinnedMesh, format: Model['format'], ids: read
       const rows: Slot[][] = Array.from({ length: source ? source.positions.length / 3 : geometry.attributes.position.count }, () => []);
       const changedRows = new Set<number>();
       const add = (row: number, joint: number, weight: number) => {
-        if (!(weight > 0)) return;
+        if (!Number.isFinite(weight) || weight < 0 || !rows[row] || remap[joint] === undefined) {
+          throw new Error('Resolve invalid skin weights before changing the joint palette.');
+        }
+        if (!weight) return;
         rows[row].push([remap[joint], weight]);
         if (transferred[joint]) changedRows.add(row);
       };

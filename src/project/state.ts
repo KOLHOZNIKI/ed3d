@@ -45,6 +45,7 @@ export interface WorkingState {
   readonly extracts?: Readonly<Record<string, ExtractedAsset>>;
   readonly rig?: RigState;
   readonly poses?: PoseState;
+  readonly weightLocks?: readonly string[];
 }
 
 export function* workingBuffers(state: WorkingState): Iterable<ArrayBuffer> {

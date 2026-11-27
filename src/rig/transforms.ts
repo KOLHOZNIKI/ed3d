@@ -88,7 +88,7 @@ export function changeRig(state: RigState, action: RigAction, anchor: (id: strin
         setWorld({ ...child, parent: selected.parent }, before(child.id));
       }
       for (const [id, previous] of Object.entries(transfers)) if (previous === selected.id) transfers[id] = target.id;
-      if (selected.id.startsWith('object-')) transfers[selected.id] = target.id;
+      transfers[selected.id] = target.id;
       joints.delete(selected.id);
       break;
     }

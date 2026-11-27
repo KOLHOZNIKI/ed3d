@@ -1,9 +1,10 @@
-import { BufferGeometry, Float32BufferAttribute, Matrix3, Matrix4, Uint16BufferAttribute, Uint32BufferAttribute,
+import { BufferGeometry, Float32BufferAttribute, Matrix3, Matrix4, Uint32BufferAttribute,
   Vector3, type Mesh } from 'three';
 import { sourceMesh, type FbxSourceMesh } from '../e00/fbx-topology';
 import { buildTopology, type Topology } from '../project/topology';
 import { point, type Corner, type Face, type MeshData, type Weight } from './data';
 import { faceNormal } from './polygon';
+import { previewSkin, rawSkin, skinData } from '../weights/render';
 
 export interface RenderMesh {
   geometry: BufferGeometry;
@@ -94,6 +95,8 @@ export function renderMesh(data: MeshData, original: BufferGeometry): RenderMesh
   const render = buildTopology(data.positions, polygons, renderCorners);
   const cornerAttributes = new Map(data.channels.map(({ name, size }, i) => [name, { size, values: Float64Array.from(corners.flatMap(c => [...c.attributes[i]])) }]));
   const topology: Topology = { ...render, cornerAttributes, faceMaterials: Uint32Array.from(faceMaterials) };
+  const skin = skinData(data, logicalVertices);
+  if (data.weights && !skin) throw new Error('Mesh editing requires a resolved skin palette.');
 
   let samples: Corner[];
   if (data.glb) {
@@ -115,7 +118,7 @@ export function renderMesh(data: MeshData, original: BufferGeometry): RenderMesh
     geometry.setIndex(new Uint32BufferAttribute(indices.map(id => inverse[id]), 1));
   } else {
     samples = renderCorners.map(i => corners[i]);
-    geometry.userData.assetFixerFbxSource = fbxSource(data, sourceMesh(original), polygons, renderCorners, corners, faceMaterials);
+    geometry.userData.assetFixerFbxSource = fbxSource(data, sourceMesh(original), polygons, renderCorners, corners, faceMaterials, skin);
   }
   geometry.setAttribute('position', new Float32BufferAttribute(samples.flatMap(c => point(data, c.vertex)), 3));
   for (const [i, { name, size }] of data.channels.entries()) {
@@ -127,26 +130,14 @@ export function renderMesh(data: MeshData, original: BufferGeometry): RenderMesh
       (geometry.morphAttributes[key] ??= [])[Number(i)] = attr;
     } else geometry.setAttribute(name === 'uv0' ? 'uv' : name, attr);
   }
-  if (data.weights) {
-    const joints: number[] = [], weights: number[] = [];
-    for (const { vertex } of samples) {
-      const source = data.weights[vertex];
-      const preview = data.glb ? source : [...source].sort((a, b) => b[1] - a[1] || a[0] - b[0]).slice(0, 4);
-      const sum = data.glb ? 1 : preview.reduce((value, pair) => value + pair[1], 0) || 1;
-      for (let i = 0; i < 4; i++) {
-        joints.push(preview[i]?.[0] ?? 0);
-        weights.push((preview[i]?.[1] ?? 0) / sum);
-      }
-    }
-    geometry.setAttribute('skinIndex', new Uint16BufferAttribute(joints, 4));
-    geometry.setAttribute('skinWeight', new Float32BufferAttribute(weights, 4));
-  }
+  if (skin) previewSkin(geometry, data.glb, skin, samples.map(corner => corner.vertex));
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
   return { geometry, topology, renderVertices: Uint32Array.from(logicalVertices), faceIds: data.faces.map(face => face.id) };
 }
 
-function fbxSource(mesh: MeshData, source: FbxSourceMesh, polygons: number[], renderCorners: number[], corners: Corner[], faceMaterials: number[]): FbxSourceMesh {
+function fbxSource(mesh: MeshData, source: FbxSourceMesh, polygons: number[], renderCorners: number[], corners: Corner[], faceMaterials: number[],
+  skin: ReturnType<typeof skinData>): FbxSourceMesh {
   const materials = { dataSize: 1 };
   const layers = mesh.channels.map(({ size }) => ({ dataSize: size }));
   const layer = (name: string) => layers[mesh.channels.findIndex(c => c.name === name)];
@@ -157,22 +148,11 @@ function fbxSource(mesh: MeshData, source: FbxSourceMesh, polygons: number[], re
     indices[id] = positions.length / 3;
     positions.push(...point(mesh, id));
   }
-  const skin = source.skin?.map(() => ({ indices: [] as number[], weights: [] as number[] }));
-  let maxSkinInfluences = 0, pointsOverPreviewLimit = 0;
-  if (skin) for (const id of used) {
-    const weights = mesh.weights![id].filter(weight => weight[1] > 0);
-    maxSkinInfluences = Math.max(weights.length, maxSkinInfluences);
-    if (weights.length > 4) pointsOverPreviewLimit++;
-    for (const [bone, weight] of weights) {
-      skin[bone].indices.push(indices[id]);
-      skin[bone].weights.push(weight);
-    }
-  }
-  return { ...source, positions, maxSkinInfluences, pointsOverPreviewLimit,
+  return { ...source, positions, ...(skin && rawSkin(skin, used, id => indices[id])),
     polygons: Int32Array.from(polygons, index => index < 0 ? ~indices[~index] : indices[index]),
     preTransform: new Matrix4(), renderCorners: Uint32Array.from(renderCorners),
     uvs: mesh.channels.filter(c => /^uv\d+$/.test(c.name)).map(c => layer(c.name)), normal: layer('normal'), color: layer('color'),
-    material: materials, skin,
+    material: materials,
     readCorner(corner, face, _controlPoint, layer) {
       return layer === materials ? [faceMaterials[face]] : corners[corner].attributes[layers.indexOf(layer)];
     },

@@ -43,6 +43,12 @@
         background: #1c242cee; border-radius: .25rem; padding: .15rem .35rem; font-size: .8125rem; white-space: nowrap; }
       #rig-tools input[type=number] { width: 5.5rem; }
       #rig-presets { max-height: 8rem; overflow: auto; gap: .35rem; margin: .5rem 0; }
+      #weights-tools input[type=number] { width: 5.5rem; }
+      #weights-tools p { font-size: .875rem; }
+      #weights-key { display: inline-block; padding: .2rem .5rem; background: linear-gradient(90deg,#243d8b,#169499,#f2d149,#e24933);
+        color: #fff; font-weight: 600; text-shadow: 0 1px 3px #000; }
+      #weights-cursor { position: absolute; border: 1px solid #fff; box-shadow: 0 0 1px 1px #141821;
+        border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
       #paint-tools input[type=number] { width: 5.5rem; }
       #paint-target { width: 100%; margin: .35rem 0; }
       #paint-info { font-size: .875rem; margin: .5rem 0 0; }
@@ -116,6 +122,7 @@
         <button id="uv-mode" type="button" aria-pressed="false" disabled>UV Editor</button>
         <button id="extract-mode" type="button" aria-pressed="false" disabled>Extract</button>
         <button id="rig-mode" type="button" aria-pressed="false" disabled>Rig &amp; Pose</button>
+        <button id="weights-mode" type="button" aria-pressed="false" disabled>Weight Paint</button>
         <button id="undo-stroke" type="button" disabled>Undo</button>
         <button id="redo" type="button" disabled>Redo</button>
         <button id="toggle-texture" type="button" aria-expanded="false" disabled>Texture editor</button>
@@ -168,6 +175,7 @@
         <canvas id="viewport" width="640" height="480" tabindex="0" role="img" aria-label="Imported model preview" hidden></canvas>
         <canvas id="paint-cursor" width="640" height="480" aria-hidden="true" hidden></canvas>
         <span id="rig-label" aria-hidden="true" hidden></span>
+        <span id="weights-cursor" aria-hidden="true" hidden></span>
       </div>
       <fieldset id="repair-tools" hidden>
         <legend>Boundary Repair</legend>
@@ -287,6 +295,72 @@
         <p id="selection-details"></p>
       </fieldset>
       </div>
+      <fieldset id="weights-tools" hidden>
+        <legend>Skin Weights</legend>
+        <div class="actions">
+          <label for="weights-joint">Influence</label><select id="weights-joint"></select>
+          <label><input id="weights-lock" type="checkbox" /> Lock influence</label>
+          <span id="weights-key" aria-label="Heatmap from zero to full influence">0 ───── 1</span>
+        </div>
+        <div class="actions">
+          <label>Brush <select id="weights-brush"><option value="add">Add</option><option value="subtract">Subtract</option>
+            <option value="replace">Replace</option><option value="smooth">Smooth</option></select></label>
+          <label>Radius (px) <input id="weights-radius" type="number" min="1" max="512" value="30" /></label>
+          <label>Strength % <input id="weights-strength" type="number" min="0" max="100" value="35" /></label>
+          <label>Hardness % <input id="weights-hardness" type="number" min="0" max="100" value="50" /></label>
+          <label><input id="weights-xray" type="checkbox" /> X-ray</label>
+        </div>
+        <div class="actions">
+          <label>Value <input id="weights-value" type="number" min="0" max="1" step="any" value="0.5" /></label>
+          <label>Vertex IDs <input id="weights-vertices" placeholder="All active vertices" /></label>
+          <label>Face mask IDs <input id="weights-faces" placeholder="All active faces" /></label>
+          <button id="weights-pick-mask" type="button" aria-pressed="false">Pick mask faces</button>
+          <button id="weights-numeric" type="button">Set exact weight</button>
+          <button id="weights-normalize" type="button">Normalize</button>
+          <button id="weights-find" type="button">Find invalid</button>
+        </div>
+        <div class="actions">
+          <label>Frozen pose <select id="weights-pose"><option value="rest">Working rest</option></select></label>
+          <label>Time (s) <input id="weights-time" type="number" min="0" step="any" value="0" /></label>
+        </div>
+        <details id="weights-limit-tools">
+          <summary>Influence limits</summary>
+          <div class="actions">
+            <label>Overflow <select id="weights-policy"><option value="reject">Reject stroke</option><option value="replace">Replace specified influence</option>
+              <option value="limit">Limit to four</option></select></label>
+            <label>Replacement <select id="weights-replace"></select></label>
+            <label>Fallback for zero sums <select id="weights-fallback"></select></label>
+            <label>Maximum <input id="weights-limit" type="number" min="1" max="4" value="4" /></label>
+            <button id="weights-convert" type="button">Preview conversion</button>
+            <button id="weights-confirm" type="button" disabled>Apply conversion</button>
+          </div>
+        </details>
+        <details id="weights-mirror-tools">
+          <summary>Mirror weights</summary>
+          <div class="actions">
+            <label>Plane normal <select id="weights-axis"><option value="0">X</option><option value="1">Y</option><option value="2">Z</option></select></label>
+            <label>Plane offset <input id="weights-offset" type="number" value="0" step="any" /></label>
+            <label>Tolerance <input id="weights-tolerance" type="number" min="0.00000001" value="0.001" step="any" /></label>
+            <label>Joint ID pairs <input id="weights-mirror-pairs" placeholder="object-1=object-2" /></label>
+            <button id="weights-mirror" type="button">Mirror selection</button>
+          </div>
+        </details>
+        <details id="weights-transfer-tools">
+          <summary>Transfer weights</summary>
+          <div class="actions">
+            <label>Source mesh <select id="weights-source"></select></label>
+            <label>Source version <select id="weights-source-mode"><option value="original">Original import</option><option value="snapshot">Captured working state</option></select></label>
+            <button id="weights-capture" type="button">Capture source</button>
+            <label>Source face IDs <input id="weights-source-faces" placeholder="All source faces" /></label>
+            <label>Source=target joint IDs <input id="weights-transfer-pairs" placeholder="Match stable IDs" /></label>
+            <label>Max distance <input id="weights-distance" type="number" min="0.000001" step="any" value="0.1" /></label>
+            <label>Normal angle ° <input id="weights-angle" type="number" min="0" max="90" value="45" /></label>
+            <button id="weights-transfer" type="button">Transfer to selection</button>
+          </div>
+        </details>
+        <p id="weights-info" aria-live="polite"></p>
+        <p id="weights-issues" aria-live="polite"></p>
+      </fieldset>
       <fieldset id="rig-tools" hidden>
         <legend>Rig &amp; Pose</legend>
         <div class="actions">

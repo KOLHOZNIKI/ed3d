@@ -6,9 +6,10 @@ import { decodeEdit } from './commands';
 import { applyMeshEdit } from './edit';
 import type { MeshData } from './data';
 import { editableMesh, renderMesh, type RenderMesh } from './render';
+import { renderSkin } from '../weights/render';
 
-type State = { root: string; mesh: MeshData; matrix?: Matrix4 };
-type Source = { entry: SceneEntry; node: Mesh; geometry: Mesh['geometry']; extensions: Mesh['userData']['gltfExtensions'] };
+type State = { root: string; mesh: MeshData; matrix?: Matrix4; skinOnly?: boolean };
+type Source = { entry: SceneEntry; node: Mesh; geometry: Mesh['geometry']; extensions: Mesh['userData']['gltfExtensions']; joints?: string[] };
 type Render = { state: State; node: Mesh; render: RenderMesh };
 const noCommands: readonly Uint8Array<ArrayBuffer>[] = [];
 
@@ -22,15 +23,20 @@ export class MeshSession {
 
   constructor(readonly model: Model, entries: readonly SceneEntry[], readonly topology: ReadonlyMap<string, Topology>,
     readonly objects: Map<string, Object3D>) {
+    const jointIds = new Map([...objects].map(([id, object]) => [object, id]));
     for (const entry of entries) {
       const node = objects.get(entry.id);
-      if (node instanceof Mesh) this.#sources.set(entry.id, { entry, node, geometry: node.geometry, extensions: node.userData.gltfExtensions });
+      if (!(node instanceof Mesh)) continue;
+      const palette = node instanceof SkinnedMesh ? node.skeleton.bones.map(bone => jointIds.get(bone)) : undefined;
+      const joints = palette?.every((id): id is string => id !== undefined) ? palette : undefined;
+      this.#sources.set(entry.id, { entry, node, joints, geometry: node.geometry, extensions: node.userData.gltfExtensions });
     }
   }
 
   get pieces() { return this.#pieces; }
   get render() { return this.#renders; }
   get active() { return this.#commands.length > 0; }
+  get geometryActive() { return [...this.#states.values()].some(state => !state.skinOnly); }
   originalGeometry(id: string) { return this.#sources.get(id)?.geometry; }
   get pendingUv() {
     let count = 0;
@@ -52,6 +58,11 @@ export class MeshSession {
     const edited = this.#states.get(id);
     if (edited) return edited.mesh;
     if (!this.#sources.has(id)) throw new Error('Select a mesh object.');
+    return this.#originalMesh(id);
+  }
+
+  originalData(id: string) {
+    if (!this.#sources.has(id)) throw new Error('Choose an originally imported source object.');
     return this.#originalMesh(id);
   }
 
@@ -81,7 +92,8 @@ export class MeshSession {
       if (!source) throw new Error('A mesh edit refers to an unknown source object.');
       const base = state?.mesh ?? this.#originalMesh(root);
       const result = applyMeshEdit(base, edit);
-      if (result.mesh !== base) states.set(edit.object, { root, mesh: result.mesh, matrix: state?.matrix });
+      if (result.mesh !== base) states.set(edit.object, { root, mesh: result.mesh, matrix: state?.matrix,
+        skinOnly: edit.type === 'weights' && (!state || state.skinOnly) });
       if ((edit.type === 'separate' || edit.type === 'extract') && result.piece) {
         this.#allowSeparate(source.node);
         if (this.#sources.has(edit.piece) || states.has(edit.piece) || this.objects.get(edit.piece) && !this.#renders.has(edit.piece)) {
@@ -111,7 +123,9 @@ export class MeshSession {
         if (prior?.state === state) { built.set(id, prior); continue; }
         const source = this.#sources.get(state.root)!;
         const node = id === state.root ? source.node : prior?.node ?? this.#clonePiece(source.node, id);
-        built.set(id, { state, node, render: renderMesh(state.mesh, source.geometry) });
+        const render = state.skinOnly ? renderSkin(state.mesh, source.geometry, this.topology.get(state.root)!) :
+          renderMesh(state.mesh, source.geometry);
+        built.set(id, { state, node, render });
       }
     } catch (error) {
       for (const [id, value] of built) if (this.#renders.get(id) !== value) value.render.geometry.dispose();
@@ -127,7 +141,10 @@ export class MeshSession {
     for (const [id, { state, node, render }] of built) {
       const source = this.#sources.get(state.root)!;
       node.geometry = render.geometry;
-      if (node instanceof SkinnedMesh) { node.computeBoundingBox(); node.computeBoundingSphere(); }
+      if (node instanceof SkinnedMesh) {
+        const palette: string[] | undefined = node.geometry.userData.assetFixerJointIds;
+        if (!palette || palette.length === node.skeleton.bones.length) { node.computeBoundingBox(); node.computeBoundingSphere(); }
+      }
       if (this.model.format === 'glb' && source.extensions?.FB_ngon_encoding) {
         if (id === state.root && sameIndices(source.geometry, render.geometry) &&
             state.mesh.faces.every(face => face.corners.length === 3) && state.mesh.faces.length === this.topology.get(id)!.faceEnds.length) {
@@ -182,6 +199,7 @@ export class MeshSession {
     if (!mesh) {
       const source = this.#sources.get(id)!;
       mesh = editableMesh(source.node, this.topology.get(id)!, this.model.format === 'glb', source.geometry);
+      if (mesh.weights && source.joints) mesh = { ...mesh, weightJoints: source.joints, sourceWeightSlots: source.joints.length };
       this.#original.set(id, mesh);
     }
     return mesh;
