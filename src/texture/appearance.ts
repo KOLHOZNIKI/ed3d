@@ -78,7 +78,7 @@ export function sourceAppearance(catalog: TextureCatalog, state: WorkingState, m
       if (mode === 'fbx' && image) fbx.set(texture, encode(image));
       if (mode === 'glb' && image && canvas) {
         texture.userData = { ...texture.userData, mimeType: 'image/png' };
-        if (!glb.has(canvas)) glb.set(canvas, { blob: new Blob([encode(image)], { type: 'image/png' }) });
+        if (!glb.has(canvas)) glb.set(canvas, { blob: new Blob([encode(image)], { type: 'image/png' }), name: binding.sourceName });
       }
       const material = unlit ? unlitColor(binding.material, texture) : binding.material.clone();
       material.map = texture;

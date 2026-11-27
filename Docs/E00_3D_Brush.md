@@ -1,5 +1,7 @@
 # E00 3D brush across UV seams
 
+This report records the original E00 prototype. The current application uses [E03 3D Paint](E03_Report.md). The reproduction below uses its surface brush with a diameter chosen for the Unity probe's original stroke lanes.
+
 The static Tripo ceramic plate uses the 2396 × 2396 atlas from the [texture rebake probe](E00_Texture_Rebake.md). Turn on **3D brush (visible projection)** after rebaking, choose a Base Color, and drag on the surface. This mode projects a 24-viewport-pixel brush onto camera-visible triangles. It applies the stroke at pointer release. **Undo** restores the previous PNG snapshot byte for byte.
 
 The worker rasterizes the stroke as a continuous polyline in screen space. The first visible triangle hit by the stroke center locks the stroke to its edge-connected component in the source FBX. For each atlas texel in that component, the worker projects the corresponding point, tests the brush mask, and checks front-facing orientation and occlusion against nearby projected triangles. Adjacent triangles on different UV islands sample the same stroke. Painted texels extend into the baked gutter up to sixteen texels. The working PNG owns the result used by the preview and the ZIP exporter. The baked layout stays in the first FBX UV channel for Unity. The original UVs remain in the second channel. [F15 component isolation](E00_F15.md#brush)

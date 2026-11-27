@@ -1,9 +1,10 @@
 import { Mesh, Source, Texture, type Material } from 'three';
 import type { Model, ModelAdapter } from '../project/adapter';
+import { blankPaintMesh } from '../e00/rebake';
 import { atlasColor, type WorkingState } from '../project/state';
 import { decodeImage, decodePng, drawImage, encodeImage, type TextureImage } from './image';
 
-type ColorMaterial = Material & { map: Texture };
+type ColorMaterial = Material & { map: Texture | null };
 export interface TextureBinding {
   readonly id: string;
   readonly sharedKey: string;
@@ -14,6 +15,7 @@ export interface TextureBinding {
   readonly slot: number;
   readonly texture: Texture;
   readonly source: Blob;
+  readonly sourceName?: string;
 }
 
 export interface TextureTarget {
@@ -27,12 +29,19 @@ export class TextureCatalog {
   readonly bindings: TextureBinding[] = [];
   #decoded?: { source: Blob; image: Promise<TextureImage> };
   #atlases = new WeakMap<Uint8Array, TextureImage>();
+  #generatedBinding?: TextureBinding;
 
   constructor(adapter: ModelAdapter) {
-    const first = new Map<object | string, { key: string; blob: Blob }>();
+    const first = new Map<object | string, { key: string; blob: Blob; name?: string }>();
     const model = adapter.model;
+    const generated = model.format === 'fbx' && blankPaintMesh(model);
     for (const [object, node] of adapter.objects) {
       if (!(node instanceof Mesh)) continue;
+      if (generated && generated.mesh === node) {
+        this.#generatedBinding = { id: `slot/${object}/0`, sharedKey: atlasColor, object, mesh: node, material: generated.material,
+          slot: 0, texture: generated.material.map ?? new Texture(), source: new Blob(),
+          label: `${node.name || object} · Generated Base Color` };
+      }
       const materials = Array.isArray(node.material) ? node.material : [node.material];
       for (const [slot, material] of materials.entries()) {
         if (!('map' in material) || !(material.map instanceof Texture)) continue;
@@ -44,19 +53,24 @@ export class TextureCatalog {
         let group = first.get(source);
         if (!group) {
           const bytes = model.format === 'fbx' && path ? model.images.get(path) : undefined;
-          const blob = bytes ? new Blob([bytes]) : model.format === 'glb' ? model.images.get(image)?.blob : undefined;
+          const embedded = model.format === 'glb' ? model.images.get(image) : undefined;
+          const blob = bytes ? new Blob([bytes]) : embedded?.blob;
           if (!blob) continue;
-          group = { key: `base/${object}/${slot}`, blob };
+          group = { key: `base/${object}/${slot}`, blob, name: embedded?.name };
           first.set(source, group);
         }
         this.bindings.push({ id, object, mesh: node, material: material as ColorMaterial, slot, texture,
-          sharedKey: group.key, source: group.blob, label: `${node.name || object} · ${material.name || `Material ${slot + 1}`} · Base Color` });
+          sharedKey: group.key, source: group.blob, sourceName: group.name,
+          label: `${node.name || object} · ${material.name || `Material ${slot + 1}`} · Base Color` });
       }
     }
   }
 
   targets(state: WorkingState): TextureTarget[] {
-    if (state.bake) return this.bindings.slice(0, 1).map(binding => ({ binding, key: atlasColor, atlas: true, shared: [binding] }));
+    if (state.bake) {
+      const binding = state.bake.generated ? this.#generatedBinding : this.bindings[0];
+      return binding ? [{ binding, key: atlasColor, atlas: true, shared: [binding] }] : [];
+    }
     const keyFor = (binding: TextureBinding) => state.textures?.[binding.id] ? binding.id : binding.sharedKey;
     return this.bindings.map(binding => {
       const key = keyFor(binding);
@@ -65,6 +79,7 @@ export class TextureCatalog {
   }
 
   validate(state: WorkingState) {
+    if (state.bake?.generated && !this.#generatedBinding) throw new Error('The source does not support a generated paint atlas.');
     for (const [key, edit] of Object.entries(state.textures ?? {})) {
       if (key === atlasColor) {
         if (!state.bake || edit.image.width !== state.bake.width || edit.image.height !== state.bake.height) {

@@ -60,7 +60,7 @@ class Glb(GlbDocument):
         slot = material["pbrMetallicRoughness"]["baseColorTexture"] if role == "baseColor" else material["normalTexture"]
         texture = doc["textures"][slot["index"]]
         image = doc["images"][texture["source"]]
-        return image["mimeType"], image["name"], self.buffer_view(image["bufferView"]), slot.get("texCoord", 0)
+        return image["mimeType"], image.get("name"), self.buffer_view(image["bufferView"]), slot.get("texCoord", 0)
 
     def joint_parent_names(self):
         joint_name = dict(zip(self.joints, self.joint_names))
@@ -147,7 +147,7 @@ def check_position_edit(before, after, edit):
     }
 
 
-def compare(before, after, position_edit=None):
+def compare(before, after, position_edit=None, base_color_edit=None):
     assert before.indices == after.indices, "Triangle indices or their order changed"
     assert before.attributes.keys() == after.attributes.keys()
     expected_positions = before.attributes["POSITION"]
@@ -175,8 +175,13 @@ def compare(before, after, position_edit=None):
     assert bind_delta <= 1e-6 and joint_delta <= 1e-6
     images = {}
     for role in ("baseColor", "normal"):
-        mime, name, payload, channel = before.texture(role)
-        assert before.texture(role) == after.texture(role), f"{role} image bytes or binding changed"
+        original = before.texture(role)
+        mime, name, payload, channel = after.texture(role)
+        if role == "baseColor" and base_color_edit is not None:
+            assert payload == base_color_edit and payload != original[2], "Export did not embed the working Base Color PNG"
+            assert mime == "image/png" and name == original[1] and channel == original[3]
+        else:
+            assert original == (mime, name, payload, channel), f"{role} image bytes or binding changed"
         images[role] = {"name": name, "mimeType": mime, "bytes": len(payload), "sha256": sha256(payload).hexdigest(), "uvChannel": channel}
     rest, bent = before.deformed(positions=expected_positions), before.deformed(bend=True, positions=expected_positions)
     rest_error = max(map(dist, rest, after.deformed()))
@@ -194,6 +199,8 @@ def compare(before, after, position_edit=None):
     }
     if edit_result is not None:
         report["positionEdit"] = edit_result
+    if base_color_edit is not None:
+        report["exactWorkingBaseColor"] = True
     return report
 
 
@@ -202,6 +209,8 @@ if __name__ == "__main__":
     parser.add_argument("original", type=Path)
     parser.add_argument("exported", type=Path)
     parser.add_argument("--position-edit", type=Path, help="JSON with the expected vertex index and Y offset")
+    parser.add_argument("--base-color-edit", type=Path, help="PNG exported from the working texture editor")
     args = parser.parse_args()
     edit = json.loads(args.position_edit.read_text(encoding="utf-8")) if args.position_edit is not None else None
-    print(json.dumps(compare(Glb(args.original), Glb(args.exported), edit), indent=2))
+    base_color = args.base_color_edit.read_bytes() if args.base_color_edit is not None else None
+    print(json.dumps(compare(Glb(args.original), Glb(args.exported), edit, base_color), indent=2))

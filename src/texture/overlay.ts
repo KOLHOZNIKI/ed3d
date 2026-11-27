@@ -2,16 +2,17 @@ import type { BufferGeometry } from 'three';
 import type { TextureTarget } from './bindings';
 import type { Point } from './stroke';
 
-type Triangle = readonly [Point, Point, Point];
+export type UvTriangle = readonly [Point, Point, Point];
 
-function triangles(target: TextureTarget, atlas?: BufferGeometry): Triangle[] {
+export function textureFaces(target: TextureTarget, atlas?: BufferGeometry): Map<number, UvTriangle> {
   const { binding } = target;
   const geometry = target.atlas ? atlas : binding.mesh.geometry;
-  if (!geometry) return [];
+  const result = new Map<number, UvTriangle>();
+  if (!geometry) return result;
   const map = binding.texture;
   const channel = target.atlas ? 1 : map.channel;
   const uv = geometry.getAttribute(channel ? `uv${channel}` : 'uv');
-  if (!uv) return [];
+  if (!uv) return result;
   if (map.matrixAutoUpdate) map.updateMatrix();
   const m = map.matrix.elements;
   const index = geometry.index;
@@ -24,16 +25,15 @@ function triangles(target: TextureTarget, atlas?: BufferGeometry): Triangle[] {
     const y = m[1] * u + m[4] * v + m[7];
     return { x: m[0] * u + m[3] * v + m[6], y: map.flipY ? 1 - y : y };
   };
-  const result: Triangle[] = [];
   for (const range of ranges) {
     const end = Math.min(count, range.start + range.count);
-    for (let i = range.start; i + 2 < end; i += 3) result.push([sample(i), sample(i + 1), sample(i + 2)]);
+    for (let i = range.start; i + 2 < end; i += 3) result.set(i / 3, [sample(i), sample(i + 1), sample(i + 2)]);
   }
   return result;
 }
 
 export function uvOverlay(target: TextureTarget, atlas?: BufferGeometry) {
-  const faces = triangles(target, atlas);
+  const faces = [...textureFaces(target, atlas).values()];
   let x0 = 1, y0 = 1, x1 = 0, y1 = 0;
   for (const face of faces) for (const point of face) {
     x0 = Math.max(0, Math.min(x0, point.x)); y0 = Math.max(0, Math.min(y0, point.y));
@@ -54,13 +54,16 @@ export function uvOverlay(target: TextureTarget, atlas?: BufferGeometry) {
     path.moveTo(edge.a.x, edge.a.y);
     path.lineTo(edge.b.x, edge.b.y);
   }
-  const sharedFaces = target.shared.flatMap(binding => binding === target.binding ? faces : triangles({ ...target, binding }, atlas));
-  return { boundary, interior, overlaps: !target.atlas && detectOverlap(sharedFaces),
+  return { boundary, interior, overlaps: textureOverlap(target, atlas),
     bounds: x1 > x0 && y1 > y0 ? { x0, x1, y0, y1 } : undefined };
 }
 
+export function textureOverlap(target: TextureTarget, atlas?: BufferGeometry) {
+  return !target.atlas && detectOverlap(target.shared.flatMap(binding => [...textureFaces({ ...target, binding }, atlas).values()]));
+}
+
 // An advisory coverage probe at a bounded resolution keeps the overlay responsive on large meshes.
-function detectOverlap(faces: Triangle[]) {
+function detectOverlap(faces: UvTriangle[]) {
   const size = 256, occupied = new Uint8Array(size * size);
   for (const [a, b, c] of faces) {
     const dx = b.x - a.x, dy = b.y - a.y, ex = c.x - a.x, ey = c.y - a.y;

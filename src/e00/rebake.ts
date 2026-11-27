@@ -17,7 +17,31 @@ export interface TextureBake {
   padded: number;
   padding: number;
   boundaryOnlyTriangles: number;
+  generated?: true;
   projection?: { sourceName: string; misses: number; maxDistance: number; eligibleSources: number[][] };
+}
+
+export function blankPaintMesh(asset: ImportedAsset) {
+  const mesh = asset.scene.getObjectByProperty('isMesh', true);
+  if (asset.stats.meshes !== 1 || !(mesh instanceof Mesh) || asset.alphaProfile) return;
+  const material = mesh.material;
+  if (!(material instanceof MeshLambertMaterial || material instanceof MeshPhongMaterial) || material.transparent || material.alphaTest > 0 ||
+      Object.entries(material).some(([slot, value]) => slot !== 'map' && value?.isTexture)) return;
+  const source = sourceMesh(mesh.geometry);
+  if (!source.hasMorphTargets && source.uvs.length === 0) return { mesh, material };
+}
+
+export async function createPaintAtlas(asset: ImportedAsset, signal?: AbortSignal): Promise<TextureBake> {
+  const atlas = asset.uvAtlas, target = blankPaintMesh(asset);
+  if (!atlas || !target) throw new Error('A blank paint atlas requires one FBX mesh without source UVs or additional texture maps.');
+  const { position, normal } = target.mesh.geometry.attributes;
+  const bake = await bakeInWorker({
+    ...bakeTarget(atlas), position: Float32Array.from(position.array), normals: Float32Array.from(normal.array),
+    sourceUv: new Float32Array(position.count * 2),
+    maps: [{ slot: 'map', source: 'Generated Base Color', mode: 'srgb', width: 1, height: 1,
+      pixels: new Uint8ClampedArray([255, 255, 255, 255]) }],
+  }, signal);
+  return { ...bake, generated: true };
 }
 
 export async function rebakeAsset(asset: ImportedAsset, signal?: AbortSignal, baseColor?: Uint8Array<ArrayBuffer>): Promise<ImportedAsset> {

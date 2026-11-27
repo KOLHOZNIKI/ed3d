@@ -1,6 +1,6 @@
-import { AmbientLight, Box3, Box3Helper, DirectionalLight, Mesh, MeshLambertMaterial, MeshPhongMaterial, OrthographicCamera,
+import { AmbientLight, AnimationMixer, Box3, Box3Helper, DirectionalLight, MOUSE, Mesh, MeshLambertMaterial, MeshPhongMaterial, OrthographicCamera,
   PerspectiveCamera, Raycaster, Scene, SkinnedMesh, SRGBColorSpace, Texture, Vector2, Vector3, WebGLRenderer,
-  type BufferGeometry, type Material, type Object3D } from 'three';
+  type AnimationClip, type BufferGeometry, type Material, type Object3D } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { Model } from './adapter';
 import { applyViews, disposeAppearance, emptyAppearance, sourceAppearance, unlitColor, type Appearance } from '../texture/appearance';
@@ -18,6 +18,9 @@ export class Viewer {
   #live?: Appearance;
   #outline = new Box3Helper(new Box3(), 0x2ad9ed);
   #painting = false;
+  #paintingStroke = false;
+  #pose?: { clip: AnimationClip; time: number };
+  onCameraChange?: () => void;
   #contextLost = false;
 
   constructor(canvas: HTMLCanvasElement, onContext: (lost: boolean) => void) {
@@ -61,6 +64,7 @@ export class Viewer {
     this.#camera = undefined;
     this.#model?.removeFromParent();
     this.#model = undefined;
+    this.#pose = undefined;
     if (this.#appearance) disposeAppearance(this.#appearance);
     this.#appearance = undefined;
     this.setLive();
@@ -85,14 +89,46 @@ export class Viewer {
     this.render();
   }
 
-  setPainting(active: boolean) {
+  setPainting(active: boolean, stroke = false) {
     this.#painting = active;
-    if (this.#orbit) this.#orbit.enabled = !active;
+    this.#paintingStroke = stroke;
+    this.#configureOrbit();
+  }
+
+  #configureOrbit() {
+    if (!this.#orbit) return;
+    this.#orbit.enabled = !this.#paintingStroke;
+    this.#orbit.mouseButtons.LEFT = this.#painting ? null : MOUSE.ROTATE;
+    this.#orbit.mouseButtons.RIGHT = this.#painting ? MOUSE.ROTATE : MOUSE.PAN;
+    this.#orbit.enableRotate = true;
+  }
+
+  freeze(clip?: AnimationClip, time = 0) {
+    this.#pose = clip && { clip, time };
+    this.render();
+  }
+
+  withPose<T>(use: () => T): T {
+    if (!this.#pose || !this.#model) return use();
+    const root = this.#model;
+    const mixer = new AnimationMixer(root);
+    const action = mixer.clipAction(this.#pose.clip);
+    action.paused = true;
+    action.time = this.#pose.time;
+    action.play();
+    mixer.update(0);
+    root.updateMatrixWorld(true);
+    try {
+      return use();
+    } finally {
+      mixer.stopAllAction();
+      root.updateMatrixWorld(true);
+    }
   }
 
   frame(object = this.#model, orthographic = this.#camera instanceof OrthographicCamera, direction = new Vector3(0.6, 0.45, 1)) {
     if (!object || !this.#renderer) return;
-    const box = new Box3().setFromObject(object);
+    const box = this.withPose(() => new Box3().setFromObject(object, !!this.#pose));
     if (box.isEmpty()) return;
     const center = box.getCenter(new Vector3()), radius = Math.max(box.getSize(new Vector3()).length() / 2, 0.001);
     const aspect = this.#canvas.width / this.#canvas.height;
@@ -106,15 +142,15 @@ export class Viewer {
     this.#camera = camera;
     this.#orbit = new OrbitControls(camera, this.#canvas);
     this.#orbit.target.copy(center);
-    this.#orbit.enabled = !this.#painting;
-    this.#orbit.addEventListener('change', () => this.render());
+    this.#configureOrbit();
+    this.#orbit.addEventListener('change', () => { this.render(); this.onCameraChange?.(); });
     this.#orbit.update();
     this.render();
   }
 
   select(object?: Object3D) {
     this.#outline.visible = !!object && shown(object);
-    if (this.#outline.visible) this.#outline.box.setFromObject(object!);
+    if (this.#outline.visible) this.withPose(() => this.#outline.box.setFromObject(object!, !!this.#pose));
     this.render();
   }
 
@@ -132,7 +168,7 @@ export class Viewer {
     if (!this.#renderer || !this.#camera || this.#contextLost) return;
     const restore = applyViews((this.#live ?? this.#appearance)?.views ?? []);
     try {
-      this.#renderer.render(this.scene, this.#camera);
+      this.withPose(() => this.#renderer!.render(this.scene, this.#camera!));
     } finally {
       restore();
     }

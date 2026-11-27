@@ -25,9 +25,9 @@ export async function unwrapAsset(asset: ImportedAsset, signal?: AbortSignal): P
   }
   const geometry = mesh.geometry;
   const source = sourceMesh(geometry);
-  if (source.hasMorphTargets || source.uvs.length !== 1 || geometry.index || !source.renderCorners
+  if (source.hasMorphTargets || source.uvs.length > 1 || geometry.index || !source.renderCorners
     || source.renderCorners.length !== geometry.getAttribute('position').count || geometry.hasAttribute('tangent')) {
-    throw new Error('The atlas probe requires one source UV set and a non-indexed FBX preview with source corners.');
+    throw new Error('The atlas requires at most one source UV set and a non-indexed FBX preview with source corners.');
   }
   const positions = Float32Array.from(source.positions);
   const controlPoints = renderControlPoints(source);

@@ -532,7 +532,7 @@ async function checkSeamStroke(page, bakedExport, exportButton, status) {
         const route = trace(y, rise);
         if (!route?.crossings.length) continue;
         const lanes = [-8, -4, 4, 8].map(offset => trace(y + offset, rise));
-        if (lanes.every(Boolean)) return { ...route, lanes, width: canvas.width, height: canvas.height, color: '#15e4f2' };
+        if (lanes.every(Boolean)) return { ...route, lanes, width: canvas.width, height: canvas.height, color: '#15e4f2', diameter: .29 * radius };
       }
     }
     throw new Error('No continuous stroke crossing a new UV seam was found on the top of the plate.');
@@ -552,6 +552,8 @@ async function checkSeamStroke(page, bakedExport, exportButton, status) {
     assert.match(await status.textContent(), /^Painted .* Base Color texels\./);
   };
   await page.locator('#paint').click();
+  await page.locator('#paint-size').fill(String(path.diameter));
+  await page.locator('#paint-hardness').fill('100');
   await draw();
   await page.locator('#undo-stroke').click();
   await page.waitForFunction(() => !document.querySelector('#paint').disabled);

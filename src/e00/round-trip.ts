@@ -1,10 +1,10 @@
 import { FBXExporter } from '@comfyorg/fbx-exporter-three';
-import { ClampToEdgeWrapping, LoadingManager, Mesh, type Group, type Texture } from 'three';
+import { ClampToEdgeWrapping, LoadingManager, Mesh, Texture, type Group } from 'three';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { validateFbxAxes } from './fbx-profile';
-import { offsetControlPointY, useSourceTopology, type FbxSourceMesh } from './fbx-topology';
+import { offsetControlPointY, sourceMesh, useSourceTopology, type FbxSourceMesh } from './fbx-topology';
 import { sceneStats } from './scene-stats';
-import type { TextureBake } from './rebake';
+import { blankPaintMesh, type TextureBake } from './rebake';
 import type { TexturePaint } from './paint';
 import type { RepairPatch } from './repair';
 import type { UvAtlasEdit } from './uv-atlas';
@@ -144,14 +144,14 @@ export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMa
   const linked: { semantic: string; file: string; source: string | null; rebaked?: true }[] = [];
   const assigned = new Set<string>();
   const pending: Promise<void>[] = [];
-  const fbx = new FBXExporter().register((plan: ExportPlan) => {
+  const writer = new FBXExporter().register((plan: ExportPlan) => {
     for (const mesh of plan.meshes) useSourceTopology(mesh, edit?.geometry === mesh.geometry ? edit.positions : undefined,
       atlas?.inputGeometry === mesh.geometry ? atlas : undefined, !!bake, repair?.inputGeometry === mesh.geometry ? repair : undefined);
     for (const entry of plan.textures?.textures.values() ?? []) {
       const image = entry.texture.image;
-      if (!(image instanceof HTMLImageElement) || !image.naturalWidth) throw new Error('An FBX texture could not be decoded.');
-      const source = asset.imagePathsByUrl.get(image.src) ?? null;
-      const baked = bake?.maps.find(map => map.slot === entry.slotName && map.source === source);
+      if (!bake?.generated && (!(image instanceof HTMLImageElement) || !image.naturalWidth)) throw new Error('An FBX texture could not be decoded.');
+      const source = image instanceof HTMLImageElement ? asset.imagePathsByUrl.get(image.src) ?? null : null;
+      const baked = bake?.maps.find(map => map.slot === entry.slotName && (bake.generated || map.source === source));
       if (bake && !baked) throw new Error(`The atlas export has no baked ${entry.slotName} map.`);
       if (baked) {
         const semantic = textureSemantics[entry.slotName];
@@ -166,8 +166,8 @@ export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMa
         entry.texture.matrix.identity();
         if (asset.alphaProfile) entry.texture.wrapS = entry.texture.wrapT = ClampToEdgeWrapping;
         files.set(file, entry.slotName === 'map' && paint ? paint.png : baked.png);
-        linked.push({ semantic, file, source: baked.source, rebaked: true });
-        assigned.add(baked.source);
+        linked.push({ semantic, file, source: bake!.generated ? null : baked.source, rebaked: true });
+        if (!bake!.generated) assigned.add(baked.source);
         continue;
       }
       const edited = sourceEdits?.get(entry.texture);
@@ -178,21 +178,39 @@ export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMa
       if (source) {
         assigned.add(source);
         files.set(location, edited ?? asset.images.get(source)!);
-      } else {
+      } else if (image instanceof HTMLImageElement) {
         pending.push(encodePng(image).then(bytes => { files.set(location, bytes); }));
       }
     }
-  }).parseSync(asset.scene, {
-    // This exporter encodes the Tripo +X/+Y/+Z metadata with its -Z option.
-    preset: 'unity', axisForward: '-Z', unitScale: asset.unitScale, embedTextures: false, bakeSpaceTransform: false,
   });
+  const generated = bake?.generated && blankPaintMesh(asset);
+  if (bake?.generated && !generated) throw new Error('The source does not support a generated paint atlas.');
+  let fbx: Uint8Array;
+  try {
+    if (generated) {
+      const material = generated.material.clone();
+      material.map = new Texture();
+      generated.mesh.material = material;
+    }
+    fbx = writer.parseSync(asset.scene, {
+      // This exporter encodes the Tripo +X/+Y/+Z metadata with its -Z option.
+      preset: 'unity', axisForward: '-Z', unitScale: asset.unitScale, embedTextures: false, bakeSpaceTransform: false,
+    });
+  } finally {
+    if (generated) {
+      const material = generated.mesh.material as typeof generated.material;
+      material.map?.dispose();
+      material.dispose();
+      generated.mesh.material = generated.material;
+    }
+  }
   await Promise.all(pending);
 
   const unassigned = [];
   const auxiliaryMaps = [];
   for (const [source, bytes] of asset.images) {
     if (assigned.has(source)) continue;
-    const baked = bake?.maps.find(map => map.source === source);
+    const baked = !bake?.generated && bake?.maps.find(map => map.source === source);
     if (baked) {
       const file = `unassigned/${baked.slot}.png`;
       files.set(file, baked.png);
@@ -207,6 +225,7 @@ export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMa
   files.set(model, new Uint8Array(fbx));
   const cornerMap = repair ? 'repair-source-corners.bin' : 'uv-atlas-source-corners.bin';
   const sourceCorners = repair?.sourceCorners ?? atlas?.sourceCorners;
+  const hadSourceUv = atlas && sourceMesh(atlas.inputGeometry).uvs.length > 0;
   if (sourceCorners) {
     const bytes = new Uint8Array(sourceCorners.byteLength);
     const view = new DataView(bytes.buffer);
@@ -221,9 +240,10 @@ export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMa
     assetFixerMaterial: asset.alphaProfile && { ...asset.alphaProfile, uvTransform: bake ? undefined : asset.alphaProfile.uvTransform },
     positionEdit: edit && { controlPoint: edit.controlPoint, offsetY: edit.offsetY },
     repair: repair && { ...repair.metadata, sourceCornerMap: cornerMap },
-    uvAtlas: atlas && { channel: bake ? 'uv0' : atlas.channel, sourceCornerMap: cornerMap, ...atlas.metrics },
+    uvAtlas: atlas && { channel: bake || !hadSourceUv ? 'uv0' : atlas.channel, sourceCornerMap: cornerMap, ...atlas.metrics },
     textureBake: bake && {
-      source: bake.projection?.sourceName ?? 'Original import', layout: 'uv1', exportedLayout: 'uv0', originalLayout: 'uv1',
+      source: bake.generated ? 'Generated Base Color' : bake.projection?.sourceName ?? 'Original import',
+      layout: 'uv1', exportedLayout: 'uv0', originalLayout: hadSourceUv ? 'uv1' : undefined,
       width: bake.width, height: bake.height, padding: bake.padding, covered: bake.covered,
       padded: bake.padded, boundaryOnlyTriangles: bake.boundaryOnlyTriangles, auxiliaryMaps, projection: bake.projection,
     },
@@ -235,8 +255,10 @@ export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMa
       ...(asset.deformation.pointsOverPreviewLimit > 0
         ? ['The preview is approximate above four skin influences. Export retains all source skin weights.'] : []),
       ...(asset.alphaProfile ? ['Use assetFixerMaterial in this manifest to configure the Unity material alpha mode and cutoff.'] : []),
-      ...(bake ? ['Baked textures use the atlas in UV0 for Unity. The original UV layout is retained in UV1.']
-        : atlas ? ['Atlas export writes triangles with UV1. Existing textures continue to use UV0.'] : []),
+      ...(bake?.generated ? ['The generated Base Color uses the new UV0 atlas.']
+        : bake ? ['Baked textures use the atlas in UV0 for Unity. The original UV layout is retained in UV1.']
+        : atlas ? [hadSourceUv ? 'Atlas export writes triangles with UV1. Existing textures continue to use UV0.'
+          : 'Atlas export writes triangles with the new UV0.'] : []),
     ],
   }, null, 2) + '\n'));
   return { name: `${name}.zip`, bytes: await pack(files) };

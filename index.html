@@ -36,6 +36,13 @@
         gap: 0.75rem;
       }
 
+      .model-view { position: relative; }
+      #viewport { display: block; width: 100%; }
+      #paint-cursor { width: 100%; position: absolute; inset: 0; pointer-events: none; }
+      #paint-tools input[type=number] { width: 5.5rem; }
+      #paint-target { width: 100%; margin: .35rem 0; }
+      #paint-info { font-size: .875rem; margin: .5rem 0 0; }
+
       main:has(#texture-panel:not([hidden])) { max-width: 83rem; }
       .work-area:has(#texture-panel:not([hidden])) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.08fr); gap: 1rem; align-items: start; }
       #texture-panel { min-width: 0; }
@@ -83,9 +90,7 @@
         <button id="export" type="button" disabled>Export FBX ZIP</button>
         <button id="unwrap" type="button" disabled>Generate UV atlas</button>
         <button id="rebake" type="button" disabled>Rebake textures</button>
-        <button id="paint" type="button" aria-pressed="false" disabled>3D brush (visible projection)</button>
-        <label for="paint-color">Brush color</label>
-        <input id="paint-color" type="color" value="#15e4f2" disabled />
+        <button id="paint" type="button" aria-pressed="false" disabled>3D Paint</button>
         <button id="undo-stroke" type="button" disabled>Undo</button>
         <button id="redo" type="button" disabled>Redo</button>
         <button id="toggle-texture" type="button" aria-expanded="false" disabled>Texture editor</button>
@@ -106,7 +111,36 @@
           <button id="frame-selection" type="button" disabled>Frame selection</button>
         </div>
       </fieldset>
-      <canvas id="viewport" width="640" height="480" role="img" aria-label="Imported model preview" hidden></canvas>
+      <fieldset id="paint-tools" hidden>
+        <legend>3D Paint</legend>
+        <label for="paint-target">Base Color binding</label>
+        <select id="paint-target"></select>
+        <button id="paint-unwrap" type="button" hidden>Create paint atlas</button>
+        <div class="actions">
+          <label for="paint-mode">Mode</label>
+          <select id="paint-mode"><option value="surface">Surface</option><option value="screen">Screen projection</option><option value="pixel">Texture pixels</option></select>
+          <label for="paint-size" id="paint-units">Diameter (scene units)</label><input id="paint-size" type="number" min="0.000001" />
+          <label for="paint-color">Color</label><input id="paint-color" type="color" value="#15e4f2" />
+          <label for="paint-opacity">Opacity %</label><input id="paint-opacity" type="number" value="100" min="0" max="100" />
+          <label for="paint-hardness">Hardness %</label><input id="paint-hardness" type="number" value="75" min="0" max="100" />
+          <label><input id="paint-shared" type="checkbox" /> Edit shared map</label>
+        </div>
+        <div class="actions">
+          <label for="paint-mask">Mask</label>
+          <select id="paint-mask"><option value="">None</option><option value="face">Selected faces</option><option value="island">Selected UV islands</option></select>
+          <button id="paint-select" type="button" aria-pressed="false">Pick mask regions</button>
+          <button id="paint-clear" type="button">Clear mask</button>
+        </div>
+        <div class="actions" id="paint-pose" hidden>
+          <label for="paint-clip">Frozen pose</label><select id="paint-clip"><option value="">Rest pose</option></select>
+          <label for="paint-seconds">Time (s)</label><input id="paint-seconds" type="number" min="0" step="0.01" value="0" />
+        </div>
+        <p id="paint-info" aria-live="polite"></p>
+      </fieldset>
+      <div class="model-view">
+        <canvas id="viewport" width="640" height="480" role="img" aria-label="Imported model preview" hidden></canvas>
+        <canvas id="paint-cursor" width="640" height="480" aria-hidden="true" hidden></canvas>
+      </div>
       <fieldset id="object-tools" hidden>
         <legend>Objects</legend>
         <div class="actions">

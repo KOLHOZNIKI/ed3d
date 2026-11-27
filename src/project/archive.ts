@@ -189,8 +189,11 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
     if (!maps.some(map => map.slot === 'map') || new Set(maps.map(map => map.slot)).size !== maps.length) {
       throw new Error('Invalid saved bake map set.');
     }
+    if (data.generated !== undefined && (data.generated !== true || maps.length !== 1 || maps[0].source !== 'Generated Base Color')) {
+      throw new Error('Invalid generated paint atlas.');
+    }
     bake = { maps, width, height, padding: integer(data.padding), covered: integer(data.covered, 1, width * height),
-      padded: integer(data.padded, 0, width * height), boundaryOnlyTriangles: integer(data.boundaryOnlyTriangles) };
+      padded: integer(data.padded, 0, width * height), boundaryOnlyTriangles: integer(data.boundaryOnlyTriangles), generated: data.generated };
   }
   let paint: WorkingState['paint'];
   if (working.paint) {

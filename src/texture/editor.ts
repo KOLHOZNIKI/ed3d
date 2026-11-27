@@ -15,7 +15,7 @@ interface Actions {
   live(target?: TextureTarget, canvas?: HTMLCanvasElement): void;
   commit(target: TextureTarget, image: TextureImage, label: string, copy?: boolean): Promise<void>;
   export(target: TextureTarget, image: TextureImage): void;
-  selectObject(id: string): void;
+  selectBinding(target: TextureTarget): void;
   unlit(value: boolean): void;
 }
 
@@ -60,8 +60,7 @@ export class TextureEditor {
     this.#actions = actions;
     this.#chooser.addEventListener('change', () => {
       const target = this.#session?.targets.find(item => item.binding.id === this.#chooser.value);
-      if (target) this.#actions.selectObject(target.binding.object);
-      void this.#show(target);
+      if (target) this.#actions.selectBinding(target);
     });
     byId('edit-shared').addEventListener('click', () => {
       if (!this.#target || this.#locked) return;
@@ -135,14 +134,17 @@ export class TextureEditor {
     byId<HTMLInputElement>('unlit').checked = false;
   }
 
-  setSession(session?: Session, object?: string) {
+  setSession(session?: Session, binding?: string) {
     this.#session = session;
     if (this.panel.hidden) return;
     const targets = session?.targets ?? [];
-    const previous = targets.find(item => item.binding.id === this.#target?.binding.id);
-    const target = object && previous?.binding.object !== object ? targets.find(item => item.binding.object === object) ?? previous : previous;
+    const target = targets.find(item => item.binding.id === binding);
     this.#chooser.replaceChildren(...targets.map(item => new Option(`${item.binding.label}${item.atlas ? ' (atlas)' : ''}`, item.binding.id)));
     void this.#show(target ?? targets[0]);
+  }
+
+  region(target: TextureTarget) {
+    return this.#target?.binding.id === target.binding.id && this.#target.key === target.key ? this.#region : undefined;
   }
 
   lock(locked: boolean) {

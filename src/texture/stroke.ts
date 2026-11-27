@@ -71,6 +71,32 @@ export class TextureStroke {
     return changed;
   }
 
+  applyCoverage(pixels: Uint32Array, strength: Float32Array, padding: Uint32Array): number {
+    const size = this.base.width * this.base.height;
+    if (pixels.length !== strength.length || padding.length % 2) throw new Error('The brush returned invalid coverage.');
+    const changed = new Set<number>();
+    let count = 0;
+    for (const [i, pixel] of pixels.entries()) {
+      if (pixel >= size || !(strength[i] > 0 && strength[i] <= 1)) throw new Error('The brush returned invalid coverage.');
+      if (this.#write(pixel % this.base.width, Math.floor(pixel / this.base.width), strength[i], changed)) count++;
+    }
+    for (let i = 0; i < padding.length; i += 2) {
+      const pixel = padding[i], source = padding[i + 1];
+      if (pixel >= size || source >= size) throw new Error('The brush returned invalid padding.');
+      const x = pixel % this.base.width, y = Math.floor(pixel / this.base.width);
+      const sx = source % this.base.width, sy = Math.floor(source / this.base.width);
+      const from = this.tiles.get(tileIndex(this.base, sx, sy));
+      if (!from) continue;
+      const index = tileIndex(this.base, x, y), offset = pixelOffset(x, y), src = pixelOffset(sx, sy);
+      const original = this.tiles.get(index) ?? this.base.tiles[index];
+      if (original[offset] === from[src] && original[offset + 1] === from[src + 1] && original[offset + 2] === from[src + 2]) continue;
+      const tile = this.tiles.get(index) ?? original.slice();
+      tile.set(from.subarray(src, src + 3), offset);
+      this.tiles.set(index, tile);
+    }
+    return count;
+  }
+
   finish(): TextureImage {
     if (!this.tiles.size) return this.base;
     const tiles = this.base.tiles.slice();
@@ -105,6 +131,7 @@ export class TextureStroke {
     coverage[offset / 4] = strength;
     const original = this.base.tiles[index];
     let tile = this.tiles.get(index);
+    let wrote = false;
     for (let channel = alpha ? 3 : 0; channel < (alpha ? 4 : 3); channel++) {
       const value = Math.round(mix(original[offset + channel], replacement[channel], strength, alpha));
       if (value === (tile ?? original)[offset + channel]) continue;
@@ -114,6 +141,8 @@ export class TextureStroke {
       }
       tile[offset + channel] = value;
       changed.add(index);
+      wrote = true;
     }
+    return wrote;
   }
 }

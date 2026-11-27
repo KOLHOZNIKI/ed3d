@@ -30,7 +30,9 @@ Drag the viewport to orbit, use the right mouse button to pan, and scroll to zoo
 
 For a single FBX mesh with one UV set, use **Generate UV atlas** to add UV1. **Rebake textures** transfers the maps from the original import. The baked FBX promotes the atlas to the primary UV channel for Unity and retains the original coordinates in the second channel.
 
-After rebaking a static mesh with one base color map, turn on **3D brush (visible projection)** and drag on the model. **Undo** restores the preceding texture. **Export FBX ZIP** packages the painted map.
+Turn on **3D Paint**, choose a Base Color binding and drag on the model. **Surface** measures brush diameter along connected faces in scene units. **Screen projection** reaches visible faces in the selected binding within a viewport-pixel diameter. **Texture pixels** snaps a square brush to the image grid. Right-drag to orbit and scroll to zoom inside Paint mode.
+
+To restrict writes, choose **Selected faces** or **Selected UV islands**, then use **Pick mask regions** to toggle the regions on the model. Turn off region picking before painting. Shared images require confirmation, or you can use **Copy for this binding** in the texture editor. Use **Frozen pose** and **Time** to inspect and paint a specific frame of a skinned mesh. **Create paint atlas** unwraps eligible FBX meshes that have no UVs and gives them a blank Base Color map.
 
 Open **Texture editor** to edit the selected object's Base Color material. The 2D view has Brush, Clone Stamp, Eyedropper, Pixel Brush and a rectangular mask. Set the stamp source with `Alt` + click. Use the mouse wheel to zoom at the cursor and the middle button to pan. **Focus UVs** frames the current material's sampling region. Use **Export PNG** to download the image at its working dimensions. 2D and 3D edits share Undo and Redo.
 
@@ -58,6 +60,7 @@ Open **Texture editor** to edit the selected object's Base Color material. The 2
 
 ## Verification
 
+- [E03 3D Paint verification](Docs/E03_Report.md) covers UV seams, visible surface isolation, masks, and painting on a frozen skinned pose.
 - [E02 texture editor verification](Docs/E02_Report.md) records color sampling, stamp isolation, pixel zoom, mixed history and FBX/GLB export.
 - [E01 project and recovery verification](Docs/E01_Report.md) records the offline reopening, checkpoint and Unity tests.
 - [E00 format and risk verification](Docs/E00_Report.md) records backend decisions, fixture provenance, reference exports and adapter checks.
