@@ -36,6 +36,8 @@ To restrict writes, choose **Selected faces** or **Selected UV islands**, then u
 
 Open **Texture editor** to edit the selected object's Base Color material. The 2D view has Brush, Clone Stamp, Eyedropper, Pixel Brush and a rectangular mask. Set the stamp source with `Alt` + click. Use the mouse wheel to zoom at the cursor and the middle button to pan. **Focus UVs** frames the current material's sampling region. Use **Export PNG** to download the image at its working dimensions. 2D and 3D edits share Undo and Redo.
 
+Open **Mesh Edit** and choose an object. Click a vertex, edge or face in the viewport, use Shift-click to extend the selection, or enter element IDs. Move, Rotate and Scale support axis handles, numeric values and a pivot. Use **Preview** to inspect an edit, then **Apply** or Enter. Press Esc to cancel. Use the ordered vertex selection for **Create Face**. **Separate** creates another object with the selected faces and their existing material bindings.
+
 | Command | Purpose |
 | --- | --- |
 | `npm run typecheck` | Check the application with strict TypeScript settings. |
@@ -60,6 +62,7 @@ Open **Texture editor** to edit the selected object's Base Color material. The 2
 
 ## Verification
 
+- [E04 Mesh Core verification](Docs/E04_Report.md) covers logical vertex edits, UV and normal seams, ordered face creation, and FBX skinning after a split and separation.
 - [E03 3D Paint verification](Docs/E03_Report.md) covers UV seams, visible surface isolation, masks, and painting on a frozen skinned pose.
 - [E02 texture editor verification](Docs/E02_Report.md) records color sampling, stamp isolation, pixel zoom, mixed history and FBX/GLB export.
 - [E01 project and recovery verification](Docs/E01_Report.md) records the offline reopening, checkpoint and Unity tests.

@@ -43,6 +43,7 @@ export class TextureEditor {
   #paths?: ReturnType<typeof uvOverlay>;
   #scaledPaths?: { boundary: Path2D; interior: Path2D };
   #atlas?: BufferGeometry;
+  #geometry?: BufferGeometry;
   #load = 0;
   #zoom = 1;
   #offset: Point = { x: 0, y: 0 };
@@ -125,7 +126,7 @@ export class TextureEditor {
   close() {
     this.cancel();
     this.panel.hidden = true;
-    this.#session = this.#target = this.#image = this.#atlas = this.#paths = this.#scaledPaths = undefined;
+    this.#session = this.#target = this.#image = this.#atlas = this.#paths = this.#scaledPaths = this.#geometry = undefined;
     this.#region = this.#source = this.#aligned = undefined;
     this.#sharedAllowed.clear();
     this.picture.width = this.picture.height = 1;
@@ -202,9 +203,11 @@ export class TextureEditor {
         }
         drawImage(this.picture.getContext('2d')!, image);
       }
-      if (!this.#paths || this.#atlas !== this.#session.atlas || this.#target?.shared.length !== target.shared.length) {
+      if (!this.#paths || this.#atlas !== this.#session.atlas || this.#geometry !== target.binding.mesh.geometry ||
+          this.#target?.shared.length !== target.shared.length) {
         this.#paths = uvOverlay(target, this.#session.atlas);
         this.#atlas = this.#session.atlas;
+        this.#geometry = target.binding.mesh.geometry;
       }
       this.#target = target;
       if (resize || changed) this.fit();

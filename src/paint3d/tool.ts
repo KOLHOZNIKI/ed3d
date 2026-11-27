@@ -167,7 +167,7 @@ export class PaintTool {
     this.target.disabled ||= !target;
     this.#seconds.disabled = this.#locked || !this.#clip.value;
     this.#shared.parentElement!.hidden = !shared;
-    this.#pick.disabled = this.#locked || !this.#scope.value || !target || !!unsupported;
+    this.#pick.disabled = this.#locked || !this.#scope.value || this.#scope.value === 'created' || !target || !!unsupported;
     this.#clear.disabled = this.#locked || !this.#mask.size;
     this.#pick.setAttribute('aria-pressed', String(this.#picking));
     const messages: string[] = [];
@@ -176,7 +176,8 @@ export class PaintTool {
     else {
       if (overlap) messages.push('Overlapping UVs detected. Shared texels affect every surface that uses them, including outside a mask.');
       if (shared) messages.push(`This image is shared by ${target.shared.length} bindings. Enable Edit shared map or use Copy for this binding in the texture editor.`);
-      if (this.#scope.value) messages.push(`${this.#mask.size} selected ${this.#scope.value === 'face' ? 'faces' : 'islands'}. ${this.#picking ? 'Click a region to toggle it.' : 'Use Pick mask regions to change the selection.'}`);
+      if (this.#scope.value === 'created') messages.push(`${this.#createdMask(target).size} new faces with paintable UVs.`);
+      else if (this.#scope.value) messages.push(`${this.#mask.size} selected ${this.#scope.value === 'face' ? 'faces' : 'islands'}. ${this.#picking ? 'Click a region to toggle it.' : 'Use Pick mask regions to change the selection.'}`);
       if (!this.#image) messages.push('Loading Base Color…');
       if (target.binding.material.transparent || target.binding.material.alphaTest > 0) {
         messages.push('Picking and occlusion use the surface even where its texture is transparent.');
@@ -194,13 +195,20 @@ export class PaintTool {
   }
 
   #brush(image: TextureImage, target: TextureTarget): Brush {
-    const mode = this.#mode.value as Mode, kind = this.#scope.value as Brush['kind'];
+    const mode = this.#mode.value as Mode, created = this.#scope.value === 'created';
+    const kind = created ? 'face' : this.#scope.value as Brush['kind'];
     const cssScale = this.canvas.width / this.canvas.getBoundingClientRect().width;
     return { mode, radius: Math.min(this.#sizes[mode], mode === 'screen' ? 512 : mode === 'pixel' ? 512 : Infinity) / 2 * (mode === 'screen' ? cssScale : 1),
       opacity: limit((ui<HTMLInputElement>('opacity').valueAsNumber || 0) / 100, 0, 1),
       hardness: limit((ui<HTMLInputElement>('hardness').valueAsNumber || 0) / 100, 0, 1),
-      width: image.width, height: image.height, kind: kind || undefined, mask: kind ? new Set(this.#mask) : undefined,
+      width: image.width, height: image.height, kind: kind || undefined, mask: created ? this.#createdMask(target) : kind ? new Set(this.#mask) : undefined,
       region: this.#context?.region(target) };
+  }
+
+  #createdMask(target: TextureTarget) {
+    const entry = this.#context?.adapter.mesh.render.get(target.binding.object);
+    return new Set((entry?.state.mesh.faces ?? []).filter(face => face.created && !face.needsUv && face.material === target.binding.slot)
+      .map(face => `${target.binding.object}/face/${face.id}`));
   }
 
   begin(point: Point): Gesture | string | undefined {

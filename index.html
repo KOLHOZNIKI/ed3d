@@ -42,6 +42,9 @@
       #paint-tools input[type=number] { width: 5.5rem; }
       #paint-target { width: 100%; margin: .35rem 0; }
       #paint-info { font-size: .875rem; margin: .5rem 0 0; }
+      #mesh-tools input[type=number] { width: 5.75rem; }
+      #mesh-ids { width: min(100%, 22rem); }
+      #mesh-info { font-size: .875rem; margin: .5rem 0 0; }
 
       main:has(#texture-panel:not([hidden])) { max-width: 83rem; }
       .work-area:has(#texture-panel:not([hidden])) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.08fr); gap: 1rem; align-items: start; }
@@ -91,12 +94,14 @@
         <button id="unwrap" type="button" disabled>Generate UV atlas</button>
         <button id="rebake" type="button" disabled>Rebake textures</button>
         <button id="paint" type="button" aria-pressed="false" disabled>3D Paint</button>
+        <button id="mesh-mode" type="button" aria-pressed="false" disabled>Mesh Edit</button>
         <button id="undo-stroke" type="button" disabled>Undo</button>
         <button id="redo" type="button" disabled>Redo</button>
         <button id="toggle-texture" type="button" aria-expanded="false" disabled>Texture editor</button>
         <button id="cancel-job" type="button" hidden>Cancel operation</button>
       </div>
       <p id="history-status" hidden></p>
+      <p id="mesh-export-note" hidden></p>
       <p id="status" role="status">Select a model to inspect it locally.</p>
       <div class="work-area">
       <div>
@@ -127,7 +132,8 @@
         </div>
         <div class="actions">
           <label for="paint-mask">Mask</label>
-          <select id="paint-mask"><option value="">None</option><option value="face">Selected faces</option><option value="island">Selected UV islands</option></select>
+          <select id="paint-mask"><option value="">None</option><option value="face">Selected faces</option><option value="island">Selected UV islands</option>
+            <option value="created">New faces</option></select>
           <button id="paint-select" type="button" aria-pressed="false">Pick mask regions</button>
           <button id="paint-clear" type="button">Clear mask</button>
         </div>
@@ -138,9 +144,54 @@
         <p id="paint-info" aria-live="polite"></p>
       </fieldset>
       <div class="model-view">
-        <canvas id="viewport" width="640" height="480" role="img" aria-label="Imported model preview" hidden></canvas>
+        <canvas id="viewport" width="640" height="480" tabindex="0" role="img" aria-label="Imported model preview" hidden></canvas>
         <canvas id="paint-cursor" width="640" height="480" aria-hidden="true" hidden></canvas>
       </div>
+      <fieldset id="mesh-tools" hidden>
+        <legend>Mesh Edit</legend>
+        <div class="actions">
+          <label for="mesh-kind">Select</label>
+          <select id="mesh-kind"><option value="vertex">Vertex</option><option value="edge">Edge</option><option value="face">Face</option></select>
+          <label for="mesh-ids">Element IDs</label><input id="mesh-ids" placeholder="Click elements or enter IDs" />
+          <button id="mesh-connected" type="button">Select Connected</button>
+        </div>
+        <div class="actions">
+          <label for="mesh-operation">Operation</label>
+          <select id="mesh-operation">
+            <option value="move">Move</option><option value="rotate">Rotate</option><option value="scale">Scale</option>
+            <option value="create">Create Face</option><option value="splitEdge">Split Edge</option><option value="splitFace">Split Face</option>
+            <option value="weld">Weld</option><option value="flipEdge">Flip Edge</option><option value="dissolve">Dissolve Edge</option>
+            <option value="flipNormals">Flip Normals</option><option value="recalculate">Recalculate Normals</option>
+            <option value="separate">Separate</option><option value="delete">Delete</option>
+          </select>
+        </div>
+        <div class="actions" id="mesh-transform">
+          <label for="mesh-x">X</label><input id="mesh-x" type="number" value="0" step="any" />
+          <label for="mesh-y">Y</label><input id="mesh-y" type="number" value="0" step="any" />
+          <label for="mesh-z">Z</label><input id="mesh-z" type="number" value="0" step="any" />
+          <label for="mesh-axis">Axis</label><select id="mesh-axis"><option value="">All</option><option>X</option><option>Y</option><option>Z</option></select>
+          <label for="mesh-pivot">Pivot</label><select id="mesh-pivot"><option value="">Selection center</option><option value="origin">Object origin</option></select>
+        </div>
+        <div class="actions" id="mesh-create" hidden>
+          <label for="mesh-material">Material</label><select id="mesh-material"></select>
+          <label><input id="mesh-project" type="checkbox" /> Project UVs into 0–1</label>
+          <label><input id="mesh-chain" type="checkbox" /> Keep last edge</label>
+          <button id="mesh-winding" type="button">Flip winding</button>
+        </div>
+        <div class="actions" id="mesh-weld" hidden>
+          <label for="mesh-weld-mode">Weld to</label><select id="mesh-weld-mode"><option value="first">First vertex</option><option value="average">Average</option><option value="tolerance">Within tolerance</option></select>
+          <label for="mesh-tolerance">Tolerance</label><input id="mesh-tolerance" type="number" value="0.001" min="0" step="any" />
+        </div>
+        <div class="actions" id="mesh-split" hidden>
+          <label for="mesh-fraction">Position on edge</label><input id="mesh-fraction" type="number" value="0.5" min="0" max="1" step="any" />
+        </div>
+        <div class="actions">
+          <button id="mesh-preview" type="button">Preview</button>
+          <button id="mesh-apply" type="button" disabled>Apply</button>
+          <button id="mesh-cancel" type="button" disabled>Cancel preview</button>
+        </div>
+        <p id="mesh-info" aria-live="polite"></p>
+      </fieldset>
       <fieldset id="object-tools" hidden>
         <legend>Objects</legend>
         <div class="actions">

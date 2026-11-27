@@ -105,7 +105,7 @@ export async function importAsset(input: readonly File[]): Promise<ImportedAsset
   }
 }
 
-function sourceDeformation(scene: Group) {
+export function sourceDeformation(scene: Group) {
   const result = { maxSkinInfluences: 0, pointsOverPreviewLimit: 0, morphChannels: 0, hasMorphTargets: false };
   scene.traverse(object => {
     if (!(object instanceof Mesh)) return;

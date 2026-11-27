@@ -25,6 +25,7 @@ export interface WorkingState {
   readonly bake?: TextureBake;
   readonly paint?: TexturePaint;
   readonly textures?: Readonly<Record<string, TextureEdit>>;
+  readonly meshEdits?: readonly Uint8Array<ArrayBuffer>[];
 }
 
 export function* workingBuffers(state: WorkingState): Iterable<ArrayBuffer> {
@@ -37,4 +38,5 @@ export function* workingBuffers(state: WorkingState): Iterable<ArrayBuffer> {
   for (const map of state.bake?.maps ?? []) yield map.png.buffer;
   if (state.paint) yield state.paint.png.buffer;
   for (const edit of Object.values(state.textures ?? {})) for (const tile of edit.image.tiles) yield tile.buffer;
+  for (const edit of state.meshEdits ?? []) yield edit.buffer;
 }

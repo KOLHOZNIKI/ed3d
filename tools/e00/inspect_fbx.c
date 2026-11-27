@@ -530,8 +530,99 @@ static bool inspect_adverse_source(const ufbx_scene *scene)
     return true;
 }
 
+static size_t shared_midpoint(const ufbx_mesh *mesh, uint32_t vertex, uint32_t a, uint32_t b, double *uv_gap, double *normal_gap)
+{
+    size_t copies[2], count = 0;
+    for (size_t f = 0; f < mesh->num_faces; f++) {
+        const ufbx_face face = mesh->faces.data[f];
+        for (size_t p = 0; p < face.num_indices; p++) {
+            const size_t i = face.index_begin + p;
+            if (mesh->vertex_indices.data[i] != vertex) continue;
+            if (count == 2 || face.num_indices != 4) return 0;
+            const size_t prev = face.index_begin + (p + face.num_indices - 1) % face.num_indices;
+            const size_t next = face.index_begin + (p + 1) % face.num_indices;
+            const uint32_t u = mesh->vertex_indices.data[prev], v = mesh->vertex_indices.data[next];
+            if (!((u == a && v == b) || (u == b && v == a))) return 0;
+            const ufbx_vec2 x = ufbx_get_vertex_vec2(&mesh->vertex_uv, prev), y = ufbx_get_vertex_vec2(&mesh->vertex_uv, next);
+            const ufbx_vec2 expected = { .x = (x.x + y.x) * 0.5, .y = (x.y + y.y) * 0.5 };
+            if (uv_distance(expected, ufbx_get_vertex_vec2(&mesh->vertex_uv, i)) > 1e-8) return 0;
+            copies[count++] = i;
+        }
+    }
+    if (count == 2) {
+        *uv_gap = uv_distance(ufbx_get_vertex_vec2(&mesh->vertex_uv, copies[0]), ufbx_get_vertex_vec2(&mesh->vertex_uv, copies[1]));
+        *normal_gap = normal_angle(ufbx_get_vertex_vec3(&mesh->vertex_normal, copies[0]), ufbx_get_vertex_vec3(&mesh->vertex_normal, copies[1]));
+    }
+    return count;
+}
+
+static double weight_at(const ufbx_mesh *mesh, size_t vertex, const char *bone)
+{
+    const ufbx_skin_deformer *skin = mesh->skin_deformers.data[0];
+    const ufbx_skin_vertex data = skin->vertices.data[vertex];
+    for (size_t i = 0; i < data.num_weights; i++) {
+        const ufbx_skin_weight weight = skin->weights.data[data.weight_begin + i];
+        if (!strcmp(skin->clusters.data[weight.cluster_index]->bone_node->name.data, bone)) return weight.weight;
+    }
+    return 0.0;
+}
+
+static bool e04_mesh_report(char **paths)
+{
+    ufbx_scene *source = load(paths[0], 1), *moved = load(paths[1], 1), *split = load(paths[2], 1), *undone = load(paths[3], 1);
+    ufbx_scene *holes = load(paths[4], 1), *original = load(paths[5], 1), *skinned = load(paths[6], 1), *pieces = load(paths[7], 2);
+    const ufbx_mesh *a = source->meshes.data[0], *b = moved->meshes.data[0], *c = split->meshes.data[0], *d = undone->meshes.data[0];
+    const ufbx_mesh *h = holes->meshes.data[0], *rig = original->meshes.data[0], *s = skinned->meshes.data[0];
+    bool move_ok = same_connectivity(a, b) && a->num_vertices == 11 && moved->textures.count == 1;
+    if (move_ok) for (size_t i = 0; i < a->num_vertices; i++) {
+        ufbx_vec3 expected = a->vertices.data[i];
+        if (i == 0) expected.y += 0.03125;
+        move_ok &= point_distance(expected, b->vertices.data[i]) < 1e-10;
+    }
+    const bool undo_ok = same_connectivity(b, d) && !memcmp(b->vertices.data, d->vertices.data, b->num_vertices * sizeof(ufbx_vec3))
+        && b->vertex_uv.exists && d->vertex_uv.exists && b->vertex_normal.exists && d->vertex_normal.exists;
+    bool undo_corners = undo_ok;
+    if (undo_ok) for (size_t i = 0; i < b->num_indices; i++) {
+        undo_corners &= uv_distance(ufbx_get_vertex_vec2(&b->vertex_uv, i), ufbx_get_vertex_vec2(&d->vertex_uv, i)) == 0.0 &&
+            normal_angle(ufbx_get_vertex_vec3(&b->vertex_normal, i), ufbx_get_vertex_vec3(&d->vertex_normal, i)) < 1e-5;
+    }
+    double uv_gap = 0, normal_gap = 0;
+    bool split_ok = c->num_vertices == 12 && c->num_triangles == 15 && c->vertex_uv.exists && c->vertex_normal.exists &&
+        point_distance(c->vertices.data[11], (ufbx_vec3){ .x = 0.5, .y = 0.015625, .z = 0.0 }) < 1e-10 &&
+        shared_midpoint(c, 11, 0, 1, &uv_gap, &normal_gap) == 2 && uv_gap > 0.1 && normal_gap > 80.0;
+    const bool holes_ok = h->num_faces == 16 && h->num_triangles == 33 && h->vertex_uv.exists && h->vertex_normal.exists &&
+        h->faces.data[13].num_indices == 3 && h->faces.data[14].num_indices == 4 && h->faces.data[15].num_indices == 6 &&
+        holes->textures.count == 1;
+    double skin_uv = 0, skin_normal = 0;
+    bool skin_ok = rig->num_vertices == 6 && s->num_vertices == 7 && s->num_faces == 4 && s->num_triangles == 6 &&
+        s->skin_deformers.count == 1 && rig->skin_deformers.count == 1 && s->vertex_uv.exists &&
+        shared_midpoint(s, 6, 1, 2, &skin_uv, &skin_normal) == 2 &&
+        fabs(weight_at(s, 6, "Base") - 0.75) < 1e-9 && fabs(weight_at(s, 6, "Elbow") - 0.25) < 1e-9;
+    if (skin_ok) for (size_t i = 0; i < rig->num_vertices; i++) {
+        skin_ok &= point_distance(rig->vertices.data[i], s->vertices.data[i]) < 1e-10 &&
+            weight_at(rig, i, "Base") == weight_at(s, i, "Base") && weight_at(rig, i, "Elbow") == weight_at(s, i, "Elbow");
+    }
+    const ufbx_mesh *left = pieces->meshes.data[0], *right = pieces->meshes.data[1];
+    bool piece_ok = pieces->anim_stacks.count == 1 && pieces->bones.count == 2 &&
+        left->num_triangles + right->num_triangles == 6 && left->skin_deformers.count == 1 && right->skin_deformers.count == 1;
+    if (piece_ok) {
+        const ufbx_skin_cluster_list x = left->skin_deformers.data[0]->clusters, y = right->skin_deformers.data[0]->clusters;
+        piece_ok = x.count == 2 && y.count == 2 && x.data[0]->bone_node == y.data[0]->bone_node && x.data[1]->bone_node == y.data[1]->bone_node;
+    }
+    printf("{\"move\":%s,\"undo\":%s,\"splitSeam\":%s,\"splitUvGap\":%.9g,\"splitNormalAngle\":%.9g,"
+            "\"threeContours\":%s,\"weightedSplit\":%s,\"sharedSkinAfterSeparate\":%s",
+            move_ok ? "true" : "false", undo_corners ? "true" : "false", split_ok ? "true" : "false", uv_gap, normal_gap,
+            holes_ok ? "true" : "false", skin_ok ? "true" : "false", piece_ok ? "true" : "false");
+    const bool clip_ok = skin_ok && compare_clips(original, skinned, rig, s);
+    puts("}");
+    ufbx_scene *scenes[] = { source, moved, split, undone, holes, original, skinned, pieces };
+    for (size_t i = 0; i < sizeof(scenes) / sizeof(scenes[0]); i++) ufbx_free_scene(scenes[i]);
+    return move_ok && undo_corners && split_ok && holes_ok && skin_ok && piece_ok && clip_ok;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc == 10 && !strcmp(argv[1], "--e04")) return e04_mesh_report(argv + 2) ? 0 : 1;
     if (argc == 3 && strcmp(argv[1], "--f12-source") == 0) {
         ufbx_scene *scene = load(argv[2], 1);
         const bool matches = inspect_coordinate_source(scene);

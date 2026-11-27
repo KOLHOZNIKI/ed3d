@@ -37,8 +37,9 @@ export function paintView(adapter: ModelAdapter, target: TextureTarget, uv: Read
     // morphed and skinned positions used by Three.js in the current frame.
     const geometry = mesh.geometry, index = geometry.index, positions = geometry.getAttribute('position');
     if (mesh instanceof SkinnedMesh) mesh.skeleton.update();
-    const topology = adapter.topology.get(object)!;
-    const ids = model.format === 'fbx' ? renderControlPoints(sourceMesh(geometry)) : undefined;
+    const edited = adapter.mesh.render.get(object)?.render;
+    const topology = adapter.workingTopology(object)!;
+    const ids = edited?.renderVertices ?? (model.format === 'fbx' ? renderControlPoints(sourceMesh(geometry)) : undefined);
     const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
     const count = index?.count ?? positions.count;
     const groups = geometry.groups.length && Array.isArray(mesh.material)
@@ -68,8 +69,9 @@ export function paintView(adapter: ModelAdapter, target: TextureTarget, uv: Read
         }
         const id = faces.length;
         const mapped = mesh === target.binding.mesh && (group.materialIndex ?? 0) === target.binding.slot ? uv.get(i / 3) : undefined;
+        const polygon = topology.renderFaces[i / 3];
         const face: MutableFace = { world: world as unknown as Face['world'], clip: clip as unknown as Face['clip'],
-          uv: mapped, edges: [[], [], []], root: id, stable: `${object}/triangle/${i / 3}`, source: `${object}/face/${topology.renderFaces[i / 3]}`,
+          uv: mapped, edges: [[], [], []], root: id, stable: `${object}/triangle/${i / 3}`, source: `${object}/face/${edited?.faceIds[polygon] ?? polygon}`,
           material: material.name || `${mesh.name || object} material ${(group.materialIndex ?? 0) + 1}`,
           orientation, side: material.side };
         faces.push(face);

@@ -1,11 +1,13 @@
 import { BufferAttribute, BufferGeometry, Mesh, type Object3D, type TypedArray } from 'three';
 import { sourceMesh } from '../e00/fbx-topology';
 import { importGlb, type ImportedGlb } from '../e00/glb-round-trip';
-import { importAsset, type ImportedAsset } from '../e00/round-trip';
+import { importAsset, sourceDeformation, type ImportedAsset } from '../e00/round-trip';
 import type { UvAtlasEdit } from '../e00/uv-atlas';
 import type { OriginalFile, SceneEntry } from './document';
 import type { AtlasState, WorkingState } from './state';
 import { buildTopology, type CornerAttribute, type Topology } from './topology';
+import { MeshSession } from '../mesh/session';
+import { sceneStats } from '../e00/scene-stats';
 
 export type Model = ImportedAsset | ImportedGlb;
 
@@ -24,6 +26,7 @@ export class ModelAdapter {
   readonly entries: SceneEntry[] = [];
   readonly topology = new Map<string, Topology>();
   readonly objects = new Map<string, Object3D>();
+  readonly mesh: MeshSession;
   #atlasState?: AtlasState;
   #atlas?: UvAtlasEdit;
 
@@ -40,27 +43,36 @@ export class ModelAdapter {
       for (const child of object.children) visit(child, id);
     };
     for (const child of model.scene.children) visit(child, null);
+    this.mesh = new MeshSession(model, this.entries, this.topology, this.objects);
   }
 
+  get viewEntries() { return this.mesh.pieces.length ? [...this.entries, ...this.mesh.pieces] : this.entries; }
+  workingTopology(id: string) { return this.mesh.render.get(id)?.render.topology ?? this.topology.get(id); }
+
   materialize(state: WorkingState): Model {
+    if (state.meshEdits?.length && state.atlas) throw new Error('Discard the generated atlas before editing the source topology.');
     if (this.model.format === 'glb') {
       if (state.atlas || state.bake || state.paint) throw new Error('The project contains FBX working data for a GLB source.');
-      return this.model;
+      this.mesh.materialize(state.meshEdits);
+      return this.mesh.active ? { ...this.model, stats: sceneStats(this.model.scene, 'GLB'), skins: this.mesh.glbSkins() } : this.model;
     }
+    this.mesh.materialize(state.meshEdits);
     if (state.atlas !== this.#atlasState) {
       const atlas = state.atlas && restoreAtlas(this.model, state.atlas);
       this.#atlas?.geometry.dispose();
       this.#atlas = atlas;
       this.#atlasState = state.atlas;
     }
-    return { ...this.model, uvAtlas: this.#atlas, textureBake: state.bake, texturePaint: state.paint };
+    return { ...this.model, uvAtlas: this.#atlas, textureBake: state.bake, texturePaint: state.paint,
+      stats: this.mesh.active ? sceneStats(this.model.scene, 'FBX') : this.model.stats,
+      deformation: this.mesh.active ? sourceDeformation(this.model.scene) : this.model.deformation };
   }
 
   applyVisibility(state: WorkingState) {
-    for (const entry of this.entries) this.objects.get(entry.id)!.visible = state.objects[entry.id]?.visible ?? entry.visible;
+    for (const entry of this.viewEntries) this.objects.get(entry.id)!.visible = state.objects[entry.id]?.visible ?? entry.visible;
   }
 
-  dispose() { this.#atlas?.geometry.dispose(); }
+  dispose() { this.#atlas?.geometry.dispose(); this.mesh.dispose(); }
 }
 
 function topologyFor(model: Model, geometry: BufferGeometry): Topology {

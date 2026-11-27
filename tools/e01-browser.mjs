@@ -154,7 +154,7 @@ try {
   assert.equal(await showProject(work), beforeCancel);
   await work.click('#unwrap', /Generated 2 charts/);
   await work.click('#rebake', /Rebaked 1 map/);
-  await work.click('#paint', /Drag on the model/);
+  await work.click('#paint', /3D Paint is active/);
   await work.page.locator('#paint-color').fill('#28f758');
   await stroke(work, [.49, .48], [.49, .55]);
   const supportsContextLoss = await work.page.evaluate(() => {
@@ -179,7 +179,7 @@ try {
   const path = await work.save('#save-project', 'static.assetfixer');
   const independent = await work.save('#save-copy', 'independent.assetfixer');
   const source = await unpack(path), copy = await unpack(independent);
-  assert.equal(source.manifest.schemaVersion, 3);
+  assert.equal(source.manifest.schemaVersion, 4);
   assert.equal(source.manifest.settings.historyBudget, 128 * 1024 * 1024);
   assert.notEqual(copy.manifest.id, source.manifest.id);
   assert.deepEqual(copy.manifest.working, source.manifest.working);
@@ -233,7 +233,7 @@ try {
     delete data.working.textures;
   }), /Project restored/);
   const migrated = await unpack(await work.save('#save-project', 'migrated.assetfixer'));
-  assert.equal(migrated.manifest.schemaVersion, 3);
+  assert.equal(migrated.manifest.schemaVersion, 4);
   assert.equal(migrated.manifest.settings.historyBudget, 256 * 1024 * 1024);
   await work.open(path, /Project restored/);
   const restored = await work.save('#export', 'static-restored.zip');
@@ -274,7 +274,7 @@ try {
     await unlink(heavyInput);
     await work.click('#unwrap', /Generated 1 charts/);
     await work.click('#rebake', /Rebaked 1 map/);
-    await work.click('#paint', /Drag on the model/);
+    await work.click('#paint', /3D Paint is active/);
     for (let i = 0; i < 8; i++) {
       await work.page.locator('#paint-color').fill(i % 2 ? '#faba21' : '#1ce4ea');
       const x = .43 + i * .018, y = i % 2 ? .48 : .43;

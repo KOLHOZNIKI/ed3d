@@ -17,6 +17,8 @@ import { TextureEditor } from './texture/editor';
 import { encodeImage } from './texture/image';
 import { PaintTool } from './paint3d/tool';
 import type { Point } from './texture/stroke';
+import { MeshTool } from './mesh/tool';
+import { encodeEdit } from './mesh/commands';
 
 function element<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -31,6 +33,7 @@ const close = element<HTMLButtonElement>('close-model'), save = element<HTMLButt
 const saveAs = element<HTMLButtonElement>('save-copy'), exportButton = element<HTMLButtonElement>('export');
 const unwrap = element<HTMLButtonElement>('unwrap'), rebake = element<HTMLButtonElement>('rebake');
 const paintButton = element<HTMLButtonElement>('paint');
+const meshButton = element<HTMLButtonElement>('mesh-mode');
 const paintUnwrap = element<HTMLButtonElement>('paint-unwrap');
 const undo = element<HTMLButtonElement>('undo-stroke'), redo = element<HTMLButtonElement>('redo');
 const cancel = element<HTMLButtonElement>('cancel-job');
@@ -60,6 +63,7 @@ interface Workspace {
 let current: Workspace | undefined;
 let selected = '';
 let painting = false;
+let meshEditing = false;
 let stroke: { pointer: number; gesture: Exclude<ReturnType<PaintTool['begin']>, string | undefined> } | undefined;
 let paintBinding = '';
 let picking: { pointer: number; x: number; y: number } | undefined;
@@ -109,29 +113,50 @@ const editor = new TextureEditor({
   },
 });
 const painter = new PaintTool(viewer, canvas, target => current!.textures.load(target, current!.document.state), selectBinding);
+const meshTool = new MeshTool(viewer, canvas, (command, revision) => locked(async () => {
+  const work = current!;
+  work.document.assertRevision(revision);
+  const state = work.document.state, meshEdits = state.meshEdits ?? [];
+  let textures = state.textures;
+  if (command.type === 'separate') {
+    for (const target of work.textures.targets(state)) {
+      if (target.binding.object !== command.object || !state.textures?.[target.binding.id]) continue;
+      textures = { ...textures, [`slot/${command.piece}/${target.binding.slot}`]: state.textures[target.binding.id] };
+    }
+  }
+  const bytes = encodeEdit(command);
+  const label = element<HTMLSelectElement>('mesh-operation').selectedOptions[0].textContent!;
+  await edit(work, revision, { ...state, textures, meshEdits: [...meshEdits, bytes] }, label, command.object);
+  if (command.type === 'separate') selectObject(command.piece);
+  status.textContent = `${label} applied.`;
+}), dragging => viewer.setPainting(painting || meshEditing, dragging || busy || !!stroke));
 
 function controls() {
   const document = current?.document;
   const model = current?.model;
   const locked = busy || !!stroke || textureGesture;
   const fbx = model?.format === 'fbx';
+  const editedMesh = current?.adapter.mesh.active ?? false;
   const availablePaint = !!(viewer.available && model);
   if (!availablePaint) painting = false;
+  if (!availablePaint) meshEditing = false;
   sources.disabled = locked;
   close.disabled = save.disabled = saveAs.disabled = exportButton.disabled = locked || !document;
-  unwrap.disabled = locked || !fbx;
-  const canCreatePaintAtlas = !!(fbx && !model.textureBake && painting && blankPaintMesh(model));
+  unwrap.disabled = locked || !fbx || editedMesh;
+  const canCreatePaintAtlas = !!(fbx && !model.textureBake && painting && !editedMesh && blankPaintMesh(model));
   rebake.disabled = locked || !fbx || !model.uvAtlas || canCreatePaintAtlas;
   paintButton.disabled = locked || !availablePaint;
+  meshButton.disabled = locked || !availablePaint;
   undo.disabled = locked || !document?.undoDepth;
   redo.disabled = locked || !document?.redoDepth;
   restore.disabled = locked;
   cancel.hidden = !abort;
   cancel.disabled = abort?.signal.aborted ?? true;
   paintButton.setAttribute('aria-pressed', String(painting));
+  meshButton.setAttribute('aria-pressed', String(meshEditing));
   canvas.style.cursor = painting && !busy ? 'crosshair' : '';
   canvas.style.touchAction = 'none';
-  viewer.setPainting(painting, busy || !!stroke);
+  viewer.setPainting(painting || meshEditing, busy || !!stroke || meshTool.dragging);
   exportButton.textContent = model?.format === 'glb' ? 'Export GLB' : 'Export FBX ZIP';
   unwrap.textContent = fbx && model.uvAtlas ? 'Discard UV atlas' : 'Generate UV atlas';
   rebake.textContent = fbx && model.textureBake ? 'Discard texture bake' : 'Rebake textures';
@@ -157,6 +182,14 @@ function controls() {
     targets, region: target => editor.region(target) }, paintBinding);
   paintUnwrap.hidden = !canCreatePaintAtlas;
   paintUnwrap.disabled = locked;
+  meshTool.configure(meshEditing && current ? { adapter: current.adapter, id: selected, revision: document!.revision,
+    blocked: !!document!.state.atlas } : undefined, locked);
+  const pendingUv = current?.adapter.mesh.pendingUv ?? 0;
+  const notes = [current?.adapter.mesh.omittedPolygonMetadata ? 'GLB exports the edited topology as indexed triangles and omits incompatible private polygon metadata.' : '',
+    pendingUv ? `${pendingUv} created faces have placeholder UVs and require unwrapping.` : '',
+    editedMesh && fbx && model.deformation.pointsOverPreviewLimit ? 'Some vertices have more than four influences. FBX retains the full weights.' : ''].filter(Boolean);
+  element('mesh-export-note').hidden = !notes.length;
+  element('mesh-export-note').textContent = notes.join(' ');
 }
 
 function renderObjects() {
@@ -164,7 +197,7 @@ function renderObjects() {
     objects.replaceChildren();
     return;
   }
-  const entries = current.document.scene.filter(entry => entry.mesh);
+  const entries = current.adapter.viewEntries.filter(entry => entry.mesh);
   objects.replaceChildren(new Option('None', ''), ...entries.map(entry => {
     const state = current!.document.state.objects[entry.id] ?? entry;
     return new Option(state.visible ? state.name : `${state.name} (hidden)`, entry.id);
@@ -173,7 +206,7 @@ function renderObjects() {
 }
 
 function selectObject(id: string) {
-  const entry = current?.document.scene.find(node => node.id === id && node.mesh);
+  const entry = current?.adapter.viewEntries.find(node => node.id === id && node.mesh);
   selected = entry?.id ?? '';
   const targets = current?.textures.targets(current.document.state) ?? [];
   if (!targets.some(target => target.binding.id === paintBinding && (!selected || target.binding.object === selected))) {
@@ -183,9 +216,10 @@ function selectObject(id: string) {
   const state = entry && (current!.document.state.objects[selected] ?? entry);
   objectLabel.value = state?.name ?? '';
   visibility.textContent = state?.visible === false ? 'Show object' : 'Hide object';
-  const topology = current?.document.topology.get(selected);
+  const topology = current?.adapter.workingTopology(selected);
+  const render = current?.adapter.mesh.render.get(selected);
   element('selection-details').textContent = topology
-    ? `${selected} · ${topology.positions.length / 3} vertices · ${topology.faceEnds.length} faces · First face ID ${elementId(selected, 'face', 0)}`
+    ? `${selected} · ${render ? new Set(topology.corners).size : topology.positions.length / 3} vertices · ${topology.faceEnds.length} faces · First face ID ${elementId(selected, 'face', render?.render.faceIds[0] ?? 0)}`
     : '';
   viewer.select(current?.adapter.objects.get(selected));
   syncTextureEditor();
@@ -307,6 +341,7 @@ function closeWorkspace() {
   selected = '';
   paintBinding = '';
   painting = false;
+  meshEditing = false;
   autosaveDue = undefined;
   window.clearTimeout(autosaveTimer);
   autosaveStatus.textContent = '';
@@ -517,20 +552,29 @@ async function applyWorking(work: Workspace, revision: number, state: WorkingSta
   work.document.assertRevision(revision);
   signal?.throwIfAborted();
   const previous = work.document.state;
-  const visualChange = state.atlas !== previous.atlas || state.bake !== previous.bake || state.paint !== previous.paint || state.textures !== previous.textures;
+  const geometryChange = state.meshEdits !== previous.meshEdits;
+  const piecesBefore = work.adapter.mesh.pieces.map(piece => piece.id).join(',');
+  const visualChange = geometryChange || state.atlas !== previous.atlas || state.bake !== previous.bake ||
+    state.paint !== previous.paint || state.textures !== previous.textures;
   let appearance: Appearance | undefined;
   try {
-    work.textures.validate(state);
     const model = work.adapter.materialize(state);
-    if (visualChange) appearance = await prepareAppearance(model, work.textures, state, undefined, unlit);
+    const textures = piecesBefore === work.adapter.mesh.pieces.map(piece => piece.id).join(',') ? work.textures : new TextureCatalog(work.adapter);
+    textures.validate(state);
+    if (visualChange) appearance = await prepareAppearance(model, textures, state, undefined, unlit);
     signal?.throwIfAborted();
     if (current !== work) throw new Error('The active project changed during the operation.');
     work.document.assertRevision(revision);
     commit();
     work.model = model;
+    work.textures = textures;
   } catch (error) {
     if (appearance) disposeAppearance(appearance);
     work.model = work.adapter.materialize(previous);
+    if (geometryChange) {
+      work.textures = new TextureCatalog(work.adapter);
+      await refreshAppearance();
+    }
     throw error;
   }
   if (visualChange) { lookId++; viewer.replaceAppearance(appearance); }
@@ -557,7 +601,8 @@ unwrap.addEventListener('click', () => void locked(async signal => {
       status.textContent = 'Kept the current atlas and paint.';
       return;
     }
-    await edit(work, revision, { objects: state.objects, textures: withoutAtlasEdits(state) }, 'Discard UV atlas', 'geometry', signal);
+    await edit(work, revision, { ...state, atlas: undefined, bake: undefined, paint: undefined,
+      textures: withoutAtlasEdits(state) }, 'Discard UV atlas', 'geometry', signal);
     status.textContent = 'Restored the source UV channels.';
     return;
   }
@@ -622,7 +667,7 @@ redo.addEventListener('click', () => navigate('redo'));
 
 function changeObject(label: string, update: (state: { name: string; visible: boolean }) => { name: string; visible: boolean }) {
   const work = current, id = selected;
-  const entry = work?.document.scene.find(object => object.id === id);
+  const entry = work?.adapter.viewEntries.find(object => object.id === id);
   if (!work || !entry) return;
   void locked(async () => {
     const { state, revision } = work.document;
@@ -640,6 +685,7 @@ function frame(selection = false) {
   const direction = [new Vector3(.6, .45, 1), new Vector3(0, 0, 1), new Vector3(0, 0, -1), new Vector3(-1, 0, 0),
     new Vector3(1, 0, 0), new Vector3(0, 1, .00001), new Vector3(0, -1, .00001)][viewDirection.selectedIndex];
   viewer.frame(selection ? current?.adapter.objects.get(selected) : undefined, projection.selectedIndex === 1, direction);
+  controls();
 }
 projection.addEventListener('change', () => frame());
 viewDirection.addEventListener('change', () => frame());
@@ -647,7 +693,12 @@ frameAll.addEventListener('click', () => frame());
 frameSelection.addEventListener('click', () => frame(true));
 
 window.addEventListener('keydown', event => {
-  if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement || busy || stroke || textureGesture) return;
+  if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement || event.target instanceof HTMLButtonElement ||
+      busy || stroke || textureGesture || meshTool.dragging) return;
+  if (!event.ctrlKey && !event.metaKey && meshTool.keyboard(event.key.length === 1 ? event.key.toLowerCase() : event.key)) {
+    event.preventDefault();
+    return;
+  }
   if (event.key.toLowerCase() === 'f' && !event.ctrlKey && !event.metaKey) frame(!!selected);
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
     event.preventDefault();
@@ -656,9 +707,17 @@ window.addEventListener('keydown', event => {
 });
 
 paintButton.addEventListener('click', () => {
+  meshEditing = false;
   painting = !painting;
   controls();
   status.textContent = painting ? '3D Paint is active.' : '3D Paint is off.';
+});
+
+meshButton.addEventListener('click', () => {
+  meshEditing = !meshEditing;
+  if (meshEditing) painting = false;
+  controls();
+  status.textContent = meshEditing ? 'Mesh Edit is active. Right-drag to orbit.' : 'Mesh Edit is off.';
 });
 
 function pointerPoint(event: PointerEvent): Point {
@@ -666,10 +725,12 @@ function pointerPoint(event: PointerEvent): Point {
   return { x: (event.clientX - bounds.left) * canvas.width / bounds.width, y: (event.clientY - bounds.top) * canvas.height / bounds.height };
 }
 
-canvas.addEventListener('contextmenu', event => { if (painting) event.preventDefault(); });
+canvas.addEventListener('contextmenu', event => { if (painting || meshEditing) event.preventDefault(); });
 canvas.addEventListener('pointerdown', event => {
   if (event.button !== 0 || busy || stroke || textureGesture || !current) return;
   if (!painting) {
+    if (meshEditing && meshTool.gizmoHit) return;
+    if (meshEditing) canvas.focus({ preventScroll: true });
     picking = { pointer: event.pointerId, x: event.clientX, y: event.clientY };
     return;
   }
@@ -706,7 +767,9 @@ canvas.addEventListener('pointerup', event => {
     picking = undefined;
     const list = [...work.adapter.objects].filter((pair): pair is [string, Mesh] => pair[1] instanceof Mesh);
     const model = viewer.pick(event, list.map(([, mesh]) => mesh));
-    selectObject(list.find(([, mesh]) => mesh === model)?.[0] ?? '');
+    const id = list.find(([, mesh]) => mesh === model)?.[0];
+    if (!meshEditing || id) selectObject(id ?? '');
+    if (meshEditing && id) meshTool.pick(event);
   }
   if (stroke?.pointer !== event.pointerId) return;
   const { gesture } = stroke;
