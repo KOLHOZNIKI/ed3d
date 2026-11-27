@@ -1,4 +1,5 @@
 import { paddingSources, rasterize } from './atlas-raster';
+import { decode, encode } from 'fast-png';
 
 export interface PaintInput {
   png: Uint8Array<ArrayBuffer>;
@@ -130,12 +131,18 @@ async function paint(input: PaintInput): Promise<StrokeResult> {
   const mask = strokeMask(input, screenWidth, screenHeight);
   const { faces, wb, wc, overlaps } = rasterize(width, height, targetUv);
   if (overlaps.size) throw new Error('Painting requires an atlas without conflicting texel coverage.');
-  const image = await createImageBitmap(new Blob([input.png]), { colorSpaceConversion: 'none' });
-  const canvas = new OffscreenCanvas(width, height);
-  const context = canvas.getContext('2d')!;
-  context.drawImage(image, 0, 0);
-  image.close();
-  const result = context.getImageData(0, 0, width, height);
+  const image = decode(input.png);
+  if (image.width !== width || image.height !== height || image.depth !== 8 || (image.channels !== 3 && image.channels !== 4)) {
+    throw new Error('The brush requires an RGB or RGBA atlas with matching dimensions.');
+  }
+  const pixels = new Uint8ClampedArray(width * height * 4);
+  if (image.channels === 4) pixels.set(image.data);
+  else for (let i = 0, j = 0; i < image.data.length; i += 3, j += 4) {
+    pixels[j] = image.data[i];
+    pixels[j + 1] = image.data[i + 1];
+    pixels[j + 2] = image.data[i + 2];
+    pixels[j + 3] = 255;
+  }
   const changed = new Uint8Array(faces.length);
   let texels = 0;
   for (let p = 0; p < faces.length; p++) {
@@ -153,7 +160,7 @@ async function paint(input: PaintInput): Promise<StrokeResult> {
     if (!alpha) continue;
     const z = (a * clip[i + 2] + b * clip[i + 6] + c * clip[i + 10]) / w;
     if (z < -1 || z > 1 || projection.obscured(face, x, y, z)) continue;
-    for (let k = 0; k < 3; k++) result.data[4 * p + k] = result.data[4 * p + k] * (1 - alpha) + mask[j + k] * alpha;
+    for (let k = 0; k < 3; k++) pixels[4 * p + k] = pixels[4 * p + k] * (1 - alpha) + mask[j + k] * alpha;
     changed[p] = 1;
     texels++;
   }
@@ -163,9 +170,8 @@ async function paint(input: PaintInput): Promise<StrokeResult> {
   for (let p = 0; p < faces.length; p++) {
     if (faces[p] >= 0) continue;
     const source = -faces[p] - 1;
-    if (changed[source]) result.data.copyWithin(p * 4, source * 4, source * 4 + 4);
+    if (changed[source]) pixels.copyWithin(p * 4, source * 4, source * 4 + 3);
   }
-  context.putImageData(result, 0, 0);
-  const png = new Uint8Array(await (await canvas.convertToBlob({ type: 'image/png' })).arrayBuffer());
+  const png = new Uint8Array(encode({ width, height, channels: 4, data: pixels }));
   return { png, texels };
 }

@@ -1,6 +1,7 @@
 import { inputLimit, pack, readPackage, type Files } from '../e00/zip';
 import { AssetDocument, defaultHistoryBudget, type ObjectOverrides, type OriginalFile, type SceneEntry } from './document';
-import type { AtlasState, WorkingState } from './state';
+import { atlasColor, type AtlasState, type TextureEdit, type WorkingState } from './state';
+import { decodePng, encodeImage } from '../texture/image';
 
 const MiB = 1024 * 1024;
 export const projectLimit = 512 * MiB;
@@ -83,9 +84,13 @@ export async function writeProject(document: AssetDocument<WorkingState>, option
     const { png, ...metadata } = state.paint;
     paint = { ...metadata, hash: await retain(png) };
   }
-  const manifest = encoder.encode(JSON.stringify({ format: 'AssetFixer', schemaVersion: 2, id: options?.id ?? document.id,
+  const textures = [];
+  for (const [key, edit] of Object.entries(state.textures ?? {})) {
+    textures.push({ key, hash: await retain(encodeImage(edit.image)), paint: edit.paint });
+  }
+  const manifest = encoder.encode(JSON.stringify({ format: 'AssetFixer', schemaVersion: 3, id: options?.id ?? document.id,
     name: options?.name ?? document.name, revision, settings: { historyBudget }, scene, originals: originalRefs,
-    resources, working: { objects: state.objects, geometry, bake, paint } }));
+    resources, working: { objects: state.objects, geometry, bake, paint, textures } }));
   if (manifest.byteLength > MiB || expanded + manifest.byteLength > limits.total) throw new Error('The project manifest exceeds its size limit.');
   files.set('manifest.json', manifest);
   const bytes = await pack(files);
@@ -102,7 +107,7 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
   const manifest = record(JSON.parse(decoder.decode(encoded)));
   if (manifest.format !== 'AssetFixer') throw new Error('This file is not an AssetFixer project.');
   const version = integer(manifest.schemaVersion, 1);
-  if (version > 2) throw new Error(`Project schema ${version} is newer than this application supports.`);
+  if (version > 3) throw new Error(`Project schema ${version} is newer than this application supports.`);
   // Version 1 had a fixed history budget. Version 2 persists the project setting.
   const historyBudget = version === 1 ? defaultHistoryBudget : integer(record(manifest.settings).historyBudget, MiB, projectLimit);
   if (historyBudget % MiB) throw new Error('Invalid project history budget.');
@@ -194,11 +199,23 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
     validatePng(png, bake.width, bake.height);
     paint = { png, strokes: integer(data.strokes, 1), lastStrokeTexels: integer(data.lastStrokeTexels, 1, bake.width * bake.height) };
   }
+  const textures: Record<string, TextureEdit> = Object.create(null);
+  if (version >= 3) for (const value of list(working.textures, 256)) {
+    const entry = record(value), key = text(entry.key, 100);
+    if ((key !== atlasColor && !/^(slot|base)\/object-\d+\/\d+$/.test(key)) || Object.hasOwn(textures, key)) {
+      throw new Error('Invalid project texture binding ID.');
+    }
+    if (key === atlasColor && paint) throw new Error('The project contains two versions of the active atlas image.');
+    const image = decodePng(resource(entry.hash));
+    const info = entry.paint === undefined ? undefined : record(entry.paint);
+    const strokes = info ? { strokes: integer(info.strokes, 1), lastStrokeTexels: integer(info.lastStrokeTexels, 1, image.width * image.height) } : undefined;
+    textures[key] = { image, paint: strokes };
+  }
   if (used.size !== available.size) throw new Error('The project contains unused resources.');
   const id = text(manifest.id, 36);
   if (!uuidPattern.test(id)) throw new Error('Invalid project identifier.');
   return { id, name: text(manifest.name, 160), revision: integer(manifest.revision, 0, 1e12), originals, historyBudget, scene,
-    state: { objects, atlas, bake, paint } };
+    state: { objects, atlas, bake, paint, textures } };
 }
 
 function validatePng(png: Uint8Array<ArrayBuffer>, width: number, height: number) {

@@ -3,13 +3,9 @@ import { AmbientLight, Box3, Box3Helper, DirectionalLight, Mesh, MeshLambertMate
   type BufferGeometry, type Material, type Object3D } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { Model } from './adapter';
-
-export interface Appearance {
-  mesh: Mesh;
-  geometry: BufferGeometry;
-  material: Material;
-  textures: Texture[];
-}
+import { applyViews, disposeAppearance, emptyAppearance, sourceAppearance, unlitColor, type Appearance } from '../texture/appearance';
+import { sourceImage, type TextureCatalog, type TextureTarget } from '../texture/bindings';
+import { atlasColor, type WorkingState } from './state';
 
 export class Viewer {
   readonly scene = new Scene();
@@ -19,6 +15,7 @@ export class Viewer {
   #camera?: PerspectiveCamera | OrthographicCamera;
   #orbit?: OrbitControls;
   #appearance?: Appearance;
+  #live?: Appearance;
   #outline = new Box3Helper(new Box3(), 0x2ad9ed);
   #painting = false;
   #contextLost = false;
@@ -66,6 +63,7 @@ export class Viewer {
     this.#model = undefined;
     if (this.#appearance) disposeAppearance(this.#appearance);
     this.#appearance = undefined;
+    this.setLive();
     this.#outline.visible = false;
     this.#canvas.hidden = true;
     this.#renderer?.renderLists.dispose();
@@ -75,6 +73,16 @@ export class Viewer {
   replaceAppearance(appearance?: Appearance) {
     if (this.#appearance) disposeAppearance(this.#appearance);
     this.#appearance = appearance;
+  }
+
+  setLive(appearance?: Appearance) {
+    if (this.#live) disposeAppearance(this.#live);
+    this.#live = appearance;
+  }
+
+  updateLive() {
+    for (const texture of this.#live?.textures ?? []) texture.needsUpdate = true;
+    this.render();
   }
 
   setPainting(active: boolean) {
@@ -122,18 +130,11 @@ export class Viewer {
 
   render() {
     if (!this.#renderer || !this.#camera || this.#contextLost) return;
-    if (!this.#appearance) {
-      this.#renderer.render(this.scene, this.#camera);
-      return;
-    }
-    const { mesh, geometry, material } = this.#appearance;
-    const previous = [mesh.geometry, mesh.material] as const;
+    const restore = applyViews((this.#live ?? this.#appearance)?.views ?? []);
     try {
-      mesh.geometry = geometry;
-      mesh.material = material;
       this.#renderer.render(this.scene, this.#camera);
     } finally {
-      [mesh.geometry, mesh.material] = previous;
+      restore();
     }
   }
 }
@@ -143,17 +144,30 @@ function shown(object: Object3D): boolean {
   return true;
 }
 
-export async function prepareAppearance(model: Model): Promise<Appearance | undefined> {
-  if (model.format !== 'fbx' || !model.uvAtlas || !model.textureBake) return;
+export async function prepareAppearance(model: Model, catalog: TextureCatalog, state: WorkingState,
+  live?: { target: TextureTarget; canvas: HTMLCanvasElement }, unlit = false): Promise<Appearance> {
+  if (model.format !== 'fbx' || !model.uvAtlas || !model.textureBake) return sourceAppearance(catalog, state, 'preview', live, unlit).appearance;
   const mesh = model.scene.getObjectByProperty('isMesh', true);
   const source = mesh instanceof Mesh ? mesh.material : undefined;
-  if (!(mesh instanceof Mesh) || !(source instanceof MeshLambertMaterial || source instanceof MeshPhongMaterial)) return;
+  const appearance = emptyAppearance();
+  if (!(mesh instanceof Mesh) || !(source instanceof MeshLambertMaterial || source instanceof MeshPhongMaterial)) return appearance;
   const material = source.clone(), geometry = model.uvAtlas.geometry.clone();
   geometry.setAttribute('uv', geometry.getAttribute('uv1'));
-  const appearance = { mesh, geometry, material, textures: [] as Texture[] };
+  appearance.views.push({ mesh, geometry, material });
+  appearance.geometries.push(geometry);
+  appearance.materials.push(material);
+  const edited = state.textures?.[atlasColor]?.image;
   try {
     for (const entry of model.textureBake.maps) {
       if (entry.slot !== 'map' && (entry.slot !== 'normalMap' || !(material instanceof MeshPhongMaterial))) continue;
+      if (entry.slot === 'map' && (edited || live?.target.atlas)) {
+        const texture = new Texture(live?.target.atlas ? live.canvas : sourceImage(edited!));
+        texture.colorSpace = SRGBColorSpace;
+        texture.needsUpdate = true;
+        appearance.textures.push(texture);
+        material.map = texture;
+        continue;
+      }
       const png = entry.slot === 'map' ? model.texturePaint?.png ?? entry.png : entry.png;
       const url = URL.createObjectURL(new Blob([png], { type: 'image/png' }));
       try {
@@ -171,17 +185,16 @@ export async function prepareAppearance(model: Model): Promise<Appearance | unde
         URL.revokeObjectURL(url);
       }
     }
+    if (unlit) {
+      const basic = unlitColor(material, material.map);
+      appearance.materials.push(basic);
+      appearance.views[0].material = basic;
+    }
     return appearance;
   } catch (error) {
     disposeAppearance(appearance);
     throw error;
   }
-}
-
-export function disposeAppearance(appearance: Appearance) {
-  appearance.geometry.dispose();
-  appearance.material.dispose();
-  for (const texture of appearance.textures) texture.dispose();
 }
 
 export function disposeModel(model: Model) {

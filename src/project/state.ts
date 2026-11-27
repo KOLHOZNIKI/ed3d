@@ -2,6 +2,14 @@ import type { TextureBake } from '../e00/rebake';
 import type { TexturePaint } from '../e00/paint';
 import type { UvAtlasEdit } from '../e00/uv-atlas';
 import type { ObjectOverrides } from './document';
+import type { TextureImage } from '../texture/image';
+
+export const atlasColor = 'atlas-color';
+
+export interface TextureEdit {
+  readonly image: TextureImage;
+  readonly paint?: Omit<TexturePaint, 'png'>;
+}
 
 export interface AtlasState {
   readonly indices: Uint32Array<ArrayBuffer>;
@@ -16,6 +24,7 @@ export interface WorkingState {
   readonly atlas?: AtlasState;
   readonly bake?: TextureBake;
   readonly paint?: TexturePaint;
+  readonly textures?: Readonly<Record<string, TextureEdit>>;
 }
 
 export function* workingBuffers(state: WorkingState): Iterable<ArrayBuffer> {
@@ -27,4 +36,5 @@ export function* workingBuffers(state: WorkingState): Iterable<ArrayBuffer> {
   }
   for (const map of state.bake?.maps ?? []) yield map.png.buffer;
   if (state.paint) yield state.paint.png.buffer;
+  for (const edit of Object.values(state.textures ?? {})) for (const tile of edit.image.tiles) yield tile.buffer;
 }

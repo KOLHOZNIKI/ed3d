@@ -20,7 +20,7 @@ export interface TextureBake {
   projection?: { sourceName: string; misses: number; maxDistance: number; eligibleSources: number[][] };
 }
 
-export async function rebakeAsset(asset: ImportedAsset, signal?: AbortSignal): Promise<ImportedAsset> {
+export async function rebakeAsset(asset: ImportedAsset, signal?: AbortSignal, baseColor?: Uint8Array<ArrayBuffer>): Promise<ImportedAsset> {
   signal?.throwIfAborted();
   const atlas = asset.uvAtlas;
   const mesh = asset.scene.getObjectByProperty('isMesh', true);
@@ -39,7 +39,7 @@ export async function rebakeAsset(asset: ImportedAsset, signal?: AbortSignal): P
     }
   }
   const slots = [['map', material.map], ...(normal ? [['normalMap', normal]] as const : [])] as const;
-  const maps = await Promise.all(slots.map(([slot, texture]) => readLinkedMap(asset, slot, texture)));
+  const maps = await Promise.all(slots.map(([slot, texture]) => readLinkedMap(asset, slot, texture, slot === 'map' ? baseColor : undefined)));
   for (const [source, bytes] of asset.images) {
     if (maps.some(map => map.source === source)) continue;
     const slot = /_(roughness|metallic)\.(jpg|jpeg|png)$/i.exec(source)?.[1].toLowerCase();
@@ -120,7 +120,7 @@ function bakeTarget(atlas: UvAtlasEdit) {
     padding: chartPadding * bakeScale, targetUv };
 }
 
-async function readLinkedMap(asset: ImportedAsset, slot: string, texture: Texture): Promise<BakeMap> {
+async function readLinkedMap(asset: ImportedAsset, slot: string, texture: Texture, edited?: Uint8Array<ArrayBuffer>): Promise<BakeMap> {
   const image = texture.image;
   const source = image instanceof HTMLImageElement && asset.imagePathsByUrl.get(image.src);
   if (!source || texture.channel !== 0 || !texture.flipY) {
@@ -133,8 +133,8 @@ async function readLinkedMap(asset: ImportedAsset, slot: string, texture: Textur
   if (slot === 'normalMap' && uvTransform.some((value, i) => value !== Number(i === 0 || i === 4))) {
     throw new Error('The E00 bake does not yet support a normal map with its own UV transform.');
   }
-  const bytes = asset.images.get(source)!;
-  const preserveAlpha = slot === 'map' && !!asset.alphaProfile;
+  const bytes = edited ?? asset.images.get(source)!;
+  const preserveAlpha = slot === 'map' && (!!asset.alphaProfile || !!edited);
   const imageData = preserveAlpha ? readRgbaPng(bytes) : await readPixels(bytes);
   return { slot, source, mode: slot === 'normalMap' ? 'normal' : 'srgb', uvTransform, preserveAlpha,
     wrapS: samplerWrap(texture.wrapS), wrapT: samplerWrap(texture.wrapT), ...imageData };

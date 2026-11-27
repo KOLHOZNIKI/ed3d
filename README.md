@@ -32,6 +32,8 @@ For a single FBX mesh with one UV set, use **Generate UV atlas** to add UV1. **R
 
 After rebaking a static mesh with one base color map, turn on **3D brush (visible projection)** and drag on the model. **Undo** restores the preceding texture. **Export FBX ZIP** packages the painted map.
 
+Open **Texture editor** to edit the selected object's Base Color material. The 2D view has Brush, Clone Stamp, Eyedropper, Pixel Brush and a rectangular mask. Set the stamp source with `Alt` + click. Use the mouse wheel to zoom at the cursor and the middle button to pan. **Focus UVs** frames the current material's sampling region. Use **Export PNG** to download the image at its working dimensions. 2D and 3D edits share Undo and Redo.
+
 | Command | Purpose |
 | --- | --- |
 | `npm run typecheck` | Check the application with strict TypeScript settings. |
@@ -56,5 +58,6 @@ After rebaking a static mesh with one base color map, turn on **3D brush (visibl
 
 ## Verification
 
+- [E02 texture editor verification](Docs/E02_Report.md) records color sampling, stamp isolation, pixel zoom, mixed history and FBX/GLB export.
 - [E01 project and recovery verification](Docs/E01_Report.md) records the offline reopening, checkpoint and Unity tests.
 - [E00 format and risk verification](Docs/E00_Report.md) records backend decisions, fixture provenance, reference exports and adapter checks.

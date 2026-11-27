@@ -12,6 +12,8 @@ The viewport supports object selection by list or ray hit, orbit, pan, zoom, fra
 
 Schema 2 writes the history budget. Schema 1 restores the same working resources with a default 256 MiB budget, and subsequent saves write schema 2. Unknown newer schemas produce an explicit error. **Save Project** downloads the current document. **Save As** gives the copy a separate project ID. A reopened project restores the current work and starts a new Undo/Redo history.
 
+E02 retains the schema 1 and 2 readers and writes schema 3 for working texture resources. [E02 texture persistence](E02_Report.md)
+
 IndexedDB stores up to three committed checkpoints for the browser origin and profile. The five-second timer starts after a commit. A stroke or active transaction defers capture until it has completed. The database adds the checkpoint and prunes the older ones atomically. On startup the application verifies the archives and offers the latest intact revision. A storage error keeps the working document and the prior checkpoints available. **Save Project** remains available for a file backup. [Saving and recovery requirements](AssetFixer_Technical_Specification_v1.0.md#sec-06)
 
 ## Verification

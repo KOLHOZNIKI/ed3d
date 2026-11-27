@@ -10,10 +10,12 @@ import { MeshoptDecoder } from '../../test-results/e00-gltf-transform/node_modul
 
 const { positionals: [input, output], values } = parseArgs({
   allowPositionals: true,
-  options: { 'position-edit': { type: 'string' } },
+  options: { 'position-edit': { type: 'string' }, 'base-color-png': { type: 'string' } },
 });
-if (!input || !output) throw new Error('Usage: node tools/e00/inspect_f17.mjs original.glb exported.glb [--position-edit edit.json]');
+if (!input || !output) throw new Error('Usage: node tools/e00/inspect_f17.mjs original.glb exported.glb [--position-edit edit.json | --base-color-png edited.png]');
 const edit = values['position-edit'] ? JSON.parse(await readFile(values['position-edit'], 'utf8')) : undefined;
+const color = values['base-color-png'] ? await readFile(values['base-color-png']) : undefined;
+if (color && edit) throw new Error('Choose one edit expectation.');
 const meshopt = 'EXT_meshopt_compression';
 const outputExtensions = ['EXT_texture_webp', 'KHR_mesh_quantization'];
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -74,7 +76,18 @@ assert.equal(before.compressedViews, 4);
 assert.equal(after.compressedViews, 0);
 assert.deepEqual(after.node, before.node);
 assert.deepEqual(after.material, before.material);
-assert.deepEqual(after.textures, before.textures);
+if (color) {
+  const { baseColor: source, ...originalMaps } = before.textures;
+  const { baseColor: target, ...unchangedMaps } = after.textures;
+  assert.deepEqual(unchangedMaps, originalMaps);
+  const { name: _sourceName, mimeType: _originalMime, bytes: _sourceBytes, sha256: sourceHash, ...sourceSampling } = source;
+  const { name: _targetName, mimeType, bytes, sha256, ...outputSampling } = target;
+  assert.equal(mimeType, 'image/png');
+  assert.equal(bytes, color.length);
+  assert.equal(sha256, hash(color));
+  assert.notEqual(sha256, sourceHash);
+  assert.deepEqual(outputSampling, sourceSampling);
+} else assert.deepEqual(after.textures, before.textures);
 assert.deepEqual(Object.keys(before.attributes).sort(), ['NORMAL', 'POSITION', 'TEXCOORD_0']);
 assert.deepEqual(Object.keys(after.attributes).sort(), Object.keys(before.attributes).sort());
 

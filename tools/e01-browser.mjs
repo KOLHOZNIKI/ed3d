@@ -179,14 +179,14 @@ try {
   const path = await work.save('#save-project', 'static.assetfixer');
   const independent = await work.save('#save-copy', 'independent.assetfixer');
   const source = await unpack(path), copy = await unpack(independent);
-  assert.equal(source.manifest.schemaVersion, 2);
+  assert.equal(source.manifest.schemaVersion, 3);
   assert.equal(source.manifest.settings.historyBudget, 128 * 1024 * 1024);
   assert.notEqual(copy.manifest.id, source.manifest.id);
   assert.deepEqual(copy.manifest.working, source.manifest.working);
   const originalHash = source.manifest.originals[0].hash;
   assert.equal(originalHash, sha256(await readFile(staticOriginal)));
   assert.equal(sha256(source.files[`blobs/${originalHash}`]), originalHash);
-  assert.equal(source.manifest.working.paint.hash, paintReference.hash);
+  assert.equal(source.manifest.working.textures.find(entry => entry.key === 'atlas-color').hash, paintReference.hash);
   await work.autosave(`Autosaved revision ${source.manifest.revision}`);
   await corruptCheckpoint(work.page, source.manifest.revision + 1);
   await context.close();
@@ -225,9 +225,15 @@ try {
     files[name][0] ^= 1;
   }), /Invalid project resource hash or size/);
   assert.match(await showProject(work), new RegExp(`Revision ${quotaProject.manifest.revision}`));
-  await work.open(await versioned('schema-v1', data => { data.schemaVersion = 1; delete data.settings; }), /Project restored/);
+  await work.open(await versioned('schema-v1', data => {
+    const texture = data.working.textures.find(entry => entry.key === 'atlas-color');
+    data.schemaVersion = 1;
+    data.working.paint = { ...texture.paint, hash: texture.hash };
+    delete data.settings;
+    delete data.working.textures;
+  }), /Project restored/);
   const migrated = await unpack(await work.save('#save-project', 'migrated.assetfixer'));
-  assert.equal(migrated.manifest.schemaVersion, 2);
+  assert.equal(migrated.manifest.schemaVersion, 3);
   assert.equal(migrated.manifest.settings.historyBudget, 256 * 1024 * 1024);
   await work.open(path, /Project restored/);
   const restored = await work.save('#export', 'static-restored.zip');

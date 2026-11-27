@@ -35,6 +35,24 @@
         align-items: center;
         gap: 0.75rem;
       }
+
+      main:has(#texture-panel:not([hidden])) { max-width: 83rem; }
+      .work-area:has(#texture-panel:not([hidden])) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.08fr); gap: 1rem; align-items: start; }
+      #texture-panel { min-width: 0; }
+      #texture-panel fieldset { min-width: 0; }
+      #texture-panel .actions { gap: 0.45rem 0.75rem; }
+      #texture-panel select { max-width: 100%; }
+      #texture-panel input[type=number] { width: 4.25rem; }
+      #texture-target { width: 100%; margin: .35rem 0; }
+      #texture-info, #texture-status { font-size: .875rem; min-height: 1.25rem; margin: .55rem 0; overflow-wrap: anywhere; }
+      #texture-viewport {
+        position: relative; overflow: hidden; touch-action: none; outline-offset: 4px; height: clamp(300px, 46vh, 580px);
+        background: repeating-conic-gradient(#333b45 0% 25%, #272e37 0% 50%) 0 / 20px 20px; border-radius: 8px;
+      }
+      #texture-viewport canvas { position: absolute; left: 0; top: 0; max-width: none; border-radius: 0; pointer-events: none; }
+      #texture-picture { transform-origin: 0 0; image-rendering: pixelated; }
+      #texture-overlay { width: 100%; height: 100%; }
+      @media (max-width: 900px) { .work-area:has(#texture-panel:not([hidden])) { grid-template-columns: minmax(0, 1fr); } }
     </style>
   </head>
   <body>
@@ -70,10 +88,13 @@
         <input id="paint-color" type="color" value="#15e4f2" disabled />
         <button id="undo-stroke" type="button" disabled>Undo</button>
         <button id="redo" type="button" disabled>Redo</button>
+        <button id="toggle-texture" type="button" aria-expanded="false" disabled>Texture editor</button>
         <button id="cancel-job" type="button" hidden>Cancel operation</button>
       </div>
       <p id="history-status" hidden></p>
       <p id="status" role="status">Select a model to inspect it locally.</p>
+      <div class="work-area">
+      <div>
       <fieldset id="viewer-tools" hidden>
         <legend>Viewport</legend>
         <div class="actions">
@@ -98,6 +119,58 @@
         </div>
         <p id="selection-details"></p>
       </fieldset>
+      </div>
+      <section id="texture-panel" aria-label="Texture editor" hidden>
+        <fieldset>
+          <legend>Texture editor</legend>
+          <label for="texture-target">Object and material</label>
+          <select id="texture-target"></select>
+          <div class="actions" id="texture-sharing" hidden>
+            <button id="texture-edit-shared" type="button">Edit shared map</button>
+            <button id="texture-copy" type="button">Copy for this binding</button>
+          </div>
+          <p id="texture-info"></p>
+          <div class="actions">
+            <label for="texture-tool">Tool</label>
+            <select id="texture-tool"><option value="brush">Brush</option><option value="stamp">Clone Stamp</option><option value="eyedropper">Eyedropper</option><option value="pixel">Pixel Brush</option><option value="select">Rectangle</option><option value="pan">Pan</option></select>
+            <label for="texture-color">Color</label><input id="texture-color" type="color" value="#15e4f2" />
+            <label for="texture-size">Size (px)</label><input id="texture-size" type="number" min="1" max="512" value="24" />
+            <label for="texture-opacity">Opacity %</label><input id="texture-opacity" type="number" min="0" max="100" value="100" />
+            <label for="texture-hardness">Hardness %</label><input id="texture-hardness" type="number" min="0" max="100" value="75" />
+          </div>
+          <div class="actions">
+            <label for="texture-shape">Pixel shape</label><select id="texture-shape"><option>Square</option><option>Round</option></select>
+            <label for="texture-stamp">Stamp</label><select id="texture-stamp"><option>Aligned</option><option>Fixed</option></select>
+            <label><input id="texture-alpha" type="checkbox" /> Edit alpha</label>
+            <label for="texture-alpha-value">Alpha</label><input id="texture-alpha-value" type="number" min="0" max="255" value="255" />
+            <button id="texture-fill" type="button" disabled>Fill selection</button>
+            <button id="texture-clear" type="button" disabled>Clear selection</button>
+          </div>
+          <div class="actions">
+            <button id="texture-fit" type="button">Fit</button>
+            <button id="texture-focus" type="button">Focus UVs</button>
+            <button id="texture-actual" type="button">100%</button>
+            <button id="texture-out" type="button" aria-label="Zoom out">−</button>
+            <span id="texture-zoom">100%</span>
+            <button id="texture-in" type="button" aria-label="Zoom in">+</button>
+            <label><input id="texture-uv" type="checkbox" checked /> UV overlay</label>
+            <label for="texture-uv-color">Line color</label><input id="texture-uv-color" type="color" value="#5ee8ff" />
+            <label for="texture-uv-opacity">Line opacity %</label><input id="texture-uv-opacity" type="number" min="0" max="100" value="65" />
+            <label for="texture-uv-width">Line width</label><input id="texture-uv-width" type="number" min="1" max="5" value="1" />
+            <label><input id="texture-unlit" type="checkbox" /> Unlit 3D</label>
+          </div>
+          <div id="texture-viewport" tabindex="0" aria-label="Texture canvas">
+            <canvas id="texture-picture" width="1" height="1" aria-hidden="true"></canvas>
+            <canvas id="texture-overlay" width="1" height="1" aria-hidden="true"></canvas>
+          </div>
+          <p id="texture-status" aria-live="polite"></p>
+          <div class="actions">
+            <label for="texture-import">Replace Base Color</label><input id="texture-import" type="file" accept=".png,.jpg,.jpeg,.webp" />
+            <button id="texture-export" type="button">Export PNG</button>
+          </div>
+        </fieldset>
+      </section>
+      </div>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>

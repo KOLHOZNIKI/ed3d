@@ -128,7 +128,7 @@ export function moveControlPointY(asset: ImportedAsset, controlPoint: number, of
   return { ...asset, positionEdit: { geometry: mesh.geometry, positions, controlPoint, offsetY } };
 }
 
-export async function exportAsset(asset: ImportedAsset): Promise<{ name: string; bytes: Uint8Array<ArrayBuffer> }> {
+export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMap<Texture, Uint8Array<ArrayBuffer>>): Promise<{ name: string; bytes: Uint8Array<ArrayBuffer> }> {
   if (asset.deformation.hasMorphTargets) {
     throw new Error('FBX export blocked. The current exporter cannot preserve source morph targets.');
   }
@@ -170,13 +170,14 @@ export async function exportAsset(asset: ImportedAsset): Promise<{ name: string;
         assigned.add(baked.source);
         continue;
       }
-      const extension = source?.match(imagePattern)?.[1].toLowerCase() ?? 'png';
+      const edited = sourceEdits?.get(entry.texture);
+      const extension = edited ? 'png' : source?.match(imagePattern)?.[1].toLowerCase() ?? 'png';
       const location = `${name}.fbm/texture_${linked.length + 1}.${extension}`;
       entry.fileName = location;
       linked.push({ semantic: textureSemantics[entry.slotName], file: location, source });
       if (source) {
         assigned.add(source);
-        files.set(location, asset.images.get(source)!);
+        files.set(location, edited ?? asset.images.get(source)!);
       } else {
         pending.push(encodePng(image).then(bytes => { files.set(location, bytes); }));
       }
