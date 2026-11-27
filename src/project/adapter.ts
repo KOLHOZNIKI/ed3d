@@ -11,6 +11,7 @@ import { sceneStats } from '../e00/scene-stats';
 import { RigSession } from '../rig/session';
 import type { RigState } from '../rig/state';
 import { validatedTransform, validateObject, type ObjectTransforms } from './object-transform';
+import { editType } from '../mesh/commands';
 
 export type Model = ImportedAsset | ImportedGlb;
 
@@ -56,6 +57,9 @@ export class ModelAdapter {
 
   materialize(state: WorkingState): Model {
     if (this.model.format === 'glb' && (state.atlas || state.bake || state.paint)) throw new Error('The project contains FBX working data for a GLB source.');
+    if (!!state.meshEdits?.some(bytes => editType(bytes) === 'bakeBase') !== !!state.rig?.bakedGroups?.length) {
+      throw new Error('The baked geometry and base rig must be restored together. Undo the base pose bake or export the original files.');
+    }
     const rematerialize = this.#rigState !== state.rig || !!state.rig && this.#rigMeshEdits !== state.meshEdits;
     if (rematerialize) {
       this.rig.restore();

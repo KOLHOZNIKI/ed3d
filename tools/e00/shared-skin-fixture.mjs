@@ -80,12 +80,33 @@ const clip = new AnimationClip('SharedTorsoBend', 1, [
 ]);
 scene.animations = [clip];
 
+const reference = process.argv[2];
+if (reference) {
+  const rotation = new Quaternion().setFromAxisAngle(new Vector3(0, 0, 1), Math.PI / 9);
+  spine.quaternion.copy(rotation);
+  scene.updateMatrixWorld(true);
+  const point = new Vector3();
+  for (const mesh of [body, clothing]) {
+    const position = mesh.geometry.getAttribute('position');
+    for (let vertex = 0; vertex < position.count; vertex++) {
+      mesh.getVertexPosition(vertex, point);
+      position.setXYZ(vertex, point.x, point.y, point.z);
+    }
+  }
+  skeleton.calculateInverses();
+  const spineTrack = clip.tracks[0];
+  for (let offset = 0; offset < spineTrack.values.length; offset += 4) {
+    new Quaternion().fromArray(spineTrack.values, offset).premultiply(rotation).toArray(spineTrack.values, offset);
+  }
+  clip.name = 'SharedTorsoBend_Adapted_1';
+}
+
 for (const [index, entity] of [scene, body, clothing, body.geometry, clothing.geometry, body.material, clothing.material,
   pelvis, spine, chest, clip].entries()) {
   entity.uuid = `4f62c99c-2f06-42b3-8481-${String(index).padStart(12, '0')}`;
 }
 const directory = 'test-results/e00/f10';
 await mkdir(directory, { recursive: true });
-await writeFile(`${directory}/shared_skin.fbx`, new FBXExporter().parseSync(scene, {
+await writeFile(reference ?? `${directory}/shared_skin.fbx`, new FBXExporter().parseSync(scene, {
   preset: 'unity', axisForward: '-Z', unitScale: 100, embedTextures: false, bakeSpaceTransform: false,
 }));

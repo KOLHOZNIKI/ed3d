@@ -17,6 +17,7 @@ const radians = Math.PI / 180;
 interface Context { session: RigSession; state: WorkingState; revision: number }
 interface Actions {
   apply(revision: number, state: WorkingState, label: string): Promise<boolean>;
+  bakeBase(revision: number): Promise<boolean>;
   orbit(dragging: boolean): void;
 }
 
@@ -69,6 +70,9 @@ export class RigTool {
       void this.#pose(current, 'Reset bone pose', translations);
     };
     ui('reset-pose').onclick = () => void this.#pose({}, 'Reset manual pose', {});
+    ui('bake-base').onclick = () => {
+      if (this.#context && this.#posing && !this.#preview && !checked('preview-clip')) void this.actions.bakeBase(this.#context.revision);
+    };
     ui('save').onclick = () => void this.#save('save');
     ui('rename-pose').onclick = () => void this.#save('rename');
     ui('copy-pose').onclick = () => void this.#save('duplicate');
@@ -168,6 +172,11 @@ export class RigTool {
     if (!context) return;
     ui('structure').hidden = this.#posing;
     ui('pose-settings').hidden = !this.#posing;
+    button('reset').disabled = !!context.state.rig?.bakedGroups?.length;
+    button('reset').title = button('reset').disabled ? 'Undo the base pose bake to restore the rig and mesh together.' : '';
+    button('bake-base').disabled = !!context.session.blocked || !!this.#preview || checked('preview-clip') ||
+      !Object.keys(this.#poses.current).length && !Object.keys(this.#poses.translations ?? {}).length;
+    button('bake-base').title = context.session.blocked ?? 'Bake the displayed pose into all affected meshes and check clip compatibility.';
     select('operation').disabled = select('descendants').disabled = this.#posing;
     const clip = this.#clipId === undefined ? undefined : context.session.clips[this.#clipId];
     ui('clip-info').textContent = clip?.reason ?? (clip?.setting.mode === 'exclude' ? 'Excluded from export. The original is retained.' :

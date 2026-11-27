@@ -12,6 +12,7 @@ import { smoothSelection } from './smooth-selection';
 import { flattenSelection } from './flatten-selection';
 import { mirrorMove, mirrorSummary } from './mirror';
 import { extrude } from './extrude';
+import { bakeBaseGeometry } from './bake-base';
 
 type VertexSource = readonly [vertex: number, factor: number];
 // Missing replacement entries keep their stable ID. Empty lists remove it from the source object.
@@ -59,6 +60,11 @@ function topologyChange(source: MeshData, result: MeshResult, changes: Partial<T
 
 export function applyMeshEdit(mesh: MeshData, edit: MeshEdit): MeshResult {
   switch (edit.type) {
+    case 'bakeBase': {
+      const baked = bakeBaseGeometry(mesh, edit.transforms);
+      for (const face of baked.faces) requireTriangles(baked, face, mesh);
+      return { mesh: baked };
+    }
     case 'weights': return { mesh: applyWeightEdits(mesh, edit.rows) };
     case 'uv': return { mesh: applyUvLayout(mesh, edit) };
     case 'repair': {
@@ -549,11 +555,16 @@ function mixWeights(mesh: MeshData, vertices: number[], factors: number[]): Weig
   return active.sort((a, b) => b[1] - a[1] || a[0] - b[0]);
 }
 
-function requireTriangles(mesh: MeshData, face: Face) {
+function collapsedTriangle(mesh: MeshData, triangle: readonly number[]) {
+  const [a, b, c] = triangle.map(vertex => vector(mesh, vertex));
+  const p = b.sub(a), q = c.sub(a);
+  return p.clone().cross(q).lengthSq() <= Math.max(p.lengthSq(), q.lengthSq()) ** 2 * 1e-16;
+}
+
+function requireTriangles(mesh: MeshData, face: Face, prior?: MeshData) {
   for (let i = 0; i < face.triangles.length; i += 3) {
-    const [a, b, c] = face.triangles.slice(i, i + 3).map(j => point(mesh, face.corners[j].vertex));
-    const p = new Vector3(...b).sub(new Vector3(...a)), q = new Vector3(...c).sub(new Vector3(...a));
-    if (p.clone().cross(q).lengthSq() <= Math.max(p.lengthSq(), q.lengthSq()) ** 2 * 1e-16) {
+    const triangle = face.triangles.slice(i, i + 3).map(index => face.corners[index].vertex);
+    if (collapsedTriangle(mesh, triangle) && (!prior || !collapsedTriangle(prior, triangle))) {
       throw new Error('The transform would collapse a triangle.');
     }
   }

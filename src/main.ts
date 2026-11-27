@@ -314,6 +314,22 @@ const rigTool = new RigTool(viewer, canvas, {
       status.textContent = `${label} applied.`;
     });
   },
+  bakeBase(revision) {
+    return locked(async signal => {
+      const work = current!, { document, adapter } = work;
+      document.assertRevision(revision);
+      const state = document.state;
+      if (!state.poses) throw new Error('Pose the working rig before baking the base pose.');
+      await new Promise(requestAnimationFrame);
+      signal?.throwIfAborted();
+      const baked = adapter.rig.bakePose(state.rig, state.poses, id => adapter.mesh.data(id), signal);
+      const meshEdits = [...state.meshEdits ?? [], ...baked.edits.map(encodeEdit)];
+      await edit(work, revision, { ...state, rig: baked.rig, poses: baked.poses, meshEdits }, 'Bake current base pose', 'rig', signal);
+      const blocked = adapter.rig.clips.filter(clip => clip.reason).length;
+      status.textContent = `Baked the current pose into ${baked.edits.length} bound meshes.` +
+        (blocked ? ` Adapt or exclude ${blocked} affected clips before export.` : '');
+    }, 'Baking the current pose into the base mesh and rig…', true);
+  },
   orbit(dragging) { viewer.setPainting(rigging, dragging || busy); },
 });
 

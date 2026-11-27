@@ -3,8 +3,9 @@ import type { SceneEntry } from '../project/document';
 import type { Model } from '../project/adapter';
 import { matrixDelta, rebindMesh } from './bindings';
 import { captureClips, forGhost, makeClips, type ClipResult } from './clips';
-import type { Joint, Pose, PoseTranslations, Quat, RigAction, RigClip, RigState } from './state';
-import type { Vec3 } from '../mesh/data';
+import type { Joint, Pose, PoseState, PoseTranslations, Quat, RigAction, RigClip, RigState } from './state';
+import type { MeshData, Vec3 } from '../mesh/data';
+import type { MeshEdit } from '../mesh/commands';
 import { changeRig, jointName, pack, unpack, worldMatrices } from './transforms';
 
 type NodeSnapshot = { node: Object3D; parent: string | null; index: number; local: Matrix4; world: Matrix4; name: string };
@@ -125,6 +126,73 @@ export class RigSession {
     const reason = makeClips(this.originalClips, this.#source, next, changed, this.#anchors(changed))[id].reason;
     if (mode === 'adapted' && reason) throw new Error(reason);
     return next;
+  }
+
+  bakePose(current: RigState | undefined, pose: PoseState, dataFor: (object: string) => MeshData, signal?: AbortSignal) {
+    if (this.#error) throw new Error(this.#error);
+    const prior = current ?? this.original, jointsById = new Map(prior.joints.map(joint => [joint.id, joint]));
+    const poseIds = [...Object.keys(pose.current), ...Object.keys(pose.translations ?? {})];
+    if (poseIds.some(id => !jointsById.has(id))) throw new Error('The manual pose refers to a missing joint. Reset or repair the pose before baking.');
+    const changed = new Map<string, { before: Joint; after: Joint }>();
+    const groups = new Set<string>();
+    const joints = prior.joints.map(before => {
+      const q = pose.current[before.id], shift = pose.translations?.[before.id];
+      if (!q && !shift) return before;
+      const previous = new Quaternion(...before.rotation), rotation = previous.clone();
+      if (q) rotation.multiply(new Quaternion(...q)).normalize();
+      if (1 - Math.abs(rotation.dot(previous)) <= 1e-12 && (!shift || new Vector3(...shift).lengthSq() <= 1e-16)) return before;
+      const after: Joint = { ...before, rotation: rotation.toArray(),
+        position: new Vector3(...before.position).add(new Vector3(...shift ?? [0, 0, 0])).toArray() };
+      changed.set(before.id, { before, after });
+      groups.add(before.group);
+      return after;
+    });
+    if (!groups.size) throw new Error('Pose the working rig before baking the base pose.');
+    const rig: RigState = { ...prior, joints, basis: crypto.randomUUID(), rebind: [...new Set([...prior.rebind, ...groups])],
+      bakedGroups: [...new Set([...prior.bakedGroups ?? [], ...groups])] };
+    this.#validate(rig);
+    const edits: MeshEdit[] = [], bound = new Set<string>();
+    const restore = this.applyPose(pose.current, pose.translations);
+    try {
+      for (const [object, node] of this.objects) {
+        signal?.throwIfAborted();
+        if (!(node instanceof SkinnedMesh)) continue;
+        const palette = this.palette(node);
+        const active = palette.flatMap(id => {
+          const joint = id && jointsById.get(id);
+          return joint && groups.has(joint.group) ? [joint.group] : [];
+        });
+        if (!active.length) continue;
+        if (palette.some(id => id === undefined)) throw new Error('A shared mesh has an unresolved joint.');
+        for (const group of active) bound.add(group);
+        const rows = dataFor(object), indices = new Map(palette.map((id, i) => [id, i]));
+        if (!rows.weightJoints || !rows.weights) throw new Error('A shared mesh has no editable skin palette.');
+        const transforms = rows.weightJoints.map(joint => {
+          const slot = indices.get(prior.transfers[joint] ?? joint);
+          if (slot === undefined) throw new Error('A shared mesh has a missing skin influence.');
+          const matrix = node.bindMatrixInverse.clone().multiply(node.skeleton.bones[slot].matrixWorld)
+            .multiply(node.skeleton.boneInverses[slot]).multiply(node.bindMatrix);
+          return { joint, values: matrix.toArray() };
+        });
+        edits.push({ object, type: 'bakeBase', transforms });
+      }
+    } finally { restore(); }
+    if (bound.size !== groups.size) throw new Error('Every posed rig group needs at least one bound mesh.');
+    // Saved poses keep their old absolute joint transforms under the new base.
+    const saved = pose.saved.map(item => {
+      const rotations = { ...item.rotations }, translations = { ...item.translations };
+      for (const [id, { before, after }] of changed) {
+        const q = new Quaternion(...after.rotation).invert().multiply(new Quaternion(...before.rotation))
+          .multiply(new Quaternion(...rotations[id] ?? [0, 0, 0, 1])).normalize();
+        const move = new Vector3(...before.position).add(new Vector3(...translations[id] ?? [0, 0, 0])).sub(new Vector3(...after.position));
+        if (1 - Math.abs(q.w) > 1e-12) rotations[id] = q.toArray();
+        else delete rotations[id];
+        if (move.lengthSq() > 1e-16) translations[id] = move.toArray();
+        else delete translations[id];
+      }
+      return { ...item, rotations, translations };
+    });
+    return { rig, poses: { current: {}, saved }, edits };
   }
 
   assertExportable() {
@@ -308,7 +376,7 @@ export class RigSession {
   }
 
   #changed(state: RigState) {
-    const changed = new Set<string>(), after = new Map(state.joints.map(joint => [joint.id, joint]));
+    const changed = new Set(state.bakedGroups), after = new Map(state.joints.map(joint => [joint.id, joint]));
     const rebound = new Set(state.rebind);
     for (const joint of state.joints) {
       const original = this.#source.get(joint.id);
@@ -344,7 +412,8 @@ export class RigSession {
     }
     for (const joint of this.original.joints) if (!joints.has(joint.id) &&
       (!state.transfers[joint.id] || !joint.parent || !this.#source.has(joint.parent))) throw new Error('An imported joint was removed without a valid weight destination.');
-    if (state.rebind.some(group => !groups.has(group)) || Object.keys(state.clips).some(i => !this.originalClips[Number(i)])) {
+    if (state.rebind.some(group => !groups.has(group)) || state.bakedGroups?.some(group => !groups.has(group) || !state.rebind.includes(group)) ||
+        Object.keys(state.clips).some(i => !this.originalClips[Number(i)])) {
       throw new Error('A rig edit refers to an unknown binding or clip.');
     }
     worldMatrices(state.joints, this.anchor);

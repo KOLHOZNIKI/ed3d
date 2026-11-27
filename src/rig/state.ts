@@ -28,6 +28,7 @@ export interface RigState {
   readonly basis: string;
   readonly rebind: readonly string[];
   readonly clips: Readonly<Record<number, RigClip>>;
+  readonly bakedGroups?: readonly string[];
 }
 
 export interface PoseState {

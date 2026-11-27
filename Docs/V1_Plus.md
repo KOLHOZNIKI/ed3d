@@ -12,7 +12,7 @@ The specification lists the following extensions after mandatory V1. The order i
 | Mirrored movement with a matching tolerance | [Implemented and checked](#mirror-move-and-subdivide) |
 | UV Stitch / Weld (UV-12) | [Single-edge workflow verified](UV_Stitch.md) |
 | UV Relax (UV-16) with fixed boundaries and visible UV pins | [Implemented and checked](#uv-relax) |
-| Make the current pose the new base pose | Planned geometry and animation baking |
+| Make the current pose the new base pose | [Verified for supported skins](#make-the-current-pose-the-base-pose) |
 
 The UV work is described in §11.2 and §11.6 of the specification. §16.6 reserves the base-pose command for a separate geometry and animation bake.
 
@@ -132,6 +132,29 @@ The side quads inherit the adjacent material. Extrude lays out separate UV strip
 - The static edge fixture extended two connected open edges by `0.25 m`. It exported 36 triangles, including two side quads. The face fixture raised two adjacent faces by `0.125 m`. It exported 40 triangles with four side quads. ufbx found the expected shared edges, correct new positions and 25 unchanged source positions in both cases. The 96 original corner UVs and linked PNG bytes matched. All side UV quads occupied free space in the source tile.
 - Chrome verified Preview and Cancel, the new-face paint mask, a filled UV tile warning, an interior edge refusal and the static-mesh guard. Undo restored source data and offline project replay reproduced both exports. Core checks covered an open loop, protected boundary remapping, GLB UV orientation and refusal of an intersecting extrusion.
 - Unity 2022.3.62f2 and 6000.3.9f1 imported both exports with 36 and 40 triangles, linked Base Color, and zero base-position error against independent reference geometry. Both Release and Debug built with strict type checking. The E04 browser regression and the V1+ checks for UV Relax, Mirror Move and Subdivide passed on the same build.
+
+## Make the current pose the base pose
+
+In **Rig & Pose → Manual pose**, pose the joints and choose **Make Current Pose the Base Pose**. The command bakes the displayed skin deformation into every mesh driven by the affected rig and rebuilds the inverse bind matrices. It clears the manual pose, keeping the baked shape on screen. UVs, materials, topology and supported weight rows stay attached to the same elements. Undo and Redo restore both the geometry and rig in one step. Saved poses keep their absolute joint transforms and can deform the rebased mesh differently. Projects with the bake use schema 20.
+
+Review affected clips in **Original clips and adaptations**. **Adapt clip** produces a rest-relative adaptation where the hierarchy and tracks are supported. Preview the adaptation before export or explicitly exclude that clip. Another change of base marks the adaptation stale. Export Original keeps the original FBX or GLB and clips available. Manual posing and clip or sweep previews leave the base unchanged until the bake command is used.
+
+The bake requires normalized weights with at most four active influences per control point, a decomposable rig, and meshes without morph targets. Singular skin frames, newly collapsed triangles and unsupported rig attachments prevent the whole edit. Existing collapsed triangles may remain until repaired. The Kenney FBX used below has imported rest transforms outside the rig editor's supported profile. Geometry edits and export with its original clip still work.
+
+### Integrated verification
+
+Chrome ran the Release build with external requests blocked. Each workflow exported from the working project and again after reopening its `.assetfixer` archive offline. Unity 2022.3.62f2 and 6000.3.9f1 used the standard FBX importer. The independent readers were ufbx v0.23.0 and the project's Python GLB reader.
+
+| Input and edit | Result |
+| --- | --- |
+| Shared-skin FBX with body and clothing, 20° Spine rotation | Both meshes share one three-bone skeleton. ufbx verified unchanged polygon order, corner UVs, raw weights and the expected new binds. The maximum position and adapted-clip error against the independent reference was `6.22e-8 m`. In both Unity versions, the adapted clip deformed both meshes with zero measured error across 21 samples per mesh. The browser verified Undo, Redo, saved-pose rebasing, the clip export guard and byte-identical original export. |
+| Tripo `ceramic plate 3d model.zip`, Extrude → Auto Unwrap → UV Relax → Preserve Appearance | Extrude added three control points and six triangles at `0.2 mm` depth. ufbx verified the original control points and the expected polygon boundaries after UV layout triangulation. UV Relax moved 4,239 UV vertices and fixed 772. The bake wrote a `1024 × 1024` Base Color PNG with zero occupied texel misses. Geometry, UVs and PNG bytes matched after reopening. Both Unity versions imported 9,144 triangles and linked the Base Color PNG. |
+| Authored Kenney animated FBX, move control point 100 | ufbx found exactly one moved control point with `+0.03125` source units on Y, unchanged connectivity, corner UVs and raw weights, and a maximum clip deformation error of `1.02e-6 m` versus the source. The reopened project matched the initial edited export across 21 regularly sampled poses and 17 extrema or endpoints. Both Unity versions imported 45 bones, 1,604 triangles and `Take 001`, with zero weight or deformation difference before and after reopening at 21 clip samples. |
+| Tripo `man character 3d model.glb`, 15° Left Upper Arm rotation | The independent reader measured a maximum base-pose error of `5.18e-7 m` and a maximum rest-bind error of `1.03e-7 m`. All 67 joints, 17,623 triangles, UVs, indices, weights and embedded Base Color and Normal images were retained. Both GLB exports were byte-identical. This GLB has no authored clips. |
+
+Run `node tools/base-pose-browser.mjs` from a built checkout with the E00 Chrome harness installed. The optional arguments are the Chrome executable, Tripo folder and Kenney FBX path. Generate the reference with `node tools/e00/shared-skin-fixture.mjs test-results/base-pose/shared-reference.fbx`. Build the [ufbx probe](../tools/e00/inspect_fbx.c) against the [pinned E00 corpus](E00_FBX_Round_Trip.md#fixtures), then run `python -B tools/base-pose-check.py --ufbx path/to/inspect_fbx.exe`. It writes `test-results/base-pose/independent.json`.
+
+For Unity, place the reference and reopened shared-rig FBX in `Assets/BasePose/original` and `Assets/BasePose/exported`. Run [`SharedSkinProbe.RunBasePose`](../tools/e00/SharedSkinProbe.cs) and check `shared-skin-report.json`. For the plate and animated character, put the first export and reopened export under `Assets/Fixtures/<fixture>/original` and `Assets/Fixtures/<fixture>/exported`, keeping texture paths relative to their FBX. Run [`FbxProbe.Run`](../tools/e00/FbxProbe.cs) and check `e00-report.json`. The user-provided Tripo files and the Kenney corpus asset are local verification inputs. Their provenance is recorded in the [E00 fixture list](E00_FBX_Round_Trip.md#fixtures).
 
 ### Reproduce
 

@@ -57,26 +57,28 @@ public static class SharedSkinProbe
         public void Dispose() => UnityEngine.Object.DestroyImmediate(root);
     }
 
-    public static void Run() => Verify(MeshNames.Length);
+    public static void Run() => Verify(MeshNames.Length, "Assets/Fixtures/shared-skin", "SharedTorsoBend");
 
-    public static void RunSelection() => Verify(1);
+    public static void RunSelection() => Verify(1, "Assets/Fixtures/shared-skin", "SharedTorsoBend");
 
-    static void Verify(int count)
+    public static void RunBasePose() => Verify(MeshNames.Length, "Assets/BasePose", "SharedTorsoBend_Adapted_1");
+
+    static void Verify(int count, string fixture, string clip)
     {
-        using (var original = new Model("Assets/Fixtures/shared-skin/original", MeshNames.Length))
-        using (var exported = new Model("Assets/Fixtures/shared-skin/exported", count)) {
+        using (var original = new Model(fixture + "/original", MeshNames.Length))
+        using (var exported = new Model(fixture + "/exported", count)) {
             var report = new Report {
                 unityVersion = Application.unityVersion, clip = original.clip.name,
                 originalSharedSkeleton = original.sharedSkeleton, exportedSharedSkeleton = exported.sharedSkeleton,
                 originalClipSeconds = original.clip.length, exportedClipSeconds = exported.clip.length,
             };
             report.meshes = Enumerable.Range(0, count).Select(i => CompareMesh(original, exported, i)).ToArray();
-            report.compatible = report.originalSharedSkeleton && report.exportedSharedSkeleton && report.clip == "SharedTorsoBend" &&
+            report.compatible = report.originalSharedSkeleton && report.exportedSharedSkeleton && report.clip == clip &&
                 original.clip.name == exported.clip.name && Mathf.Abs(report.originalClipSeconds - 1f) <= 1e-5f &&
                 Mathf.Abs(report.originalClipSeconds - report.exportedClipSeconds) <= 1e-5f && report.meshes.All(mesh => mesh.compatible);
             File.WriteAllText("shared-skin-report.json", JsonUtility.ToJson(report, true));
-            if (!report.compatible) throw new InvalidOperationException("F10 shared skin verification failed. See shared-skin-report.json.");
-            Debug.Log($"Verified {count} F10 meshes and the retained skeleton. See shared-skin-report.json.");
+            if (!report.compatible) throw new InvalidOperationException($"Shared skin verification failed for {fixture}. See shared-skin-report.json.");
+            Debug.Log($"Verified {count} skinned meshes and their shared skeleton for {fixture}. See shared-skin-report.json.");
         }
     }
 

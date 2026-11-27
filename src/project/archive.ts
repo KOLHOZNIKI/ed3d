@@ -147,6 +147,7 @@ export async function writeProject(document: AssetDocument<WorkingState>, option
   const settings = Object.keys(operations ?? {});
   const editLogs = [state, ...pins.map(pin => pin.state)].map(version => version.meshEdits);
   const meshSchema = [
+    { version: 20, types: ['bakeBase'], prefixes: [] },
     { version: 19, types: ['extrude'], prefixes: ['mesh-extrude-'] },
     { version: 18, types: ['mirrorMove', 'subdivide'], prefixes: ['mesh-mirror-', 'uv-relax-'] },
     { version: 17, types: ['flattenSelection'], prefixes: ['mesh-flatten-'] },
@@ -176,7 +177,7 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
   const manifest = record(JSON.parse(decoder.decode(encoded)));
   if (manifest.format !== 'AssetFixer') throw new Error('This file is not an AssetFixer project.');
   const version = integer(manifest.schemaVersion, 1);
-  if (version > 19) throw new Error(`Project schema ${version} is newer than this application supports.`);
+  if (version > 20) throw new Error(`Project schema ${version} is newer than this application supports.`);
   // Version 1 had a fixed history budget. Version 2 persists the project setting.
   const settings = version === 1 ? undefined : record(manifest.settings);
   const historyBudget = settings ? integer(settings.historyBudget, MiB, projectLimit) : defaultHistoryBudget;
@@ -245,6 +246,7 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
         if (version < 17 && edit.type === 'flattenSelection') throw new Error('Flatten Selection requires project schema 17.');
         if (version < 18 && (edit.type === 'mirrorMove' || edit.type === 'subdivide')) throw new Error('Mirror Move and Subdivide require project schema 18.');
         if (version < 19 && edit.type === 'extrude') throw new Error('Extrude requires project schema 19.');
+        if (version < 20 && edit.type === 'bakeBase') throw new Error('Base pose baking requires project schema 20.');
         if (!entries.has(edit.object)) throw new Error('A saved mesh edit refers to an unknown object.');
         if (edit.type === 'separate' || edit.type === 'extract') {
           if (entries.has(edit.piece)) throw new Error('A saved separate operation reuses an object ID.');
@@ -404,6 +406,7 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
       textures[key] = { image, paint: strokes };
     }
     const rig = version >= 9 && working.rig !== undefined ? readRig(working.rig) : undefined;
+    if (version < 20 && rig?.bakedGroups) throw new Error('Baked rigs require project schema 20.');
     const poses = version >= 9 && working.poses !== undefined ? readPoses(working.poses) : undefined;
     const weightLocks = version >= 10 && working.weightLocks !== undefined ? list(working.weightLocks, 2048).map(readJointId) : undefined;
     if (weightLocks && new Set(weightLocks).size !== weightLocks.length) throw new Error('Duplicate saved weight lock.');
@@ -473,7 +476,9 @@ function readRig(value: unknown): RigState {
     clips[Number(id)] = mode === 'adapted' ? { mode, name: text(item.name, 160), basis: readBasis(item.basis),
       offsets: item.offsets === undefined ? undefined : readPose(item.offsets), translationOffsets: readPoseTranslations(item.translationOffsets) } : { mode };
   }
-  return { joints, transfers, clips, rebind: list(data.rebind, 2048).map(readJointId), basis: readBasis(data.basis) };
+  const bakedGroups = data.bakedGroups === undefined ? undefined : list(data.bakedGroups, 2048).map(readJointId);
+  if (bakedGroups && (!bakedGroups.length || new Set(bakedGroups).size !== bakedGroups.length)) throw new Error('Invalid saved baked rig groups.');
+  return { joints, transfers, clips, rebind: list(data.rebind, 2048).map(readJointId), basis: readBasis(data.basis), bakedGroups };
 }
 
 function readPoseTranslations(value: unknown): PoseTranslations | undefined {

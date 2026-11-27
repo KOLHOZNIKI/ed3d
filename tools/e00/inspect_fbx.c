@@ -626,7 +626,7 @@ static bool shared_skeleton(const ufbx_scene *scene, const ufbx_mesh *const *mes
     return true;
 }
 
-static bool compare_shared_skin(const ufbx_scene *original, const ufbx_scene *exported, size_t count)
+static bool compare_shared_skin(const ufbx_scene *original, const ufbx_scene *exported, size_t count, bool base_pose)
 {
     const char *names[] = { "Body", "Clothing" };
     const size_t expected_vertices[] = { 40, 32 }, expected_triangles[] = { 76, 48 };
@@ -643,8 +643,13 @@ static bool compare_shared_skin(const ufbx_scene *original, const ufbx_scene *ex
             const bool weights = same_skin_weights(a, b);
             const ufbx_skin_deformer *skin = a->skin_deformers.data[0];
             double base_delta = 0.0, bind_delta = 0.0;
+            bool uv = topology && a->vertex_uv.exists && b->vertex_uv.exists;
             if (topology) {
                 for (size_t v = 0; v < a->num_vertices; v++) base_delta = fmax(base_delta, point_distance(a->vertices.data[v], b->vertices.data[v]));
+            }
+            for (size_t c = 0; uv && c < a->num_indices; c++) {
+                const ufbx_vec2 left = ufbx_get_vertex_vec2(&a->vertex_uv, c), right = ufbx_get_vertex_vec2(&b->vertex_uv, c);
+                uv = fabs(left.x - right.x) <= 1e-9 && fabs(left.y - right.y) <= 1e-9;
             }
             if (weights) {
                 for (size_t c = 0; c < skin->clusters.count; c++) {
@@ -656,11 +661,12 @@ static bool compare_shared_skin(const ufbx_scene *original, const ufbx_scene *ex
                 }
             }
             printf("%s{\"name\":\"%s\",\"controlPoints\":%zu,\"triangles\":%zu,\"maxInfluences\":%zu,\"sameConnectivity\":%s,"
-                   "\"sameRawWeights\":%s,\"maxBaseDelta\":%.9g,\"maxBindMatrixDelta\":%.9g",
+                   "\"sameRawWeights\":%s,\"maxBaseDelta\":%.9g,\"maxBindMatrixDelta\":%.9g,\"sameCornerUv\":%s",
                    i ? "," : "", names[i], a->num_vertices, a->num_triangles, skin->max_weights_per_vertex,
-                   topology ? "true" : "false", weights ? "true" : "false", base_delta, bind_delta);
+                   topology ? "true" : "false", weights ? "true" : "false", base_delta, bind_delta, uv ? "true" : "false");
             const bool animated = topology && compare_clips(original, exported, a, b);
-            compatible &= topology && weights && animated && base_delta <= 1e-9 && bind_delta <= 1e-9;
+            const double tolerance = base_pose ? 1e-6 : 1e-9;
+            compatible &= topology && weights && animated && base_delta <= tolerance && bind_delta <= tolerance && (!base_pose || uv);
             printf("}");
         }
     }
@@ -1117,13 +1123,14 @@ int main(int argc, char **argv)
     }
     const bool selected = argc == 4 && strcmp(argv[3], "--selected-skin") == 0;
     check_clip_extrema = argc == 4 && strcmp(argv[3], "--clip-extrema") == 0;
-    const bool shared = argc == 4 && (selected || strcmp(argv[3], "--shared-skin") == 0);
+    const bool base_pose = argc == 4 && strcmp(argv[3], "--base-pose") == 0;
+    const bool shared = argc == 4 && (selected || base_pose || strcmp(argv[3], "--shared-skin") == 0);
     const bool rig = argc == 4 && (!strcmp(argv[3], "--rig-moved") || !strcmp(argv[3], "--rig-renamed") || !strcmp(argv[3], "--rig-deleted"));
     const bool weight = argc == 4 && (!strcmp(argv[3], "--weight-stroke") || !strcmp(argv[3], "--weight-wide"));
     const bool stitch = argc == 4 && strcmp(argv[3], "--uv-stitch") == 0;
     const bool points_only = argc == 4 && strcmp(argv[3], "--same-points") == 0;
     if (argc != 3 && argc != 5 && !shared && !rig && !weight && !stitch && !check_clip_extrema && !points_only) {
-        fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx [--shared-skin | --selected-skin | --clip-extrema | --rig-moved | --rig-renamed | --rig-deleted | --weight-stroke | --weight-wide | --uv-stitch | control-point offset-y | --seams offset-y | --atlas source-corners.bin | --baked source-corners.bin | --smooth center | --grid center | --soft-move radius]\n");
+        fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx [--shared-skin | --selected-skin | --base-pose | --clip-extrema | --rig-moved | --rig-renamed | --rig-deleted | --weight-stroke | --weight-wide | --uv-stitch | control-point offset-y | --seams offset-y | --atlas source-corners.bin | --baked source-corners.bin | --smooth center | --grid center | --soft-move radius]\n");
         return 2;
     }
     const bool baked = argc == 5 && strcmp(argv[3], "--baked") == 0;
@@ -1153,7 +1160,7 @@ int main(int argc, char **argv)
         return matches ? 0 : 1;
     }
     if (shared || rig) {
-        const bool matches = shared ? compare_shared_skin(original, exported, selected ? 1 : 2) : compare_edited_rig(original, exported, argv[3]);
+        const bool matches = shared ? compare_shared_skin(original, exported, selected ? 1 : 2, base_pose) : compare_edited_rig(original, exported, argv[3]);
         ufbx_free_scene(exported);
         ufbx_free_scene(original);
         return matches ? 0 : 1;

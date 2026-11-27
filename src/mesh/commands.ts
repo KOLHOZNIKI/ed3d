@@ -1,6 +1,7 @@
 import type { Vec3 } from './data';
+import type { BakeJointMatrix } from './bake-base';
 import type { Fill } from '../repair/fill';
-import { validWeightEdits, type WeightEditRow } from '../weights/data';
+import { jointId, validWeightEdits, type WeightEditRow } from '../weights/data';
 import { falloffs, type SoftSelection } from './soft-selection';
 import { validSmoothSelection, type SmoothSelectionSettings } from './smooth-selection';
 import type { FlattenPlane } from './flatten-selection';
@@ -16,6 +17,7 @@ export type MeshEdit = { object: string } & (
   { type: 'mirrorMove'; vertices: number[]; value: Vec3; axis: number; offset: number; tolerance: number } |
   { type: 'subdivide'; faces: number[] } |
   { type: 'extrude'; selection: ExtrudeSelection; direction: ExtrudeDirection; depth: number } |
+  { type: 'bakeBase'; transforms: readonly BakeJointMatrix[] } |
   { type: 'delete' | 'recalculate' | 'flipNormals'; faces: number[] } |
   { type: 'separate'; faces: number[]; piece: string } |
   { type: 'extract'; faces: number[]; piece: string; cut: boolean; pivot: Vec3; rotation: Vec3; scale: number } |
@@ -29,7 +31,7 @@ export type MeshEdit = { object: string } & (
   { type: 'uv'; channel: number; coordinates: number[]; seams: string[]; suppliesTexture?: true }
 );
 
-const names = new Set(['move', 'rotate', 'scale', 'softTransform', 'smoothSelection', 'flattenSelection', 'mirrorMove', 'subdivide', 'extrude', 'delete', 'recalculate', 'flipNormals', 'separate',
+const names = new Set(['move', 'rotate', 'scale', 'softTransform', 'smoothSelection', 'flattenSelection', 'mirrorMove', 'subdivide', 'extrude', 'bakeBase', 'delete', 'recalculate', 'flipNormals', 'separate',
   'create', 'weld', 'splitEdge', 'splitFace', 'dissolve', 'flipEdge', 'repair', 'uv', 'extract', 'weights']);
 const encoder = new TextEncoder(), decoder = new TextDecoder('utf-8', { fatal: true });
 const types = new WeakMap<Uint8Array, MeshEdit['type']>();
@@ -84,6 +86,15 @@ export function decodeEdit(data: Uint8Array) {
         Array.isArray(selection.edges) && selection.edges.length > 0 && selection.edges.length <= 200000 &&
         selection.edges.every(edge) && new Set(selection.edges).size === selection.edges.length) &&
         extrudeDirections.includes(o.direction as ExtrudeDirection) && Number.isFinite(o.depth) && o.depth !== 0;
+      break;
+    }
+    case 'bakeBase': {
+      const entries = o.transforms;
+      valid = Array.isArray(entries) && entries.length > 0 && entries.length <= 2048 && entries.every(entry => {
+        const values = entry?.values;
+        return jointId(entry?.joint) && Array.isArray(values) && values.length === 16 && values.every(Number.isFinite) &&
+          Math.abs(values[3]) < 1e-8 && Math.abs(values[7]) < 1e-8 && Math.abs(values[11]) < 1e-8 && Math.abs(values[15] - 1) < 1e-8;
+      }) && new Set(entries.map(entry => entry.joint)).size === entries.length;
       break;
     }
     case 'delete': case 'recalculate': case 'flipNormals': case 'subdivide':
