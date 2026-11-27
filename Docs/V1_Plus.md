@@ -106,6 +106,8 @@ In Chrome, an FBX grid retained its 16 boundary UV vertices and one explicit int
 
 On the grid, one selected face became four. Three neighboring faces each acquired the same midpoint as the selected side. ufbx verified all three shared edges, 28 control points, 38 triangles, unchanged original positions, interpolated UVs and exact expected weights. A separate core case verified a subdivided GLB n-gon, a marked UV seam and interpolated morph deltas. Undo restored the originals and offline replay restored the changes for all three tools. The three skinned FBX exports matched their expected deformation over 21 clip samples in ufbx.
 
+Unity 2022.3.62f2 and Unity 6000.3.9f1 imported all six static and skinned exports with the expected triangle counts and positions. Both editor versions measured zero skin weight and deformation error over 21 clip samples for each skinned fixture. The probe used the Generic profile, imported normals, calculated MikkTSpace tangents, and disabled mesh and animation compression.
+
 ### Reproduce
 
 ```powershell
