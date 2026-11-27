@@ -96,6 +96,29 @@ static double uv_distance(ufbx_vec2 a, ufbx_vec2 b)
     return hypot(a.x - b.x, a.y - b.y);
 }
 
+static bool compare_stitched_uv(const ufbx_mesh *a, const ufbx_mesh *b)
+{
+    if (a->num_vertices != 8 || a->num_indices != 12 || a->uv_sets.count != 1 || b->uv_sets.count != 1 ||
+        !a->vertex_uv.exists || !b->vertex_uv.exists || !a->vertex_normal.exists || !b->vertex_normal.exists) return false;
+    if (point_distance(a->vertices.data[1], a->vertices.data[5]) != 0.0) return false;
+    size_t changed = 0;
+    double position = 0.0, uv = 0.0, normal = 0.0;
+    for (size_t i = 0; i < a->num_vertices; i++) {
+        position = fmax(position, point_distance(a->vertices.data[i], b->vertices.data[i]));
+    }
+    for (size_t i = 0; i < a->num_indices; i++) {
+        const size_t expected = i == 3 ? 1 : (i == 5 || i == 8 ? 2 : i);
+        const ufbx_vec2 source = ufbx_get_vertex_vec2(&a->vertex_uv, i), actual = ufbx_get_vertex_vec2(&b->vertex_uv, i);
+        if (uv_distance(source, actual) > 1e-9) changed++;
+        uv = fmax(uv, uv_distance(ufbx_get_vertex_vec2(&a->vertex_uv, expected), actual));
+        normal = fmax(normal, normal_angle(ufbx_get_vertex_vec3(&a->vertex_normal, i),
+                                           ufbx_get_vertex_vec3(&b->vertex_normal, i)));
+    }
+    printf(",\"uvStitch\":{\"changedCorners\":%zu,\"expectedUvError\":%.9g,\"positionError\":%.9g,\"normalAngleDegrees\":%.9g}",
+           changed, uv, position, normal);
+    return changed == 3 && position <= 1e-9 && uv <= 1e-9 && normal <= 1e-4;
+}
+
 enum { seam_point = 0, coincident_point = 8, seam_variant_count = 3 };
 
 static bool seam_witness(const ufbx_mesh *mesh, double *min_uv_gap, double *min_normal_angle)
@@ -887,8 +910,9 @@ int main(int argc, char **argv)
     const bool shared = argc == 4 && strcmp(argv[3], "--shared-skin") == 0;
     const bool rig = argc == 4 && (!strcmp(argv[3], "--rig-moved") || !strcmp(argv[3], "--rig-renamed") || !strcmp(argv[3], "--rig-deleted"));
     const bool weight = argc == 4 && (!strcmp(argv[3], "--weight-stroke") || !strcmp(argv[3], "--weight-wide"));
-    if (argc != 3 && argc != 5 && !shared && !rig && !weight) {
-        fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx [--shared-skin | --rig-moved | --rig-renamed | --rig-deleted | --weight-stroke | --weight-wide | control-point offset-y | --seams offset-y | --atlas source-corners.bin | --baked source-corners.bin | --smooth center | --grid center]\n");
+    const bool stitch = argc == 4 && strcmp(argv[3], "--uv-stitch") == 0;
+    if (argc != 3 && argc != 5 && !shared && !rig && !weight && !stitch) {
+        fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx [--shared-skin | --rig-moved | --rig-renamed | --rig-deleted | --weight-stroke | --weight-wide | --uv-stitch | control-point offset-y | --seams offset-y | --atlas source-corners.bin | --baked source-corners.bin | --smooth center | --grid center]\n");
         return 2;
     }
     const bool baked = argc == 5 && strcmp(argv[3], "--baked") == 0;
@@ -1002,8 +1026,9 @@ int main(int argc, char **argv)
         }
     }
     const bool animation = topology && compare_clips(original, exported, a, b);
+    const bool stitched_uv = !stitch || (topology && compare_stitched_uv(a, b));
     puts("}");
     ufbx_free_scene(exported);
     ufbx_free_scene(original);
-    return topology && weights && edit_matches && animation ? 0 : 1;
+    return topology && weights && edit_matches && animation && stitched_uv ? 0 : 1;
 }

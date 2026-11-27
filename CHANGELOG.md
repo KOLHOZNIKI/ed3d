@@ -15,3 +15,4 @@
 | E10 | USR-09 | Added Weight Paint, smoothing, influence locks, normalization, mirroring and transfer. [Report](Docs/E10_Report.md) |
 | E11 | USR-11, USR-12 | Added humanoid calibration, ten diagnostic motions, pose checkpoints and export publication. [Report](Docs/E11_Report.md) |
 | E12 | USR-01–USR-17 | Added offline relaunch, local texture assignment, compatibility reports, and end-to-end acceptance on both browser and Unity targets. [Report](Docs/E12_Report.md) |
+| V1+ | UV-12 | Added draft-based UV edge stitching with a fixed anchor side and guards for incompatible seams. [Report](Docs/UV_Stitch.md) |

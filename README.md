@@ -46,6 +46,8 @@ Use **Smooth Fill** for a non-planar patch with a fixed rim. Set refinement pass
 
 Open **UV Editor** to select a material, map, and UV channel. Pick UV vertices, edges, faces, or islands in the grid or on the model. Drag to move the selection, use the transform handle for rotation and scaling, or enter numeric values. Use the wheel to zoom and middle-drag to pan. **Auto Unwrap** and **Pack Islands** write to the UV draft.
 
+To join a shared UV seam, choose **Edge** and **Stitch UV edge**. Click the side to keep fixed, then click **Update draft**. Review the result and apply it with **Change Mapping** or **Preserve Appearance**. The tool joins one shared edge at a time. [UV stitch workflow and results](Docs/UV_Stitch.md)
+
 Choose **Change Mapping** to move UVs while keeping the images unchanged. Choose **Preserve Appearance** to transfer the current painted maps to the draft. You can also select **Original import** when the source corners still match. **Rebake and Apply** commits both the UVs and the new maps together. Use **Coverage** to inspect sampled texels and any repairs filled with neutral data. FBX exports put the baked layout in UV0 and retain the source layout in UV1. GLB exports bind the baked maps to the selected channel.
 
 Choose **Spatial Projection** to transfer maps onto changed geometry. Select the source mesh and snapshot. If either mesh has multiple components, assign each target component one source component using the displayed component IDs. Use maximum distance, normal angle, ray direction, and offset to constrain the transfer. **Coverage** marks hits in teal, unresolved texels in magenta, and explicitly permitted nearest-surface samples in amber.

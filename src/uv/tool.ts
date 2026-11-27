@@ -8,6 +8,7 @@ import { edgeKey } from '../mesh/data';
 import { bounds, cross, density, diagnose, editUv, groups, planar, read, type Layout, type Pair, type Surface } from './layout';
 import { pack, type PackOptions } from './pack';
 import { autoUnwrap, currentLayout, uvName, uvSurface } from './surface';
+import { stitchEdge, type EdgeSide } from './stitch';
 import type { TransferOptions } from './transfer';
 import { faceComponents } from '../e00/topology-components';
 import type { SpatialOptions } from './spatial';
@@ -66,7 +67,7 @@ export class UvTool {
   #lastLayout?: Layout;
   #findings?: ReturnType<typeof diagnose>;
   #selection = new Set<number>();
-  #edge?: string;
+  #edge?: EdgeSide;
   #offset: Pair = [0, 0];
   #zoom = 1;
   #gesture?: Gesture;
@@ -77,8 +78,8 @@ export class UvTool {
   constructor(readonly viewer: Viewer, readonly viewport: HTMLCanvasElement, readonly actions: Actions) {
     viewer.scene.add(this.#wire);
     this.#wire.visible = false;
-    ui('channel').addEventListener('change', () => { this.#selection.clear(); this.#update(); this.#fit(false); });
-    ui('material').addEventListener('change', () => { this.#selection.clear(); this.#loadImage(); this.#update(); });
+    ui('channel').addEventListener('change', () => { this.#selection.clear(); this.#edge = undefined; this.#update(); this.#fit(false); });
+    ui('material').addEventListener('change', () => { this.#selection.clear(); this.#edge = undefined; this.#loadImage(); this.#update(); });
     ui('map').addEventListener('change', () => { this.#loadImage(); this.#update(); });
     ui('kind').addEventListener('change', () => { this.#selection.clear(); this.#edge = undefined; this.#update(); });
     ui('background').addEventListener('change', () => this.#draw());
@@ -93,6 +94,7 @@ export class UvTool {
     ui('fit').addEventListener('click', () => this.#fit(false));
     ui('fit-selection').addEventListener('click', () => this.#fit(true));
     ui('select-all').addEventListener('click', () => {
+      this.#edge = undefined;
       this.#selection = new Set(this.#corners().filter(i => this.#visible(i)));
       this.#update();
     });
@@ -147,6 +149,7 @@ export class UvTool {
     this.#draft.clear();
     this.#lastLayout = undefined;
     this.#selection.clear();
+    this.#edge = undefined;
     this.#surface = this.#mesh = this.#target = this.#map = this.#coverage = undefined;
     this.#imageTicket++;
     const source = ui<HTMLSelectElement>('projection-object'), previousSource = source.value;
@@ -189,6 +192,7 @@ export class UvTool {
     if (!kind) return false;
     ui<HTMLSelectElement>('kind').value = kind;
     this.#selection.clear();
+    this.#edge = undefined;
     this.#update();
     return true;
   }
@@ -217,7 +221,7 @@ export class UvTool {
       else {
         const opposite = weights.indexOf(Math.min(...weights));
         const a = first + (opposite + 1) % 3, b = first + (opposite + 2) % 3;
-        this.#edge = edgeKey(surface.points[a], surface.points[b]);
+        this.#edge = { key: edgeKey(surface.points[a], surface.points[b]), triangle: hit.faceIndex };
         ids = [...vertices(a), ...vertices(b)];
       }
     }
@@ -295,6 +299,7 @@ export class UvTool {
       field.disabled = !['move', 'rotate', 'scale'].includes(operation) || id === 'v' && operation === 'rotate';
     }
     ui<HTMLSelectElement>('plane').disabled = operation !== 'planar';
+    ui('stitch-hint').hidden = operation !== 'stitch';
   }
 
   #operation() {
@@ -303,11 +308,27 @@ export class UvTool {
     try {
       if (!this.#selection.size) throw new Error('Select UV vertices, edges, faces or islands.');
       const op = choice('operation');
+      if (op === 'stitch') {
+        const edge = this.#edge, grouping = this.#groups;
+        if (choice('kind') !== 'edge' || !edge || !grouping) throw new Error('Select one UV edge on the side to keep fixed.');
+        const side = grouping.sides.get(edge.key)?.find(([i]) => Math.floor(i / 3) === edge.triangle);
+        const corners = new Set(side?.flatMap(i => grouping.vertices.get(grouping.vertexOf(i)) ?? []));
+        if (corners.size !== this.#selection.size || [...corners].some(i => !this.#selection.has(i))) {
+          throw new Error('Select just one UV edge on the side to keep fixed.');
+        }
+        const next = stitchEdge(surface, layout, edge, grouping);
+        for (const side of grouping.sides.get(edge.key) ?? []) for (const endpoint of side) {
+          for (const corner of grouping.vertices.get(grouping.vertexOf(endpoint)) ?? []) this.#selection.add(corner);
+        }
+        this.#set(next);
+        this.#say('UV draft. Stitched the shared edge. Review the layout before applying.');
+        return;
+      }
       if (op === 'cut' || op === 'uncut') {
         if (choice('kind') !== 'edge' || !this.#edge) throw new Error('Select a UV edge to mark or clear.');
         const seams = new Set(layout.seams);
-        if (op === 'cut') seams.add(this.#edge);
-        else seams.delete(this.#edge);
+        if (op === 'cut') seams.add(this.#edge.key);
+        else seams.delete(this.#edge.key);
         this.#set({ ...layout, seams: [...seams] });
         return;
       }
@@ -412,6 +433,7 @@ export class UvTool {
   #cancel() {
     this.#draft.delete(this.#channel);
     this.#selection.clear();
+    this.#edge = undefined;
     this.#update();
     this.#fit(false);
   }
@@ -420,6 +442,7 @@ export class UvTool {
 
   #select(ids: number[], shift: boolean) {
     const remove = shift && ids.every(id => this.#selection.has(id));
+    if (remove) this.#edge = undefined;
     if (!shift) this.#selection.clear();
     for (const id of ids) {
       if (remove) this.#selection.delete(id);
@@ -506,7 +529,7 @@ export class UvTool {
       if (metric < distance) {
         distance = metric;
         picked = [...grouping.vertices.get(grouping.vertexOf(a))!, ...grouping.vertices.get(grouping.vertexOf(b))!];
-        this.#edge = key;
+        this.#edge = { key, triangle: Math.floor(a / 3) };
       }
     }
     return picked;

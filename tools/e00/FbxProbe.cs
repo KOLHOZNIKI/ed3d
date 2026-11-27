@@ -50,6 +50,7 @@ public static class FbxProbe
         public string testedBone;
         public bool originalHumanoidAvatar, exportedHumanoidAvatar;
         public int editedVertexCopies, editedUvCopies;
+        public int stitchedUvVertices;
         public float observedMove, maxUvError;
         public bool sameTriangleConnectivity;
         public int sourceUv1Vertices, exportedUv1Vertices, unmatchedAtlasVertices, atlasNormalDifferences;
@@ -167,6 +168,7 @@ public static class FbxProbe
     static Pair Compare(string fixture, Model before, Model after, PositionEdit edit)
     {
         var atlas = fixture.EndsWith("-atlas", StringComparison.Ordinal);
+        var stitch = fixture.EndsWith("-uv-stitch", StringComparison.Ordinal);
         float diagonal = Vector3.Distance(before.info.min, before.info.max);
         float tolerance = Mathf.Max(1e-6f, 1e-4f * diagonal);
         var result = new Pair { fixture = fixture, original = before.info, exported = after.info, tolerance = tolerance };
@@ -174,13 +176,20 @@ public static class FbxProbe
         var expected = before.basePoints;
         Vector2[] beforeUv = null, afterUv = null;
         Vector3[] beforeNormals = null, afterNormals = null;
-        if (atlas) {
+        if (atlas || stitch) {
             beforeUv = before.mesh.uv;
             afterUv = after.mesh.uv;
             beforeNormals = before.mesh.normals;
             afterNormals = after.mesh.normals;
             if (beforeUv.Length != before.basePoints.Length || afterUv.Length != after.basePoints.Length ||
                 beforeNormals.Length != before.basePoints.Length || afterNormals.Length != after.basePoints.Length) return result;
+        }
+        if (stitch) {
+            for (int i = 0; i < beforeUv.Length; i++) {
+                if (Mathf.Abs(beforeUv[i].x - .625f) > 1e-6f) continue;
+                beforeUv[i].x = .375f;
+                result.stitchedUvVertices++;
+            }
         }
         var positionTolerance = edit == null ? tolerance : baseTolerance;
         int[] moved = null;
@@ -204,6 +213,13 @@ public static class FbxProbe
 
         var matches = MatchPoints(expected, after.basePoints, positionTolerance, beforeUv, afterUv, beforeNormals, afterNormals);
         var reverse = MatchPoints(after.basePoints, expected, baseTolerance, afterUv, beforeUv, afterNormals, beforeNormals);
+        if (stitch && matches.All(i => i >= 0) && reverse.All(i => i >= 0)) {
+            // Coincident render vertices can have distinct weights. Match their incident triangle corners.
+            var canonical = MatchPoints(after.basePoints, after.basePoints, baseTolerance, afterUv, afterUv, afterNormals, afterNormals);
+            matches = MatchStitchCorners(before.mesh.triangles, after.mesh.triangles, matches, canonical);
+            if (matches.Any(i => i < 0) || matches.Distinct().Count() != reverse.Length) return result;
+            for (int i = 0; i < matches.Length; i++) reverse[matches[i]] = i;
+        }
         result.baseError = matches.All(index => index >= 0) ? Delta(expected, after.basePoints, matches) : -1;
         result.compatible = result.baseError >= 0 && result.baseError <= baseTolerance
             && reverse.All(index => index >= 0)
@@ -233,10 +249,19 @@ public static class FbxProbe
                 .SequenceEqual(TriangleKeys(after.mesh, i => canonical[i]));
             result.compatible &= result.editedUvCopies > 1 && result.sameTriangleConnectivity;
         }
+        if (stitch && result.baseError >= 0 && reverse.All(index => index >= 0)) {
+            result.maxUvError = Enumerable.Range(0, matches.Length).Max(i => Vector2.Distance(beforeUv[i], afterUv[matches[i]]));
+            result.maxNormalError = Delta(beforeNormals, afterNormals, matches);
+            var canonical = MatchPoints(after.basePoints, after.basePoints, baseTolerance, afterUv, afterUv, afterNormals, afterNormals);
+            result.sameTriangleConnectivity = TriangleKeys(before.mesh, i => canonical[matches[i]])
+                .SequenceEqual(TriangleKeys(after.mesh, i => canonical[i]));
+            result.compatible &= result.stitchedUvVertices == 2 && result.sameTriangleConnectivity &&
+                result.maxUvError <= 1e-6f && result.maxNormalError <= 1e-6f;
+        }
         if (before.skin == null || after.skin == null || result.baseError < 0) return result;
 
         result.maxWeightError = WeightDelta(before, after, matches);
-        if (atlas && reverse.All(index => index >= 0)) {
+        if ((atlas || stitch) && reverse.All(index => index >= 0)) {
             result.maxWeightError = Mathf.Max(result.maxWeightError, WeightDelta(after, before, reverse));
         }
         if (edit != null) before.ApplyPoseProbeMove(moved, worldOffset);
@@ -313,6 +338,20 @@ public static class FbxProbe
         }
         Array.Sort(triangles);
         return triangles;
+    }
+
+    static int[] MatchStitchCorners(int[] source, int[] target, int[] approximateMatches, int[] canonical)
+    {
+        var matches = Enumerable.Repeat(-1, approximateMatches.Length).ToArray();
+        for (int i = 0; i < source.Length; i += 3) {
+            var expected = Enumerable.Range(0, 3).Select(k => canonical[approximateMatches[source[i + k]]]).ToArray();
+            for (int j = 0; j < target.Length; j += 3) for (int offset = 0; offset < 3; offset++) {
+                var rotated = Enumerable.Range(0, 3).Select(k => target[j + (offset + k) % 3]).ToArray();
+                if (!expected.SequenceEqual(rotated.Select(k => canonical[k]))) continue;
+                for (int k = 0; k < 3; k++) matches[source[i + k]] = rotated[k];
+            }
+        }
+        return matches;
     }
 
     static int[] MatchPoints(Vector3[] source, Vector3[] target, float tolerance, Vector2[] sourceUv = null, Vector2[] targetUv = null,

@@ -630,7 +630,8 @@
             <option value="move">Move</option><option value="rotate">Rotate</option><option value="scale">Scale</option>
             <option value="alignU">Align U</option><option value="alignV">Align V</option>
             <option value="pixel">Snap to pixels</option><option value="vertex">Snap to nearest vertex</option><option value="boundary">Snap to tile edge</option>
-            <option value="cut">Mark seam</option><option value="uncut">Clear seam</option><option value="planar">Planar projection</option>
+            <option value="cut">Mark seam</option><option value="uncut">Clear seam</option>
+            <option value="stitch">Stitch UV edge</option><option value="planar">Planar projection</option>
           </select>
           <label for="uv-u" id="uv-u-label">U</label><input id="uv-u" type="number" value="0" step="any" />
           <label for="uv-v" id="uv-v-label">V</label><input id="uv-v" type="number" value="0" step="any" />
@@ -638,6 +639,7 @@
           <label for="uv-plane">Plane</label><select id="uv-plane"><option value="">Estimated plane</option><option value="xy">XY</option><option value="xz">XZ</option><option value="yz">YZ</option></select>
           <button id="uv-run" type="button">Update draft</button>
         </div>
+        <p id="uv-stitch-hint" hidden>In Edge mode, pick the side of the seam you want to keep fixed.</p>
         <div class="actions">
           <label for="uv-size">Atlas size</label><select id="uv-size"><option>256</option><option>512</option><option selected>1024</option><option>2048</option><option>4096</option></select>
           <label for="uv-padding">Padding (px)</label><input id="uv-padding" type="number" value="4" min="0" max="64" />
