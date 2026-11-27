@@ -22,6 +22,8 @@ import { PaintTool } from './paint3d/tool';
 import type { Point } from './texture/stroke';
 import { MeshTool } from './mesh/tool';
 import { encodeEdit, type MeshEdit } from './mesh/commands';
+import { applyMeshEdit } from './mesh/edit';
+import { remapOpenBoundaryFlags } from './repair/boundaries';
 import { RepairTool } from './repair/tool';
 import { UvTool, type UvRequest } from './uv/tool';
 import { fbxAtlas, uvCommand } from './uv/surface';
@@ -429,6 +431,14 @@ function commitMesh(command: MeshEdit, revision: number, label: string) {
     let textures = state.textures;
     let keepOpen = state.keepOpen;
     let uvBakes = state.uvBakes;
+    if (command.type === 'extrude') {
+      const flags = keepOpen?.[command.object];
+      const hint: unknown = work.adapter.objects.get(command.object)?.userData.protectedLoop;
+      if (flags || Array.isArray(hint)) {
+        const before = work.adapter.mesh.data(command.object), result = applyMeshEdit(before, command);
+        keepOpen = { ...keepOpen, [command.object]: remapOpenBoundaryFlags(before, result.mesh, result.topology!.edges, flags ?? {}, hint) };
+      }
+    }
     if (command.type === 'separate') {
       if (state.extracts?.[command.object]) throw new Error('Use Extract to separate an independent asset and retain its map ownership.');
       if (keepOpen?.[command.object]) keepOpen = { ...keepOpen, [command.piece]: keepOpen[command.object] };

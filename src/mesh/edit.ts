@@ -11,6 +11,7 @@ import { softWeights } from './soft-selection';
 import { smoothSelection } from './smooth-selection';
 import { flattenSelection } from './flatten-selection';
 import { mirrorMove, mirrorSummary } from './mirror';
+import { extrude } from './extrude';
 
 type VertexSource = readonly [vertex: number, factor: number];
 // Missing replacement entries keep their stable ID. Empty lists remove it from the source object.
@@ -31,6 +32,7 @@ interface MeshResult {
   influence?: ReadonlyMap<number, number>;
   smoothing?: { pinned: ReadonlySet<number>; changed: number };
   mirror?: Pick<ReturnType<typeof mirrorMove>, 'pairs' | 'center' | 'skipped'>;
+  extrusion?: { walls: number; projected: boolean };
 }
 
 function topologyChange(source: MeshData, result: MeshResult, changes: Partial<TopologyChanges> = {}): MeshResult {
@@ -95,6 +97,16 @@ export function applyMeshEdit(mesh: MeshData, edit: MeshEdit): MeshResult {
       return { mesh: deform(mesh, positions, changed), mirror };
     }
     case 'subdivide': return subdivide(mesh, pickFaces(mesh, edit.faces));
+    case 'extrude': {
+      const result = extrude(mesh, edit.selection, edit.depth, edit.direction);
+      const vertices = new Map<number, number[]>(), vertexSources = new Map<number, readonly VertexSource[]>();
+      for (const [source, created] of result.copies) {
+        vertices.set(source, [created]);
+        vertexSources.set(created, [[source, 1]]);
+      }
+      return topologyChange(mesh, { mesh: result.mesh, extrusion: { walls: result.walls, projected: result.projected } },
+        { vertices, vertexSources, edges: result.edges });
+    }
     case 'delete': case 'separate': {
       const faces = pickFaces(mesh, edit.faces);
       if (faces.size === mesh.faces.length) throw new Error('Keep at least one face in the source object.');

@@ -1,4 +1,4 @@
-import { BufferGeometry, Euler, Float32BufferAttribute, Group, LineBasicMaterial, LineSegments, Mesh,
+import { BufferGeometry, Euler, Float32BufferAttribute, Group, LineBasicMaterial, LineSegments, Mesh, SkinnedMesh,
   Object3D, Points, PointsMaterial, Quaternion, Raycaster, Vector2, Vector3, type Camera } from 'three';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import type { Viewer } from '../project/viewer';
@@ -10,6 +10,7 @@ import { connected, edgesOf, edgeKey, edgeVertices, usedVertices, verticesOf, ty
 import { applyMeshEdit, center } from './edit';
 import { faceNormal, vector } from './polygon';
 import { mirrorSummary } from './mirror';
+import type { ExtrudeDirection } from './extrude';
 
 const ui = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(`mesh-${id}`)! as T;
 const choice = (id: string) => ui<HTMLSelectElement>(id).value;
@@ -57,7 +58,7 @@ export class MeshTool {
     });
     for (const name of [...xyz, 'axis', 'pivot', 'material', 'project', 'weld-mode', 'tolerance', 'fraction', 'soft', 'soft-radius', 'soft-falloff',
       'smooth-strength', 'smooth-iterations', 'smooth-boundary', 'flatten-plane', 'flatten-offset', 'flatten-nx', 'flatten-ny', 'flatten-nz',
-      'mirror-axis', 'mirror-offset', 'mirror-tolerance']) {
+      'mirror-axis', 'mirror-offset', 'mirror-tolerance', 'extrude-direction', 'extrude-depth']) {
       ui(name).addEventListener('input', () => this.#cancel());
     }
     ui('connected').addEventListener('click', () => this.#selectConnected());
@@ -224,9 +225,11 @@ export class MeshTool {
       const retained = new Set(geometry.mesh.faces);
       const affected = data.faces.filter(face => !retained.has(face) || face.corners.some(({ vertex }) =>
         [0, 1, 2].some(k => data.positions[3 * vertex + k] !== geometry.mesh.positions[3 * vertex + k]))).length;
-      const warning = edit.type === 'create' && !edit.project ? ' New face requires UV unwrapping.' : '';
+      const warning = geometry.extrusion && !geometry.extrusion.projected ? ' Side UVs need unwrapping or packing.'
+        : edit.type === 'create' && !edit.project ? ' New face requires UV unwrapping.' : '';
       const detail = geometry.smoothing ? ` · ${geometry.smoothing.changed} moved · ${geometry.smoothing.pinned.size} pinned boundary vertices`
         : geometry.mirror ? ` · ${mirrorSummary(geometry.mirror)}`
+        : geometry.extrusion ? ` · ${geometry.extrusion.walls} side faces${geometry.extrusion.projected ? ' with projected UVs' : ''}`
         : edit.type === 'subdivide' ? ` · ${geometry.mesh.positions.length / 3 - data.positions.length / 3} new vertices`
         : edit.type === 'flattenSelection' ? ` · ${edit.vertices.length} vertices on the ${edit.plane.mode === 'bestFit' ? 'best-fit' : 'specified'} plane`
         : edit.type === 'softTransform' && geometry.influence ? ` · ${geometry.influence.size - edit.vertices.length} neighboring vertices in radius` : '';
@@ -294,6 +297,13 @@ export class MeshTool {
       case 'subdivide':
         if (this.#kind.value !== 'face' || !this.#selection.face.length) throw new Error('Select faces to subdivide.');
         return { type, object, faces: [...this.#selection.face] };
+      case 'extrude': {
+        if (this.#mesh instanceof SkinnedMesh) throw new Error('Extrude supports static meshes only.');
+        const kind = this.#kind.value;
+        if (kind !== 'edge' && kind !== 'face') throw new Error('Select open edges or faces to extrude.');
+        const selection = kind === 'edge' ? { edges: [...this.#selection.edge] } : { faces: [...this.#selection.face] };
+        return { type, object, selection, direction: choice('extrude-direction') as ExtrudeDirection, depth: number('extrude-depth') };
+      }
       case 'create':
         if (vertices.length < 3) throw new Error('Select three or more vertices in contour order.');
         return { type, object, vertices: [...vertices], material: Number(choice('material')), project: toggle('project') };
@@ -327,7 +337,7 @@ export class MeshTool {
     const fields = { transform: transforms.has(type), 'soft-toggle': type !== 'mirrorMove', 'soft-options': type !== 'mirrorMove' && toggle('soft'),
       mirror: type === 'mirrorMove', smooth: type === 'smoothSelection',
       flatten: type === 'flattenSelection', 'flatten-custom': plane === 'custom', 'flatten-offset-field': plane !== 'bestFit',
-      create: type === 'create', weld: type === 'weld', split: type === 'splitEdge' };
+      extrude: type === 'extrude', create: type === 'create', weld: type === 'weld', split: type === 'splitEdge' };
     for (const [id, show] of Object.entries(fields)) ui(id).hidden = !show;
     const ok = !!this.#data && !this.#locked;
     ui<HTMLButtonElement>('preview').disabled = !ok;

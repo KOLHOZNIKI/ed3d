@@ -159,3 +159,23 @@ export function authoredKeepOpen(contour: Boundary, hint: unknown) {
   const pointIds = new Set(contour.vertices);
   return hint.every(id => Number.isSafeInteger(id) && pointIds.has(id));
 }
+
+export function remapOpenBoundaryFlags(before: MeshData, after: MeshData, edges: ReadonlyMap<string, readonly string[]>,
+  flags: Readonly<Record<string, boolean>>, hint: unknown) {
+  const next = { ...flags }, inherited = new Map<string, boolean>();
+  for (const contour of boundaryContours(before)) {
+    const value = flags[contour.id] ?? (authoredKeepOpen(contour, hint) ? true : undefined);
+    if (value === undefined) continue;
+    delete next[contour.id];
+    for (const [a, b] of contour.edges) {
+      const key = edgeKey(a, b);
+      for (const candidate of [key, ...edges.get(key) ?? []]) inherited.set(candidate, inherited.get(candidate) === true || value);
+    }
+  }
+  for (const contour of boundaryContours(after)) {
+    if (!contour.id.startsWith('B')) continue;
+    const values = contour.edges.map(([a, b]) => inherited.get(edgeKey(a, b)));
+    if (values.some(value => value !== undefined)) next[contour.id] = values.includes(true);
+  }
+  return next;
+}

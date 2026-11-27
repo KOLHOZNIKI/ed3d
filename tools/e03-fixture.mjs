@@ -207,3 +207,31 @@ for (const [name, object, source] of [['static', smoothStatic, grid], ['skinned'
   object.geometry = subdivideReference(source);
   await exportFixture(`subdivide_reference_${name}`, scene);
 }
+
+const extrudePoints = gridPoints.map((value, index) => index === 37 ? 0 : value);
+const extrudeUv = gridUvs.map(value => .125 + value * .5);
+const extrudeMesh = new Mesh(geometry(extrudePoints, gridIndices, extrudeUv), material(true));
+extrudeMesh.name = 'Extrude grid';
+const extrudeScene = new Scene().add(extrudeMesh);
+await exportFixture('extrude_source', extrudeScene);
+
+function extrudeReference(mode) {
+  const edge = mode === 'edge', p = extrudePoints.slice(), uv = extrudeUv.slice(), indices = gridIndices.slice();
+  const ids = edge ? [0, 1, 2] : [6, 7, 11, 12];
+  for (const id of ids) {
+    const [x, y, z] = extrudePoints.slice(id * 3, id * 3 + 3);
+    p.push(x, y + (edge ? 0 : .125), z + (edge ? -.25 : 0));
+    uv.push(.75, .75);
+  }
+  if (edge) indices.push(0, 1, 26, 0, 26, 25, 1, 2, 27, 1, 27, 26);
+  else {
+    indices.splice(30, 6, 25, 27, 26, 26, 27, 28);
+    indices.push(6, 11, 27, 6, 27, 25, 11, 12, 28, 11, 28, 27,
+      12, 7, 26, 12, 26, 28, 7, 6, 25, 7, 25, 26);
+  }
+  return geometry(p, indices, uv);
+}
+for (const mode of ['edge', 'region']) {
+  extrudeMesh.geometry = extrudeReference(mode);
+  await exportFixture(`extrude_reference_${mode}`, extrudeScene);
+}

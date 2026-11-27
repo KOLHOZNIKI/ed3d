@@ -4,6 +4,7 @@ import { validWeightEdits, type WeightEditRow } from '../weights/data';
 import { falloffs, type SoftSelection } from './soft-selection';
 import { validSmoothSelection, type SmoothSelectionSettings } from './smooth-selection';
 import type { FlattenPlane } from './flatten-selection';
+import { extrudeDirections, type ExtrudeDirection, type ExtrudeSelection } from './extrude';
 
 export type TransformMode = 'move' | 'rotate' | 'scale';
 type TransformInput = { vertices: number[]; value: Vec3; pivot?: Vec3 };
@@ -14,6 +15,7 @@ export type MeshEdit = { object: string } & (
   { type: 'flattenSelection'; vertices: number[]; plane: FlattenPlane } |
   { type: 'mirrorMove'; vertices: number[]; value: Vec3; axis: number; offset: number; tolerance: number } |
   { type: 'subdivide'; faces: number[] } |
+  { type: 'extrude'; selection: ExtrudeSelection; direction: ExtrudeDirection; depth: number } |
   { type: 'delete' | 'recalculate' | 'flipNormals'; faces: number[] } |
   { type: 'separate'; faces: number[]; piece: string } |
   { type: 'extract'; faces: number[]; piece: string; cut: boolean; pivot: Vec3; rotation: Vec3; scale: number } |
@@ -27,7 +29,7 @@ export type MeshEdit = { object: string } & (
   { type: 'uv'; channel: number; coordinates: number[]; seams: string[]; suppliesTexture?: true }
 );
 
-const names = new Set(['move', 'rotate', 'scale', 'softTransform', 'smoothSelection', 'flattenSelection', 'mirrorMove', 'subdivide', 'delete', 'recalculate', 'flipNormals', 'separate',
+const names = new Set(['move', 'rotate', 'scale', 'softTransform', 'smoothSelection', 'flattenSelection', 'mirrorMove', 'subdivide', 'extrude', 'delete', 'recalculate', 'flipNormals', 'separate',
   'create', 'weld', 'splitEdge', 'splitFace', 'dissolve', 'flipEdge', 'repair', 'uv', 'extract', 'weights']);
 const encoder = new TextEncoder(), decoder = new TextDecoder('utf-8', { fatal: true });
 const types = new WeakMap<Uint8Array, MeshEdit['type']>();
@@ -76,6 +78,14 @@ export function decodeEdit(data: Uint8Array) {
     case 'mirrorMove':
       valid = indices(o.vertices, 1) && vec(o.value) && index(o.axis) && Number(o.axis) <= 2 && Number.isFinite(o.offset) &&
         Number.isFinite(o.tolerance) && Number(o.tolerance) > 1e-8; break;
+    case 'extrude': {
+      const selection = o.selection as { faces?: unknown; edges?: unknown } | undefined;
+      valid = !!selection && (selection.edges === undefined ? indices(selection.faces, 1) : selection.faces === undefined &&
+        Array.isArray(selection.edges) && selection.edges.length > 0 && selection.edges.length <= 200000 &&
+        selection.edges.every(edge) && new Set(selection.edges).size === selection.edges.length) &&
+        extrudeDirections.includes(o.direction as ExtrudeDirection) && Number.isFinite(o.depth) && o.depth !== 0;
+      break;
+    }
     case 'delete': case 'recalculate': case 'flipNormals': case 'subdivide':
       valid = indices(o.faces, 1); break;
     case 'separate':

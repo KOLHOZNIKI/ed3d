@@ -7,7 +7,7 @@ The specification lists the following extensions after mandatory V1. The order i
 | Soft Selection with adjustable radius and falloff | Verified below |
 | Smooth Selection with fixed boundaries | [Verified](#smooth-selection) |
 | Flatten Selection to a selected or averaged plane | [Verified](#flatten-selection) |
-| Simple Extrude for a boundary or region | Planned |
+| Simple Extrude for a boundary or region | [Verified for static meshes](#simple-extrude) |
 | Subdivide a selection with compatible adjacent faces | [Implemented and checked](#mirror-move-and-subdivide) |
 | Mirrored movement with a matching tolerance | [Implemented and checked](#mirror-move-and-subdivide) |
 | UV Stitch / Weld (UV-12) | [Single-edge workflow verified](UV_Stitch.md) |
@@ -120,3 +120,29 @@ python -B tools/v1-plus-tools-verify.py 2022.3.62f2 6000.3.9f1
 ```
 
 Before running the Python verifier, compile the [ufbx inspector](E00_FBX_Round_Trip.md#reproduce-on-windows) and place `inspect_fbx.exe` under `test-results/v1-plus-tools/`. The browser runner serves the Release files through local Playwright responses. The verifier checks the exported geometry and builds the Unity comparison projects for `FbxProbe.Run`. Both reports and test assets are under `test-results/v1-plus-tools/`.
+
+## Simple Extrude
+
+In **Mesh Edit → Extrude**, use Edge mode with one connected open chain or loop. After committing, the selection follows the new outer edge. In Face mode, translate one edge-connected face region and join its perimeter with side quads. The translated faces retain their IDs, UVs and materials. Enter a signed depth along the averaged surface normal or an object-local axis. The tool checks winding, collapsed triangles and intersections before allowing the edit. Boundary protection follows the new edge when the original perimeter was marked **Keep Open**.
+
+The side quads inherit the adjacent material. Extrude lays out separate UV strips in conservatively estimated free space of the object's existing tile, preserving all original corner UVs. If the tile is full or the source UVs extend outside it, the walls receive provisional coordinates and a UV-review warning. Unwrap or pack a new layout and use neutral fill where the new surface has no source. Projected side faces appear in the **New faces** paint mask. The first profile supports static meshes without skin or morph targets. Projects with Extrude commands or preferences use schema 19.
+
+### Verification
+
+- The static edge fixture extended two connected open edges by `0.25 m`. It exported 36 triangles, including two side quads. The face fixture raised two adjacent faces by `0.125 m`. It exported 40 triangles with four side quads. ufbx found the expected shared edges, correct new positions and 25 unchanged source positions in both cases. The 96 original corner UVs and linked PNG bytes matched. All side UV quads occupied free space in the source tile.
+- Chrome verified Preview and Cancel, the new-face paint mask, a filled UV tile warning, an interior edge refusal and the static-mesh guard. Undo restored source data and offline project replay reproduced both exports. Core checks covered an open loop, protected boundary remapping, GLB UV orientation and refusal of an intersecting extrusion.
+- Unity 2022.3.62f2 and 6000.3.9f1 imported both exports with 36 and 40 triangles, linked Base Color, and zero base-position error against independent reference geometry. Both Release and Debug built with strict type checking. The E04 browser regression and the V1+ checks for UV Relax, Mirror Move and Subdivide passed on the same build.
+
+### Reproduce
+
+```powershell
+$chrome = 'C:/Program Files/Google/Chrome/Application/chrome.exe'
+npm.cmd run build
+npm.cmd run build:debug
+node tools/e03-fixture.mjs
+node tools/extrude-core.mjs
+node tools/extrude-browser.mjs $chrome
+python -B tools/extrude-verify.py 2022.3.62f2 6000.3.9f1
+```
+
+Compile the [ufbx inspector](E00_FBX_Round_Trip.md#reproduce-on-windows) and place `inspect_fbx.exe` under `test-results/extrude/` before running the Python verifier. The verifier builds Unity projects with independent reference shapes for `FbxProbe.Run` and checks positions, connectivity and UVs using ufbx. Generated FBX files and reports are under `test-results/extrude/`.

@@ -58,6 +58,8 @@ Use **Flatten Selection** to project the selected vertices onto a plane. Choose 
 
 Use **Mirror Move** to translate one side while moving its matched partners along the reflected direction. Choose an object-local axis plane and match tolerance, then review the paired and skipped vertices in Preview. In Face mode, **Subdivide** refines the selected faces and updates neighboring edges to keep the surface joined. [Mirror Move and Subdivide workflows](Docs/V1_Plus.md#mirror-move-and-subdivide)
 
+Use **Extrude** on a static mesh to extend a connected open edge or raise a connected face region. Set a signed depth along the surface normal or an object-local axis and preview the side faces. The **New faces** paint mask includes side faces whose UVs fit in the existing tile. [Extrude workflow and checks](Docs/V1_Plus.md#simple-extrude)
+
 Open **Repair** to inspect boundaries on the selected object. Mark intentional openings **Keep Open**. Choose **Planar Fill**, **Fan Fill**, or **Manual Face** for selected boundaries. **Auto Fill** previews a batch with edge, diameter, and planarity limits. Check the wireframe and the reason for each skipped contour before applying. The resulting faces can be selected for mesh editing or 3D Paint.
 
 Use **Smooth Fill** for a non-planar patch with a fixed rim. Set refinement passes and fairing iterations. **Grid Fill** creates quads between four automatically detected or entered corner vertex IDs. Opposite sides need the same segment counts. **Bridge** joins two boundaries or equal-length spans. The default pairing minimizes distance. Use offsets, twist, and segments to adjust the preview. **Edit new UVs** opens the UV Editor with the added faces selected.

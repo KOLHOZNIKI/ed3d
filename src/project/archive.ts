@@ -146,14 +146,15 @@ export async function writeProject(document: AssetDocument<WorkingState>, option
   for (const snapshot of pins) snapshots.push({ id: snapshot.id, revision: snapshot.revision, working: await writeWorking(snapshot.state) });
   const settings = Object.keys(operations ?? {});
   const editLogs = [state, ...pins.map(pin => pin.state)].map(version => version.meshEdits);
-  const currentTools = settings.some(key => key.startsWith('mesh-mirror-') || key.startsWith('uv-relax-')) ||
-    editLogs.some(log => log?.some(edit => editType(edit) === 'mirrorMove' || editType(edit) === 'subdivide'));
   const meshSchema = [
-    { version: 17, type: 'flattenSelection', prefix: 'mesh-flatten-' },
-    { version: 16, type: 'smoothSelection', prefix: 'mesh-smooth-' },
-    { version: 15, type: 'softTransform', prefix: 'mesh-soft' },
-  ].find(({ type, prefix }) => settings.some(key => key.startsWith(prefix)) || editLogs.some(log => log?.some(edit => editType(edit) === type)));
-  const schemaVersion = currentTools ? 18 : meshSchema ? meshSchema.version : snapshots.length ? 14 : working.objectTransforms && Object.keys(working.objectTransforms).length ||
+    { version: 19, types: ['extrude'], prefixes: ['mesh-extrude-'] },
+    { version: 18, types: ['mirrorMove', 'subdivide'], prefixes: ['mesh-mirror-', 'uv-relax-'] },
+    { version: 17, types: ['flattenSelection'], prefixes: ['mesh-flatten-'] },
+    { version: 16, types: ['smoothSelection'], prefixes: ['mesh-smooth-'] },
+    { version: 15, types: ['softTransform'], prefixes: ['mesh-soft'] },
+  ].find(({ types, prefixes }) => settings.some(key => prefixes.some(prefix => key.startsWith(prefix))) ||
+    editLogs.some(log => log?.some(edit => types.includes(editType(edit)))));
+  const schemaVersion = meshSchema ? meshSchema.version : snapshots.length ? 14 : working.objectTransforms && Object.keys(working.objectTransforms).length ||
     working.textures.some(texture => texture.key.split('/').length > 3) ? 13 : 12;
   const manifest = encoder.encode(JSON.stringify({ format: 'AssetFixer', schemaVersion, id: options?.id ?? document.id,
     name: options?.name ?? document.name, revision, settings: { historyBudget, operations }, scene, originals: originalRefs,
@@ -175,7 +176,7 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
   const manifest = record(JSON.parse(decoder.decode(encoded)));
   if (manifest.format !== 'AssetFixer') throw new Error('This file is not an AssetFixer project.');
   const version = integer(manifest.schemaVersion, 1);
-  if (version > 18) throw new Error(`Project schema ${version} is newer than this application supports.`);
+  if (version > 19) throw new Error(`Project schema ${version} is newer than this application supports.`);
   // Version 1 had a fixed history budget. Version 2 persists the project setting.
   const settings = version === 1 ? undefined : record(manifest.settings);
   const historyBudget = settings ? integer(settings.historyBudget, MiB, projectLimit) : defaultHistoryBudget;
@@ -243,6 +244,7 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
         if (version < 16 && edit.type === 'smoothSelection') throw new Error('Smooth Selection requires project schema 16.');
         if (version < 17 && edit.type === 'flattenSelection') throw new Error('Flatten Selection requires project schema 17.');
         if (version < 18 && (edit.type === 'mirrorMove' || edit.type === 'subdivide')) throw new Error('Mirror Move and Subdivide require project schema 18.');
+        if (version < 19 && edit.type === 'extrude') throw new Error('Extrude requires project schema 19.');
         if (!entries.has(edit.object)) throw new Error('A saved mesh edit refers to an unknown object.');
         if (edit.type === 'separate' || edit.type === 'extract') {
           if (entries.has(edit.piece)) throw new Error('A saved separate operation reuses an object ID.');

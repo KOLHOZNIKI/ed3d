@@ -500,6 +500,7 @@
                   <option value="smoothSelection">Smooth Selection</option>
                   <option value="flattenSelection">Flatten Selection</option>
                   <option value="mirrorMove">Mirror Move</option><option value="subdivide">Subdivide</option>
+                  <option value="extrude">Extrude</option>
                   <option value="create">Create Face</option><option value="splitEdge">Split Edge</option><option value="splitFace">Split Face</option>
                   <option value="weld">Weld</option><option value="flipEdge">Flip Edge</option><option value="dissolve">Dissolve Edge</option>
                   <option value="flipNormals">Flip Normals</option><option value="recalculate">Recalculate Normals</option>
@@ -543,6 +544,10 @@
                 <label><input id="mesh-project" type="checkbox" /> Project UVs into 0–1</label>
                 <label><input id="mesh-chain" type="checkbox" /> Keep last edge</label>
                 <button id="mesh-winding" type="button">Flip winding</button>
+              </div>
+              <div class="actions" id="mesh-extrude" hidden>
+                <label>Direction <select id="mesh-extrude-direction"><option value="normal">Surface normal</option><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></select></label>
+                <label>Depth (local units) <input id="mesh-extrude-depth" type="number" value="0.1" step="any" /></label>
               </div>
               <div class="actions" id="mesh-weld" hidden>
                 <label for="mesh-weld-mode">Weld to</label><select id="mesh-weld-mode"><option value="first">First vertex</option><option value="average">Average</option><option value="tolerance">Within tolerance</option></select>
