@@ -39,6 +39,10 @@
       .model-view { position: relative; }
       #viewport { display: block; width: 100%; }
       #paint-cursor { width: 100%; position: absolute; inset: 0; pointer-events: none; }
+      #rig-label { position: absolute; transform: translate(.55rem, -100%); pointer-events: none; color: #fdf7ce;
+        background: #1c242cee; border-radius: .25rem; padding: .15rem .35rem; font-size: .8125rem; white-space: nowrap; }
+      #rig-tools input[type=number] { width: 5.5rem; }
+      #rig-presets { max-height: 8rem; overflow: auto; gap: .35rem; margin: .5rem 0; }
       #paint-tools input[type=number] { width: 5.5rem; }
       #paint-target { width: 100%; margin: .35rem 0; }
       #paint-info { font-size: .875rem; margin: .5rem 0 0; }
@@ -111,6 +115,7 @@
         <button id="repair-mode" type="button" aria-pressed="false" disabled>Repair</button>
         <button id="uv-mode" type="button" aria-pressed="false" disabled>UV Editor</button>
         <button id="extract-mode" type="button" aria-pressed="false" disabled>Extract</button>
+        <button id="rig-mode" type="button" aria-pressed="false" disabled>Rig &amp; Pose</button>
         <button id="undo-stroke" type="button" disabled>Undo</button>
         <button id="redo" type="button" disabled>Redo</button>
         <button id="toggle-texture" type="button" aria-expanded="false" disabled>Texture editor</button>
@@ -162,6 +167,7 @@
       <div class="model-view">
         <canvas id="viewport" width="640" height="480" tabindex="0" role="img" aria-label="Imported model preview" hidden></canvas>
         <canvas id="paint-cursor" width="640" height="480" aria-hidden="true" hidden></canvas>
+        <span id="rig-label" aria-hidden="true" hidden></span>
       </div>
       <fieldset id="repair-tools" hidden>
         <legend>Boundary Repair</legend>
@@ -281,6 +287,79 @@
         <p id="selection-details"></p>
       </fieldset>
       </div>
+      <fieldset id="rig-tools" hidden>
+        <legend>Rig &amp; Pose</legend>
+        <div class="actions">
+          <label for="rig-joint">Joint hierarchy</label><select id="rig-joint"></select>
+          <label><input id="rig-xray" type="checkbox" checked /> X-ray</label>
+          <label><input id="rig-compare" type="checkbox" /> Show original skeleton</label>
+          <label for="rig-edit-mode">Edit</label><select id="rig-edit-mode"><option value="rest">Working rest</option><option value="pose">Manual pose</option></select>
+        </div>
+        <div class="actions">
+          <label for="rig-operation">Transform</label><select id="rig-operation"><option value="move">Move joint</option><option value="axes">Rotate local axes</option></select>
+          <label for="rig-space">Axes</label><select id="rig-space"><option value="local">Local</option><option value="world">World</option></select>
+          <label for="rig-descendants">Descendants</label><select id="rig-descendants"><option value="preserve">Preserve world transforms</option><option value="move">Move together</option></select>
+          <label>X <input id="rig-x" type="number" value="0" step="any" /></label>
+          <label>Y <input id="rig-y" type="number" value="0" step="any" /></label>
+          <label>Z <input id="rig-z" type="number" value="0" step="any" /></label>
+          <button id="rig-apply" type="button">Apply offsets</button>
+        </div>
+        <details id="rig-structure">
+          <summary>Hierarchy and binding</summary>
+          <div class="actions">
+            <label for="rig-name">Joint name</label><input id="rig-name" maxlength="80" />
+            <button id="rig-rename" type="button">Rename joint</button>
+            <label>Child height <input id="rig-child-length" type="number" value="0.1" step="any" /></label>
+            <button id="rig-add" type="button">Add child</button>
+          </div>
+          <div class="actions">
+            <label for="rig-other">Parent or weight destination</label><select id="rig-other"></select>
+            <button id="rig-reparent" type="button">Reparent joint</button>
+            <button id="rig-delete" type="button">Delete and transfer weights</button>
+          </div>
+          <div class="actions">
+            <label for="rig-mirror">Mirror partner</label><select id="rig-mirror"></select>
+            <label for="rig-plane">Symmetry plane normal</label><select id="rig-plane"><option value="0">X</option><option value="1">Y</option><option value="2">Z</option></select>
+            <label>Plane offset <input id="rig-plane-offset" type="number" value="0" step="any" /></label>
+            <button id="rig-rebind" type="button">Rebind affected meshes</button>
+            <button id="rig-reset" type="button">Restore original rig</button>
+          </div>
+        </details>
+        <div id="rig-pose-settings" hidden>
+          <div class="actions">
+            <button id="rig-reset-bone" type="button">Reset Bone</button>
+            <button id="rig-reset-pose" type="button">Reset Pose</button>
+            <label for="rig-saved">Saved pose</label><select id="rig-saved"></select>
+            <label for="rig-pose-name">Pose name</label><input id="rig-pose-name" maxlength="120" />
+            <button id="rig-save" type="button">Save Pose</button>
+            <button id="rig-rename-pose" type="button">Rename</button>
+            <button id="rig-copy-pose" type="button">Duplicate</button>
+            <button id="rig-delete-pose" type="button">Delete pose</button>
+          </div>
+          <div id="rig-presets" class="actions" role="group" aria-label="Quick load saved poses" hidden></div>
+          <div class="actions">
+            <label>Finger joint IDs <input id="rig-fingers" placeholder="For example object-12, object-13" /></label>
+            <label>Local axis <select id="rig-curl-axis"><option value="0">X</option><option value="1">Y</option><option value="2" selected>Z</option></select></label>
+            <label>Curl angle <input id="rig-curl-angle" type="number" value="30" step="any" /></label>
+            <button id="rig-curl" type="button">Curl chain</button>
+            <button id="rig-sweep" type="button">Preview joint sweep</button>
+          </div>
+        </div>
+        <details id="rig-clips">
+          <summary>Original clips and adaptations</summary>
+          <div class="actions">
+            <label for="rig-clip">Original clip</label><select id="rig-clip"></select>
+            <label><input id="rig-preview-clip" type="checkbox" /> Preview frozen clip</label>
+            <label>Time (s) <input id="rig-time" type="number" min="0" value="0" step="any" /></label>
+            <label><input id="rig-include-offsets" type="checkbox" /> Include manual pose offsets</label>
+            <button id="rig-adapt" type="button">Adapt clip</button>
+            <button id="rig-use-original" type="button">Use original clip</button>
+            <button id="rig-exclude" type="button">Exclude from export</button>
+          </div>
+          <p id="rig-clip-info"></p>
+        </details>
+        <p id="rig-info" aria-live="polite"></p>
+      </fieldset>
       <fieldset id="extract-tools" hidden>
         <legend>Extract Static Assets</legend>
         <div class="actions">

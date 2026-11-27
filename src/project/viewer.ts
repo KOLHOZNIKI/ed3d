@@ -21,6 +21,7 @@ export class Viewer {
   #painting = false;
   #paintingStroke = false;
   #pose?: { clip: AnimationClip; time: number };
+  #manualPose?: () => () => void;
   onCameraChange?: () => void;
   #contextLost = false;
 
@@ -67,6 +68,7 @@ export class Viewer {
     this.#model = undefined;
     this.#inspection = undefined;
     this.#pose = undefined;
+    this.#manualPose = undefined;
     if (this.#appearance) disposeAppearance(this.#appearance);
     this.#appearance = undefined;
     this.setLive();
@@ -115,7 +117,13 @@ export class Viewer {
     this.render();
   }
 
+  manualPose(apply?: () => () => void) { this.#manualPose = apply; }
+
   withPose<T>(use: () => T): T {
+    if (this.#manualPose) {
+      const restore = this.#manualPose();
+      try { return use(); } finally { restore(); }
+    }
     if (!this.#pose || !this.#model) return use();
     const root = this.#model;
     const mixer = new AnimationMixer(root);
@@ -135,7 +143,7 @@ export class Viewer {
 
   frame(object = this.#model, orthographic = this.#camera instanceof OrthographicCamera, direction = new Vector3(0.6, 0.45, 1)) {
     if (!object || !this.#renderer) return;
-    const box = this.withPose(() => new Box3().setFromObject(object, !!this.#pose));
+    const box = this.withPose(() => new Box3().setFromObject(object, !!(this.#pose || this.#manualPose)));
     if (box.isEmpty()) return;
     const center = box.getCenter(new Vector3()), radius = Math.max(box.getSize(new Vector3()).length() / 2, 0.001);
     const aspect = this.#canvas.width / this.#canvas.height;
@@ -157,7 +165,7 @@ export class Viewer {
 
   select(object?: Object3D) {
     this.#outline.visible = !!object && shown(object);
-    if (this.#outline.visible) this.withPose(() => this.#outline.box.setFromObject(object!, !!this.#pose));
+    if (this.#outline.visible) this.withPose(() => this.#outline.box.setFromObject(object!, !!(this.#pose || this.#manualPose)));
     this.render();
   }
 

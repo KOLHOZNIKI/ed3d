@@ -52,6 +52,10 @@ Open **Extract** to select a whole static mesh, one or more connected components
 
 Choose **Keep UVs** to clear unused atlas regions, **Pack existing islands** to use the available tile space, or **Auto Unwrap** to build new charts. Set a pivot and any explicit rotation or scale before creating the asset. Turn on **Export pivot at world zero** to rebase only the standalone export. Use **Export selected asset** for an individual FBX ZIP or GLB and **Export checked assets ZIP** for a batch with a manifest.
 
+Open **Rig & Pose** on a skinned model. Pick a joint in the viewport or hierarchy. In **Working rest**, move the joint or rotate its axes using the handle or numeric offsets. Choose how descendants follow the edit. To mirror the edit, select a partner and a symmetry plane under **Hierarchy and binding**. The app rebinds all affected meshes together. Turn on **Show original skeleton** to compare the rigs.
+
+In **Manual pose**, rotate joints in local or world axes and use **Reset Bone** or **Reset Pose** to return to the working rest. Save named poses in the project and reload them with the quick buttons. To inspect a finger chain, enter consecutive joint IDs and use **Curl chain** or **Preview joint sweep**. Under **Original clips and adaptations**, review each clip and choose whether to adapt or exclude incompatible clips before export. Use **Include manual pose offsets** to apply the current corrections to a separately named adaptation.
+
 | Command | Purpose |
 | --- | --- |
 | `npm run typecheck` | Check the application with strict TypeScript settings. |
@@ -76,6 +80,7 @@ Choose **Keep UVs** to clear unused atlas regions, **Pack existing islands** to 
 
 ## Verification
 
+- [E09 rig and manual pose verification](Docs/E09_Report.md) covers shared binding, pose persistence, clip compatibility, and FBX and GLB exports.
 - [E08 extended repair and projection verification](Docs/E08_Report.md) covers pinned patches, bridge pairing, projected normals, missing samples, and FBX animation after Smooth Fill.
 - [E07 static asset extraction verification](Docs/E07_Report.md) covers component grouping, map ownership, pivot, scale, orientation, and batch export.
 - [E06 UV editing and direct bake verification](Docs/E06_Report.md) covers painted appearance, UV corner selection, cancellation, skinned export, and directional normals.

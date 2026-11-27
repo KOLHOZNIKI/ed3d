@@ -199,9 +199,18 @@ export async function exportGlb(asset: ImportedGlb): Promise<{ name: string; byt
           if (!output) throw new Error('The GLB exporter did not write the imported skin.');
           if (inputSkin.name !== undefined) output.name = inputSkin.name;
           if (inputSkin.skeleton) {
-            const root = binaryWriter.nodeMap.get(inputSkin.skeleton);
-            if (root === undefined) throw new Error('The GLB exporter did not write the imported skeleton root.');
-            output.skeleton = root;
+            const ancestors = (node: Object3D) => {
+              const path = new Set<Object3D>();
+              for (let parent: Object3D | null = node; parent; parent = parent.parent) path.add(parent);
+              return path;
+            };
+            const paths = mesh.skeleton.bones.map(ancestors);
+            const common = (node: Object3D) => paths.every(path => path.has(node));
+            const root = common(inputSkin.skeleton) ? inputSkin.skeleton :
+              [...paths[0] ?? []].find(node => common(node) && binaryWriter.nodeMap.has(node));
+            const index = root && binaryWriter.nodeMap.get(root);
+            if (index === undefined) delete output.skeleton;
+            else output.skeleton = index;
           } else {
             delete output.skeleton;
           }

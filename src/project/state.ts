@@ -3,6 +3,7 @@ import type { TexturePaint } from '../e00/paint';
 import type { UvAtlasEdit } from '../e00/uv-atlas';
 import type { ObjectOverrides } from './document';
 import type { TextureImage } from '../texture/image';
+import type { PoseState, RigState } from '../rig/state';
 
 export const atlasColor = 'atlas-color';
 
@@ -42,6 +43,8 @@ export interface WorkingState {
   readonly keepOpen?: Readonly<Record<string, Readonly<Record<string, boolean>>>>;
   readonly uvBakes?: Readonly<Record<string, UvBake>>;
   readonly extracts?: Readonly<Record<string, ExtractedAsset>>;
+  readonly rig?: RigState;
+  readonly poses?: PoseState;
 }
 
 export function* workingBuffers(state: WorkingState): Iterable<ArrayBuffer> {

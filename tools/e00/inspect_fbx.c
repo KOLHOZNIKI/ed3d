@@ -480,6 +480,98 @@ static bool compare_shared_skin(const ufbx_scene *original, const ufbx_scene *ex
     return compatible;
 }
 
+static double rig_weight(const ufbx_mesh *mesh, size_t vertex, const char *bone)
+{
+    const ufbx_skin_deformer *skin = mesh->skin_deformers.data[0];
+    const ufbx_skin_vertex row = skin->vertices.data[vertex];
+    double result = 0;
+    for (size_t i = 0; i < row.num_weights; i++) {
+        const ufbx_skin_weight weight = skin->weights.data[row.weight_begin + i];
+        if (!strcmp(skin->clusters.data[weight.cluster_index]->bone_node->name.data, bone)) result += weight.weight;
+    }
+    return result;
+}
+
+static bool compare_edited_rig(const ufbx_scene *original, const ufbx_scene *exported, const char *mode)
+{
+    const bool moved = !strcmp(mode, "--rig-moved"), deleted = !strcmp(mode, "--rig-deleted");
+    const char *clip_name = moved ? "SharedTorsoBend_Adapted_1" : "SharedTorsoBend";
+    const ufbx_node *pelvis = ufbx_find_node(exported, "Pelvis"), *chest = ufbx_find_node(exported, "Chest");
+    const ufbx_node *spine = ufbx_find_node(exported, moved || deleted ? "Spine" : "MidSpine");
+    const ufbx_node *child = ufbx_find_node(exported, "ProbeChild");
+    const ufbx_node *old_spine = ufbx_find_node(original, "Spine"), *old_chest = ufbx_find_node(original, "Chest");
+    if (!pelvis || !chest || (deleted ? spine || !child || child->parent != pelvis : !spine || spine->parent != pelvis) ||
+        chest->parent != (deleted ? pelvis : spine) || exported->anim_stacks.count != (deleted ? 0 : 1)) return false;
+    const ufbx_anim_stack *take = deleted ? NULL : exported->anim_stacks.data[0];
+    if (take && (strcmp(take->name.data, clip_name) || fabs(take->time_end - take->time_begin - 1) > 1e-5)) return false;
+    const double joint_move = spine ? point_distance(old_spine->node_to_world.cols[3], spine->node_to_world.cols[3]) : 0;
+    const double chest_move = point_distance(old_chest->node_to_world.cols[3], chest->node_to_world.cols[3]);
+    const double meters = exported->settings.unit_meters;
+    const ufbx_evaluate_opts opts = { .evaluate_skinning = true };
+    const ufbx_anim bind = { 0 };
+    ufbx_scene *rest = ufbx_evaluate_scene(exported, &bind, 0, &opts, NULL);
+    if (!rest) return false;
+    const char *mesh_names[] = { "Body", "Clothing" };
+    bool ok = fabs(joint_move * meters - (moved ? .12 : 0)) <= 1e-6 && chest_move * meters <= 1e-6;
+    printf("{\"mode\":\"%s\",\"jointDisplacementMeters\":%.9g,\"descendantDisplacementMeters\":%.9g,\"meshes\":[", mode, joint_move * meters, chest_move * meters);
+    for (size_t i = 0; i < 2; i++) {
+        const ufbx_mesh *a = find_mesh(original, mesh_names[i]), *b = find_mesh(exported, mesh_names[i]);
+        if (!a || !b || a->skin_deformers.count != 1 || b->skin_deformers.count != 1 || !same_connectivity(a, b)) {
+            ufbx_free_scene(rest);
+            return false;
+        }
+        const ufbx_skin_cluster_list clusters = b->skin_deformers.data[0]->clusters;
+        bool bound[3] = { false, false, false };
+        double bind_error = 0;
+        for (size_t j = 0; j < clusters.count; j++) {
+            const ufbx_skin_cluster *cluster = clusters.data[j];
+            const ufbx_node *bone = cluster->bone_node;
+            bound[0] |= bone == pelvis;
+            bound[1] |= bone == (deleted ? child : spine);
+            bound[2] |= bone == chest;
+            const ufbx_matrix matrix = ufbx_matrix_mul(&bone->node_to_world, &cluster->geometry_to_bone);
+            for (size_t k = 0; k < 12; k++) bind_error = fmax(bind_error, fabs(matrix.v[k] - b->instances.data[0]->geometry_to_world.v[k]));
+        }
+        double weight = 0, rest_err = 0, deformation = 0, pose_err = 0, base = 0, uv = 0;
+        for (size_t j = 0; j < a->num_vertices; j++) {
+            const double from_spine = rig_weight(a, j, "Spine");
+            const double from_pelvis = rig_weight(a, j, "Pelvis");
+            weight = fmax(weight, fabs(rig_weight(b, j, "Pelvis") - from_pelvis - (deleted ? from_spine : 0)));
+            weight = fmax(weight, fabs(rig_weight(b, j, moved ? "Spine" : deleted ? "ProbeChild" : "MidSpine") - (deleted ? 0 : from_spine)));
+            weight = fmax(weight, fabs(rig_weight(b, j, "Chest") - rig_weight(a, j, "Chest")));
+            base = fmax(base, point_distance(a->vertices.data[j], b->vertices.data[j]));
+            const ufbx_vec3 p = ufbx_transform_position(&b->instances.data[0]->geometry_to_world, b->vertices.data[j]);
+            rest_err = fmax(rest_err, point_distance((ufbx_vec3){.x = p.x * meters, .y = p.y * meters, .z = p.z * meters}, posed_point(rest, b->typed_id, j)));
+        }
+        for (size_t j = 0; j < a->num_indices; j++) {
+            const ufbx_vec2 x = ufbx_get_vertex_vec2(&a->vertex_uv, j), y = ufbx_get_vertex_vec2(&b->vertex_uv, j);
+            uv = fmax(uv, hypot(x.x - y.x, x.y - y.y));
+        }
+        if (take) for (size_t t = 0; t <= 20; t++) {
+            const ufbx_anim_stack *source = original->anim_stacks.data[0];
+            ufbx_scene *sample = evaluate(exported, take, take->time_begin + t / 20.0);
+            ufbx_scene *source_sample = evaluate(original, source, source->time_begin + t / 20.0);
+            const ufbx_vec3 origin = posed_point(sample, b->typed_id, 0), start = posed_point(rest, b->typed_id, 0);
+            for (size_t j = 0; j < b->num_vertices; j++) {
+                const ufbx_vec3 p = posed_point(sample, b->typed_id, j), q = posed_point(rest, b->typed_id, j);
+                deformation = fmax(deformation, fabs(point_distance(p, origin) - point_distance(q, start)));
+                pose_err = fmax(pose_err, point_distance(p, posed_point(source_sample, a->typed_id, j)));
+            }
+            ufbx_free_scene(source_sample);
+            ufbx_free_scene(sample);
+        }
+        const bool shared = bound[0] && (deleted || bound[1]) && bound[2] && clusters.count <= 3;
+        ok &= shared && base <= 1e-9 && uv <= 1e-9 && weight <= 1e-6 && rest_err <= 1e-6 && bind_error <= 1e-6 &&
+            (!take || (deformation > .01 && (moved || pose_err <= 1e-6)));
+        printf("%s{\"name\":\"%s\",\"shared\":%s,\"baseDelta\":%.9g,\"uvDelta\":%.9g,\"weightDelta\":%.9g,"
+               "\"restErrorMeters\":%.9g,\"bindMatrixError\":%.9g,\"shapeChangeMeters\":%.9g,\"differenceFromOriginalClipMeters\":%.9g}",
+               i ? "," : "", mesh_names[i], shared ? "true" : "false", base, uv, weight, rest_err, bind_error, deformation, pose_err);
+    }
+    ufbx_free_scene(rest);
+    printf("],\"compatible\":%s}\n", ok ? "true" : "false");
+    return ok;
+}
+
 static bool inspect_adverse_source(const ufbx_scene *scene)
 {
     const ufbx_mesh *mesh = scene->meshes.data[0];
@@ -702,8 +794,9 @@ int main(int argc, char **argv)
         return matches ? 0 : 1;
     }
     const bool shared = argc == 4 && strcmp(argv[3], "--shared-skin") == 0;
-    if (argc != 3 && argc != 5 && !shared) {
-        fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx [--shared-skin | control-point offset-y | --seams offset-y | --atlas source-corners.bin | --baked source-corners.bin | --smooth center | --grid center]\n");
+    const bool rig = argc == 4 && (!strcmp(argv[3], "--rig-moved") || !strcmp(argv[3], "--rig-renamed") || !strcmp(argv[3], "--rig-deleted"));
+    if (argc != 3 && argc != 5 && !shared && !rig) {
+        fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx [--shared-skin | --rig-moved | --rig-renamed | --rig-deleted | control-point offset-y | --seams offset-y | --atlas source-corners.bin | --baked source-corners.bin | --smooth center | --grid center]\n");
         return 2;
     }
     const bool baked = argc == 5 && strcmp(argv[3], "--baked") == 0;
@@ -723,10 +816,10 @@ int main(int argc, char **argv)
             return 2;
         }
     }
-    ufbx_scene *original = load(argv[1], shared ? 2 : 1);
-    ufbx_scene *exported = load(argv[2], shared ? 2 : 1);
-    if (shared) {
-        const bool matches = compare_shared_skin(original, exported);
+    ufbx_scene *original = load(argv[1], shared || rig ? 2 : 1);
+    ufbx_scene *exported = load(argv[2], shared || rig ? 2 : 1);
+    if (shared || rig) {
+        const bool matches = shared ? compare_shared_skin(original, exported) : compare_edited_rig(original, exported, argv[3]);
         ufbx_free_scene(exported);
         ufbx_free_scene(original);
         return matches ? 0 : 1;

@@ -5,6 +5,8 @@ import { decodePng, encodeImage } from '../texture/image';
 import { boundaryId, decodeEdit } from '../mesh/commands';
 import type { TextureBake } from '../e00/rebake';
 import { glbSlots } from '../uv/transfer';
+import type { Joint, Pose, PoseState, Quat, RigClip, RigState } from '../rig/state';
+import type { Vec3 } from '../mesh/data';
 
 const MiB = 1024 * 1024;
 export const projectLimit = 512 * MiB;
@@ -106,9 +108,10 @@ export async function writeProject(document: AssetDocument<WorkingState>, option
     }
     meshEdits = await retain(bytes);
   }
-  const manifest = encoder.encode(JSON.stringify({ format: 'AssetFixer', schemaVersion: 8, id: options?.id ?? document.id,
+  const manifest = encoder.encode(JSON.stringify({ format: 'AssetFixer', schemaVersion: 9, id: options?.id ?? document.id,
     name: options?.name ?? document.name, revision, settings: { historyBudget }, scene, originals: originalRefs,
-    resources, working: { objects: state.objects, geometry, bake, paint, textures, meshEdits, keepOpen: state.keepOpen, uvBakes, extracts } }));
+    resources, working: { objects: state.objects, geometry, bake, paint, textures, meshEdits, keepOpen: state.keepOpen, uvBakes, extracts,
+      rig: state.rig, poses: state.poses } }));
   if (manifest.byteLength > MiB || expanded + manifest.byteLength > limits.total) throw new Error('The project manifest exceeds its size limit.');
   files.set('manifest.json', manifest);
   const bytes = await pack(files);
@@ -125,7 +128,7 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
   const manifest = record(JSON.parse(decoder.decode(encoded)));
   if (manifest.format !== 'AssetFixer') throw new Error('This file is not an AssetFixer project.');
   const version = integer(manifest.schemaVersion, 1);
-  if (version > 8) throw new Error(`Project schema ${version} is newer than this application supports.`);
+  if (version > 9) throw new Error(`Project schema ${version} is newer than this application supports.`);
   // Version 1 had a fixed history budget. Version 2 persists the project setting.
   const historyBudget = version === 1 ? defaultHistoryBudget : integer(record(manifest.settings).historyBudget, MiB, projectLimit);
   if (historyBudget % MiB) throw new Error('Invalid project history budget.');
@@ -320,8 +323,70 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
   if (used.size !== available.size) throw new Error('The project contains unused resources.');
   const id = text(manifest.id, 36);
   if (!uuidPattern.test(id)) throw new Error('Invalid project identifier.');
+  const rig = version >= 9 && working.rig !== undefined ? readRig(working.rig) : undefined;
+  const poses = version >= 9 && working.poses !== undefined ? readPoses(working.poses) : undefined;
   return { id, name: text(manifest.name, 160), revision: integer(manifest.revision, 0, 1e12), originals, historyBudget, scene,
-    state: { objects, atlas, bake, paint, textures, meshEdits, keepOpen, uvBakes, extracts } };
+    state: { objects, atlas, bake, paint, textures, meshEdits, keepOpen, uvBakes, extracts, rig, poses } };
+}
+
+function readJointId(value: unknown) {
+  const id = text(value, 42);
+  if (!objectId.test(id) && !(id.startsWith('joint-') && uuidPattern.test(id.slice(6)))) throw new Error('Invalid saved joint ID.');
+  return id;
+}
+
+function readVector(value: unknown, size: 3): Vec3;
+function readVector(value: unknown, size: 4): Quat;
+function readVector(value: unknown, size: 3 | 4) {
+  const result = list(value, size).map(finite);
+  if (result.length !== size || !result.every(n => Number.isFinite(Math.fround(n))) ||
+      size === 4 && Math.abs(Math.hypot(...result) - 1) > 1e-5) throw new Error('Invalid saved joint transform.');
+  return result as unknown as Vec3 | Quat;
+}
+
+function readPose(value: unknown): Pose {
+  const rows = Object.entries(record(value));
+  if (rows.length > 2048) throw new Error('The saved pose has too many joints.');
+  return Object.fromEntries(rows.map(([id, rotation]) => [readJointId(id), readVector(rotation, 4)]));
+}
+
+function readBasis(value: unknown) {
+  if (value === '') return value;
+  const id = text(value, 36);
+  if (!uuidPattern.test(id)) throw new Error('Invalid rig revision.');
+  return id;
+}
+
+function readRig(value: unknown): RigState {
+  const data = record(value);
+  const joints: Joint[] = list(data.joints, 2048).map(row => {
+    const joint = record(row);
+    return { id: readJointId(joint.id), group: readJointId(joint.group),
+      parent: joint.parent === null ? null : readJointId(joint.parent),
+      name: joint.name === '' ? '' : text(joint.name, 1024),
+      position: readVector(joint.position, 3), rotation: readVector(joint.rotation, 4), scale: readVector(joint.scale, 3) };
+  });
+  const transfers = Object.fromEntries(Object.entries(record(data.transfers)).map(([source, target]) =>
+    [readJointId(source), readJointId(target)]));
+  const clips: Record<number, RigClip> = {};
+  for (const [id, info] of Object.entries(record(data.clips))) {
+    const item = record(info), mode = item.mode;
+    if (!/^\d{1,5}$/.test(id) || mode !== 'original' && mode !== 'exclude' && mode !== 'adapted') throw new Error('Invalid saved clip setting.');
+    clips[Number(id)] = mode === 'adapted' ? { mode, name: text(item.name, 160), basis: readBasis(item.basis),
+      offsets: item.offsets === undefined ? undefined : readPose(item.offsets) } : { mode };
+  }
+  return { joints, transfers, clips, rebind: list(data.rebind, 2048).map(readJointId), basis: readBasis(data.basis) };
+}
+
+function readPoses(value: unknown): PoseState {
+  const data = record(value), ids = new Set<string>();
+  const saved = list(data.saved, 128).map(row => {
+    const item = record(row), id = text(item.id, 36);
+    if (!uuidPattern.test(id) || ids.has(id)) throw new Error('Invalid saved pose ID.');
+    ids.add(id);
+    return { id, name: text(item.name, 120), rotations: readPose(item.rotations) };
+  });
+  return { current: readPose(data.current), saved };
 }
 
 function validatePng(png: Uint8Array<ArrayBuffer>, width: number, height: number) {

@@ -24,6 +24,7 @@ import { UvTool, type UvRequest } from './uv/tool';
 import { fbxAtlas, uvCommand } from './uv/surface';
 import { transfer } from './uv/transfer';
 import { prepareProjection } from './uv/spatial';
+import { RigTool } from './rig/tool';
 import type { Layout } from './uv/layout';
 import { ExtractTool } from './extract/tool';
 import { buildExtraction } from './extract/build';
@@ -46,6 +47,7 @@ const meshButton = element<HTMLButtonElement>('mesh-mode');
 const repairButton = element<HTMLButtonElement>('repair-mode');
 const uvButton = element<HTMLButtonElement>('uv-mode');
 const extractButton = element<HTMLButtonElement>('extract-mode');
+const rigButton = element<HTMLButtonElement>('rig-mode');
 const paintUnwrap = element<HTMLButtonElement>('paint-unwrap');
 const undo = element<HTMLButtonElement>('undo-stroke'), redo = element<HTMLButtonElement>('redo');
 const cancel = element<HTMLButtonElement>('cancel-job');
@@ -79,6 +81,7 @@ let meshEditing = false;
 let repairing = false;
 let uvEditing = false;
 let extracting = false;
+let rigging = false;
 let stroke: { pointer: number; gesture: Exclude<ReturnType<PaintTool['begin']>, string | undefined> } | undefined;
 let paintBinding = '';
 let picking: { pointer: number; x: number; y: number } | undefined;
@@ -211,6 +214,17 @@ const extractTool = new ExtractTool(viewer, canvas, {
   },
 });
 
+const rigTool = new RigTool(viewer, canvas, {
+  apply(revision, state, label) {
+    return locked(async () => {
+      const work = current!;
+      await edit(work, revision, state, label, 'rig');
+      status.textContent = `${label} applied.`;
+    });
+  },
+  orbit(dragging) { viewer.setPainting(rigging, dragging || busy); },
+});
+
 function commitUv(request: UvRequest) {
   return locked(async signal => {
     const work = current!, { object, revision, layout, channel, options } = request;
@@ -319,6 +333,7 @@ function controls() {
   if (!availablePaint) repairing = false;
   if (!availablePaint) uvEditing = false;
   if (!availablePaint) extracting = false;
+  if (!availablePaint || !current?.adapter.rig.available) rigging = false;
   sources.disabled = locked;
   close.disabled = save.disabled = saveAs.disabled = exportButton.disabled = locked || !document;
   unwrap.disabled = locked || !fbx || editedMesh;
@@ -329,6 +344,7 @@ function controls() {
   repairButton.disabled = locked || !availablePaint;
   uvButton.disabled = locked || !availablePaint;
   extractButton.disabled = locked || !availablePaint;
+  rigButton.disabled = locked || !availablePaint || !current?.adapter.rig.available;
   undo.disabled = locked || !document?.undoDepth;
   redo.disabled = locked || !document?.redoDepth;
   restore.disabled = locked;
@@ -339,9 +355,11 @@ function controls() {
   repairButton.setAttribute('aria-pressed', String(repairing));
   uvButton.setAttribute('aria-pressed', String(uvEditing));
   extractButton.setAttribute('aria-pressed', String(extracting));
+  rigButton.setAttribute('aria-pressed', String(rigging));
   canvas.style.cursor = painting && !busy ? 'crosshair' : '';
   canvas.style.touchAction = 'none';
-  viewer.setPainting(painting || meshEditing || repairing || uvEditing || extracting, busy || !!stroke || meshTool.dragging);
+  viewer.setPainting(painting || meshEditing || repairing || uvEditing || extracting || rigging,
+    busy || !!stroke || meshTool.dragging || rigTool.dragging);
   exportButton.textContent = model?.format === 'glb' ? 'Export GLB' : 'Export FBX ZIP';
   unwrap.textContent = fbx && model.uvAtlas ? 'Discard UV atlas' : 'Generate UV atlas';
   rebake.textContent = fbx && model.textureBake ? 'Discard texture bake' : 'Rebake textures';
@@ -374,6 +392,7 @@ function controls() {
   uvTool.configure(uvEditing && current ? { adapter: current.adapter, model: current.model, catalog: current.textures,
     state: document!.state, revision: document!.revision, object: selected } : undefined, locked);
   extractTool.configure(extracting && current ? { adapter: current.adapter, state: document!.state, revision: document!.revision, object: selected } : undefined, locked);
+  rigTool.configure(rigging && current ? { session: current.adapter.rig, state: document!.state, revision: document!.revision } : undefined, locked);
   const pendingUv = fbx && document?.state.bake?.direct ? 0 : current?.adapter.mesh.pendingUv ?? 0;
   const notes = [current?.adapter.mesh.omittedPolygonMetadata ? 'GLB exports the edited topology as indexed triangles and omits incompatible private polygon metadata.' : '',
     pendingUv ? `${pendingUv} created faces require UV review or unwrapping.` : '',
@@ -435,6 +454,7 @@ function syncTextureEditor() {
 toggleTexture.addEventListener('click', () => {
   uvEditing = false;
   extracting = false;
+  rigging = false;
   if (editor.panel.hidden) {
     editor.open();
     syncTextureEditor();
@@ -538,6 +558,7 @@ function closeWorkspace() {
   repairing = false;
   uvEditing = false;
   extracting = false;
+  rigging = false;
   autosaveDue = undefined;
   window.clearTimeout(autosaveTimer);
   autosaveStatus.textContent = '';
@@ -657,6 +678,7 @@ historyBudget.addEventListener('change', () => {
 
 exportButton.addEventListener('click', () => void locked(async () => {
   const { model, adapter, document, textures } = current!;
+  adapter.rig.assertExportable();
   // Viewport visibility is a project setting. Export preserves the original visibility and complete asset.
   adapter.applyVisibility({ objects: {} });
   try {
@@ -750,8 +772,9 @@ async function applyWorking(work: Workspace, revision: number, state: WorkingSta
   signal?.throwIfAborted();
   const previous = work.document.state;
   const geometryChange = state.meshEdits !== previous.meshEdits;
+  const rigChange = state.rig !== previous.rig;
   const piecesBefore = work.adapter.mesh.pieces.map(piece => piece.id).join(',');
-  const visualChange = geometryChange || state.atlas !== previous.atlas || state.bake !== previous.bake ||
+  const visualChange = geometryChange || rigChange || state.atlas !== previous.atlas || state.bake !== previous.bake ||
     state.paint !== previous.paint || state.textures !== previous.textures || state.uvBakes !== previous.uvBakes || state.extracts !== previous.extracts;
   let appearance: Appearance | undefined;
   try {
@@ -768,7 +791,7 @@ async function applyWorking(work: Workspace, revision: number, state: WorkingSta
   } catch (error) {
     if (appearance) disposeAppearance(appearance);
     work.model = work.adapter.materialize(previous);
-    if (geometryChange) {
+    if (geometryChange || rigChange) {
       work.textures = new TextureCatalog(work.adapter);
       await refreshAppearance();
     }
@@ -891,7 +914,7 @@ frameSelection.addEventListener('click', () => frame(true));
 
 window.addEventListener('keydown', event => {
   if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement || event.target instanceof HTMLButtonElement ||
-      busy || stroke || textureGesture || meshTool.dragging) return;
+      busy || stroke || textureGesture || meshTool.dragging || rigTool.dragging) return;
   if (!event.ctrlKey && !event.metaKey && (uvTool.keyboard(event.key) || repairTool.keyboard(event.key) ||
       meshTool.keyboard(event.key.length === 1 ? event.key.toLowerCase() : event.key))) {
     event.preventDefault();
@@ -905,6 +928,7 @@ window.addEventListener('keydown', event => {
 });
 
 paintButton.addEventListener('click', () => {
+  rigging = false;
   uvEditing = false;
   extracting = false;
   repairing = false;
@@ -915,6 +939,7 @@ paintButton.addEventListener('click', () => {
 });
 
 meshButton.addEventListener('click', () => {
+  rigging = false;
   uvEditing = false;
   extracting = false;
   repairing = false;
@@ -925,6 +950,7 @@ meshButton.addEventListener('click', () => {
 });
 
 repairButton.addEventListener('click', () => {
+  rigging = false;
   uvEditing = false;
   extracting = false;
   repairing = !repairing;
@@ -934,6 +960,7 @@ repairButton.addEventListener('click', () => {
 });
 
 uvButton.addEventListener('click', () => {
+  rigging = false;
   extracting = false;
   uvEditing = !uvEditing;
   if (uvEditing) {
@@ -946,6 +973,7 @@ uvButton.addEventListener('click', () => {
 });
 
 extractButton.addEventListener('click', () => {
+  rigging = false;
   extracting = !extracting;
   if (extracting) {
     painting = meshEditing = repairing = uvEditing = false;
@@ -956,17 +984,27 @@ extractButton.addEventListener('click', () => {
   status.textContent = extracting ? 'Extract is active.' : 'Extract is off.';
 });
 
+rigButton.addEventListener('click', () => {
+  rigging = !rigging;
+  if (rigging) {
+    painting = meshEditing = repairing = uvEditing = extracting = false;
+    if (!editor.panel.hidden) editor.close();
+  }
+  controls();
+  status.textContent = rigging ? 'Rig & Pose is active.' : 'Rig & Pose is off.';
+});
+
 function pointerPoint(event: PointerEvent): Point {
   const bounds = canvas.getBoundingClientRect();
   return { x: (event.clientX - bounds.left) * canvas.width / bounds.width, y: (event.clientY - bounds.top) * canvas.height / bounds.height };
 }
 
-canvas.addEventListener('contextmenu', event => { if (painting || meshEditing || repairing || uvEditing || extracting) event.preventDefault(); });
+canvas.addEventListener('contextmenu', event => { if (painting || meshEditing || repairing || uvEditing || extracting || rigging) event.preventDefault(); });
 canvas.addEventListener('pointerdown', event => {
   if (event.button !== 0 || busy || stroke || textureGesture || !current) return;
   if (!painting) {
-    if (meshEditing && meshTool.gizmoHit) return;
-    if (meshEditing || repairing || uvEditing || extracting) canvas.focus({ preventScroll: true });
+    if (meshEditing && meshTool.gizmoHit || rigging && rigTool.gizmoHit) return;
+    if (meshEditing || repairing || uvEditing || extracting || rigging) canvas.focus({ preventScroll: true });
     picking = { pointer: event.pointerId, x: event.clientX, y: event.clientY };
     return;
   }
@@ -1001,6 +1039,7 @@ canvas.addEventListener('pointerup', event => {
   if (!work) return;
   if (picking?.pointer === event.pointerId) {
     picking = undefined;
+    if (rigging) { if (!rigTool.dragging && !rigTool.gizmoHit) rigTool.pick(event); return; }
     if (repairing && repairTool.pick(event)) return;
     if (extracting) { extractTool.pick(event); return; }
     const list = [...work.adapter.objects].filter((pair): pair is [string, Mesh] => pair[1] instanceof Mesh);

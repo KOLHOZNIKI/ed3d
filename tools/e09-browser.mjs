@@ -1,0 +1,214 @@
+import assert from 'node:assert/strict';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import { unzipSync, strFromU8 } from 'fflate';
+import { preview } from 'vite';
+
+const [executablePath, tripo = 'D:/downloads/Tripo'] = process.argv.slice(2);
+const { chromium } = await import('../test-results/e00-browser/node_modules/playwright-core/index.mjs');
+const dir = resolve('test-results/e09'), fixtures = resolve('tools/e00/fixtures');
+await mkdir(dir, { recursive: true });
+const server = await preview({ preview: { host: '127.0.0.1', port: 4294 } });
+const url = `http://127.0.0.1:${server.httpServer.address().port}/`;
+const external = [], errors = [];
+let browser;
+try {
+  browser = await chromium.launch({ ...(executablePath ? { executablePath } : { channel: 'chrome' }),
+    args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
+  const context = await browser.newContext({ viewport: { width: 1550, height: 1550 } });
+  await context.route(/^https?:/, route => {
+    const requested = route.request().url();
+    if (requested.startsWith(url)) return route.continue();
+    external.push(requested);
+    return route.abort();
+  });
+  const page = await context.newPage();
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('dialog', dialog => dialog.accept());
+  await page.goto(url);
+  const field = id => page.locator(`#${id}`);
+  const click = id => field(id).click();
+  const text = id => field(id).textContent();
+  const choose = (id, value) => field(id).selectOption(value);
+  const fill = (id, value) => field(id).fill(String(value));
+  const ready = () => page.waitForFunction(() => !document.querySelector('#sources').disabled, null, { timeout: 120000 });
+  const run = async (id, pattern, message = 'status') => {
+    await click(id);
+    await ready();
+    const actual = await text(message);
+    assert.match(actual, pattern, `${id}: ${actual} / ${await text('rig-info')}`);
+  };
+  const open = async (path, pattern) => { await field('sources').setInputFiles(path); await ready(); assert.match(await text('status'), pattern); };
+  const enter = async () => { if (await field('rig-tools').isHidden()) await click('rig-mode'); };
+  async function option(id, name) {
+    const rows = await field(id).locator('option').evaluateAll(options => options.map(item => ({ name: item.text.trim(), value: item.value })));
+    const row = rows.find(item => item.name === name);
+    assert.ok(row, `Missing ${name} from ${id} (${rows.map(item => item.name).join(', ')})`);
+    return row.value;
+  }
+  const joint = async name => choose('rig-joint', await option('rig-joint', name));
+  async function details(id) {
+    if (await field(id).getAttribute('open') === null) await field(id).locator('summary').click();
+  }
+  async function download(id, name) {
+    const [result] = await Promise.all([page.waitForEvent('download', { timeout: 120000 }), click(id)]);
+    const path = join(dir, name);
+    await result.saveAs(path);
+    await ready();
+    return readFile(path);
+  }
+  const manifest = bytes => JSON.parse(strFromU8(unzipSync(bytes)['manifest.json']));
+
+  const shared = join(fixtures, 'shared_skin.fbx');
+  await open(shared, /124 triangles/);
+  await enter();
+  await choose('rig-edit-mode', 'rest');
+  await joint('Chest');
+  const chestLabel = await field('rig-label').evaluate(label => [parseFloat(label.style.left), parseFloat(label.style.top)]);
+  const chestRest = (await text('rig-info')).match(/Rest XYZ ([^.]+\.\d+, [^.]+\.\d+, [^.]+\.\d+)/)?.[1];
+  assert.ok(chestRest);
+  await joint('Pelvis');
+  const viewport = field('viewport'), bounds = await viewport.boundingBox();
+  await viewport.click({ position: { x: bounds.width * chestLabel[0] / 100, y: bounds.height * chestLabel[1] / 100 } });
+  assert.equal(await text('rig-label'), 'Chest');
+  await joint('Spine');
+  const spineId = await option('rig-joint', 'Spine'), chestId = await option('rig-joint', 'Chest');
+  assert.match(await text('rig-info'), /2 bound meshes.*Rest XYZ 0\.0000, 0\.6250, 0\.0000/);
+  await choose('rig-space', 'world');
+  await choose('rig-operation', 'axes');
+  await fill('rig-z', 18);
+  await run('rig-apply', /Rotate rest axes and rebind applied/);
+  await joint('Chest');
+  assert.ok((await text('rig-info')).includes(chestRest));
+  await run('undo-stroke', /Undid/);
+  await joint('Spine');
+  await choose('rig-operation', 'move');
+  await choose('rig-descendants', 'move');
+  await fill('rig-x', .12);
+  await run('rig-apply', /Move joint and rebind applied/);
+  await joint('Chest');
+  assert.match(await text('rig-info'), /Rest XYZ 0\.1200/);
+  await run('undo-stroke', /Undid/);
+  await joint('Spine');
+  await choose('rig-descendants', 'preserve');
+  await fill('rig-x', .12);
+  await run('rig-apply', /Move joint and rebind applied/);
+  assert.match(await text('rig-info'), /Rest XYZ 0\.1200, 0\.6250, 0\.0000/);
+  await run('export', /Clip export blocked.*SharedTorsoBend/);
+  await run('undo-stroke', /Undid/);
+  assert.match(await text('rig-info'), /Rest XYZ 0\.0000, 0\.6250, 0\.0000/);
+  await download('export', 'shared-undone.zip');
+  await run('redo', /Redid/);
+  await details('rig-clips');
+  await run('rig-adapt', /Save adapted clip applied/);
+  assert.match(await text('rig-clip-info'), /SharedTorsoBend_Adapted_1/);
+  await field('rig-preview-clip').check();
+  await fill('rig-time', .5);
+  await field('rig-time').press('Tab');
+  await field('rig-compare').check();
+  await download('export', 'shared-moved.zip');
+  await field('rig-preview-clip').uncheck();
+  await fill('rig-x', .02);
+  await run('rig-apply', /Move joint and rebind applied/);
+  assert.match(await text('rig-clip-info'), /adaptation is stale/);
+  await run('undo-stroke', /Undid/);
+
+  await choose('rig-edit-mode', 'pose');
+  const neutral = await viewport.screenshot();
+  await fill('rig-z', 35);
+  await run('rig-apply', /Rotate manual pose joint applied/);
+  assert.notDeepEqual(neutral, await viewport.screenshot());
+  await fill('rig-pose-name', 'Twist');
+  await run('rig-save', /Save saved pose applied/);
+  await run('rig-copy-pose', /Duplicate saved pose applied/);
+  await fill('rig-pose-name', 'Copy renamed');
+  await run('rig-rename-pose', /Rename saved pose applied/);
+  await option('rig-saved', 'Copy renamed');
+  await run('rig-delete-pose', /Delete saved pose applied/);
+  await run('rig-reset-bone', /Reset bone pose applied/);
+  await fill('rig-fingers', `${spineId}, ${chestId}`);
+  await run('rig-sweep', /Sweep preview on Spine/, 'rig-info');
+  await run('rig-sweep', /Sweep preview on Chest/, 'rig-info');
+  await run('rig-curl', /Curl finger chain applied/);
+  await run('rig-reset-pose', /Reset manual pose applied/);
+  await field('rig-presets').getByRole('button', { name: 'Twist' }).click();
+  await ready();
+  const project = 'shared.assetfixer';
+  const archive = manifest(await download('save-project', project));
+  assert.equal(archive.schemaVersion, 9);
+  assert.equal(archive.working.poses.saved[0].name, 'Twist');
+  assert.ok(Math.abs(archive.working.poses.current[spineId][2] - Math.sin(35 * Math.PI / 360)) < 1e-8);
+  await open(join(dir, project), /Project restored/);
+  await enter();
+  await joint('Spine');
+  await option('rig-saved', 'Twist');
+  assert.match(await text('rig-info'), /Rest XYZ 0\.1200, 0\.6250, 0\.0000/);
+  await choose('rig-edit-mode', 'rest');
+  await details('rig-structure');
+  await choose('rig-other', await option('rig-other', 'Pelvis'));
+  await run('rig-delete', /Delete joint and transfer weights applied/);
+  await choose('rig-edit-mode', 'pose');
+  assert.match(await text('rig-info'), /Pose joints missing Spine/);
+  assert.ok(await field('rig-presets').getByRole('button', { name: 'Twist (1 missing)' }).isVisible());
+
+  await open(shared, /124 triangles/);
+  await enter();
+  await choose('rig-edit-mode', 'rest');
+  await joint('Spine');
+  await details('rig-structure');
+  await fill('rig-name', 'MidSpine');
+  await run('rig-rename', /Rename joint applied/);
+  await download('export', 'shared-renamed.zip');
+  await fill('rig-name', 'ProbeChild');
+  await run('rig-add', /Add child joint applied/);
+  await choose('rig-other', await option('rig-other', 'ProbeChild'));
+  await run('rig-reparent', /cycle|descendant/i, 'rig-info');
+  await joint('Chest');
+  await choose('rig-other', await option('rig-other', 'Pelvis'));
+  await run('rig-reparent', /Reparent joint applied/);
+  await details('rig-clips');
+  await run('rig-adapt', /hierarchy.*changed/i, 'rig-info');
+  await joint('MidSpine');
+  await choose('rig-other', await option('rig-other', 'Pelvis'));
+  await run('rig-delete', /Delete joint and transfer weights applied/);
+  await run('rig-exclude', /Set clip export mode applied/);
+  await download('export', 'shared-deleted.zip');
+  await joint('Chest');
+  await run('rig-rebind', /Rebind rig applied/);
+  await run('rig-reset', /Restore original rig applied/);
+  await joint('Spine');
+  assert.match(await text('rig-info'), /Rest XYZ 0\.0000, 0\.6250, 0\.0000/);
+
+  await open(join(tripo, 'man character 3d model.glb'), /17[\s,.]?623 triangles/);
+  await enter();
+  await choose('rig-edit-mode', 'rest');
+  const names = await field('rig-joint').locator('option').evaluateAll(options => options.map(item => item.text.trim()));
+  const pair = names.find(name => /^left.*upper.*arm/i.test(name));
+  assert.ok(pair, `Missing left upper arm (${names.join(', ')})`);
+  const right = names.find(name => name.toLowerCase() === pair.toLowerCase().replace(/^left/, 'right'));
+  assert.ok(right);
+  await joint(pair);
+  await details('rig-structure');
+  await choose('rig-mirror', await option('rig-mirror', right));
+  await choose('rig-space', 'world');
+  await fill('rig-x', .03);
+  await run('rig-apply', /Move joint and rebind applied/);
+  await choose('rig-edit-mode', 'pose');
+  await fill('rig-z', 30);
+  await run('rig-apply', /Rotate manual pose joint applied/);
+  const posed = await download('export', 'tripo-posed.glb');
+  await run('rig-reset-pose', /Reset manual pose applied/);
+  const reset = await download('export', 'tripo-reset.glb');
+  assert.deepEqual(posed, reset);
+  assert.deepEqual(external, []);
+  assert.deepEqual(errors, []);
+  const report = { sharedBindMove: .12, undoRedo: true, viewportSelection: true, restAxes: true, propagateDescendants: true,
+    clipGuard: true, clipAdaptation: true, staleAdaptation: true, rename: true, missingPoseJoints: true,
+    poseArchive: true, chainPreview: true, cycleGuard: true, deleteWithTransfer: true, mirrorPair: [pair, right],
+    poseExportByteIdentical: true, externalRequests: external.length, browserErrors: errors.length };
+  await writeFile(join(dir, 'browser.json'), JSON.stringify(report, null, 2));
+  console.log(JSON.stringify(report));
+} finally {
+  await browser?.close();
+  await new Promise(resolveClose => server.httpServer.close(resolveClose));
+}
