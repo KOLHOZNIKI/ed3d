@@ -1,6 +1,6 @@
 # AssetFixer
 
-AssetFixer is a local browser-based editor for refining generated 3D assets before importing them into Unity. The E00 prototype opens and exports FBX packages and self-contained GLB files in the browser.
+AssetFixer is a local browser-based editor for refining generated 3D assets before importing them into Unity. It opens FBX packages, self-contained GLB files and `.assetfixer` projects in the browser.
 
 ## Local development
 
@@ -24,9 +24,13 @@ npm run dev
 
 Open the localhost URL printed by Vite. Choose a self-contained GLB and use **Export GLB** to download a new binary. For FBX, choose a Tripo ZIP or select a binary FBX and its PNG or JPEG textures together. **Export FBX ZIP** downloads the reconstructed FBX, external maps, and `manifest.json`. Extract the package into Unity's `Assets` folder to import it. The manifest identifies textures that require manual assignment.
 
+Use **Save Project** to download a self-contained `.assetfixer` file. **Save As** creates a copy with a new project ID. Open the saved file from the same file picker after restarting the app. The project restores its original source bytes and current working state. Undo and Redo begin with the reopened state. After an edit the browser keeps local checkpoints and offers **Restore autosave** at startup. Save a project file to keep a backup outside browser storage.
+
+Drag the viewport to orbit, use the right mouse button to pan, and scroll to zoom. Click a mesh or choose one in **Objects**, then use **Frame selection** or `F`. The viewport also offers orthographic projection and axis views. Project labels and viewport visibility are saved as project state. Format export uses the source object names and complete scene.
+
 For a single FBX mesh with one UV set, use **Generate UV atlas** to add UV1. **Rebake textures** transfers the maps from the original import. The baked FBX promotes the atlas to the primary UV channel for Unity and retains the original coordinates in the second channel.
 
-After rebaking a static mesh with one base color map, turn on **3D brush (visible projection)** and drag on the model. **Undo stroke** restores the preceding texture. **Export FBX ZIP** packages the painted map.
+After rebaking a static mesh with one base color map, turn on **3D brush (visible projection)** and drag on the model. **Undo** restores the preceding texture. **Export FBX ZIP** packages the painted map.
 
 | Command | Purpose |
 | --- | --- |
@@ -50,6 +54,7 @@ After rebaking a static mesh with one base color map, turn on **3D brush (visibl
 | `xatlas-wasm` | MIT | Generate and pack UV charts in a browser worker. |
 | `patch-package` | MIT | Apply the pinned loader and writer patches during installation. |
 
-## E00 verification
+## Verification
 
-The [E00 verification report](Docs/E00_Report.md) consolidates the results, backend decisions, fixture provenance, and E01 readiness checklist. It links the individual test recipes and reference exports.
+- [E01 project and recovery verification](Docs/E01_Report.md) records the offline reopening, checkpoint and Unity tests.
+- [E00 format and risk verification](Docs/E00_Report.md) records backend decisions, fixture provenance, reference exports and adapter checks.

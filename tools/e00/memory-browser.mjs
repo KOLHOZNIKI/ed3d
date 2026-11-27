@@ -65,6 +65,7 @@ try {
 
   const context = await chrome.newContext({ viewport: { width, height }, deviceScaleFactor: 1 });
   const page = await context.newPage();
+  page.on('dialog', dialog => dialog.accept());
   const cdp = await context.newCDPSession(page);
   const errors = [], externalRequests = [];
   page.on('pageerror', error => errors.push(error.message));

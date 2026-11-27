@@ -209,7 +209,8 @@ export async function exportGlb(asset: ImportedGlb): Promise<{ name: string; byt
       },
     };
   });
-  const bytes = await exporter.parseAsync(asset.scene, { binary: true, animations: asset.scene.animations, includeCustomExtensions: true });
+  const bytes = await exporter.parseAsync(asset.scene, { binary: true, animations: asset.scene.animations,
+    includeCustomExtensions: true, onlyVisible: false });
   if (!(bytes instanceof ArrayBuffer)) throw new Error('The exporter did not return a binary GLB.');
   return { name: `${asset.name}_e00.glb`, bytes };
 }

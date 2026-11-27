@@ -16,9 +16,17 @@
         padding: 0 1rem;
       }
 
+      h1 { margin-bottom: 1rem; }
+      [hidden] { display: none !important; }
+      fieldset { border: 1px solid #80808050; border-radius: 8px; margin: 0.8rem 0; padding: 0.75rem; }
+      button, select, input { font: inherit; }
+      button { min-height: 2rem; }
+      #project-status, #autosave-status, #history-status, #selection-details { font-size: 0.875rem; }
+
       canvas {
         max-width: 100%;
         height: auto;
+        border-radius: 8px;
       }
 
       .actions {
@@ -32,21 +40,64 @@
   <body>
     <main>
       <h1>AssetFixer</h1>
-      <p>E00 FBX and GLB round-trip prototype</p>
+      <fieldset>
+        <legend>Project</legend>
+        <label for="sources">Open project, GLB, or FBX with its maps</label>
+        <div class="actions">
+          <input type="file" id="sources" accept=".assetfixer,.glb,.zip,.fbx,.png,.jpg,.jpeg" multiple />
+          <button id="save-project" type="button" disabled>Save Project</button>
+          <button id="save-copy" type="button" disabled>Save As</button>
+          <button id="close-model" type="button" disabled>Close model</button>
+        </div>
+        <p id="project-status">No open project</p>
+        <div class="actions" id="recovery" hidden>
+          <button id="restore-autosave" type="button">Restore autosave</button>
+          <button id="dismiss-autosave" type="button">Dismiss</button>
+        </div>
+        <p id="autosave-status" aria-live="polite"></p>
+        <details id="project-settings" hidden>
+          <summary>Project settings</summary>
+          <label for="history-budget">Undo history budget (MiB)</label>
+          <input id="history-budget" type="number" min="1" max="512" step="1" />
+        </details>
+      </fieldset>
       <div class="actions">
-        <label for="sources">Open a self-contained GLB, a Tripo ZIP, or one FBX with its maps</label>
-        <input type="file" id="sources" accept=".glb,.zip,.fbx,.png,.jpg,.jpeg" multiple />
-        <button id="close-model" type="button" disabled>Close model</button>
         <button id="export" type="button" disabled>Export FBX ZIP</button>
         <button id="unwrap" type="button" disabled>Generate UV atlas</button>
         <button id="rebake" type="button" disabled>Rebake textures</button>
         <button id="paint" type="button" aria-pressed="false" disabled>3D brush (visible projection)</button>
         <label for="paint-color">Brush color</label>
         <input id="paint-color" type="color" value="#15e4f2" disabled />
-        <button id="undo-stroke" type="button" disabled>Undo stroke</button>
+        <button id="undo-stroke" type="button" disabled>Undo</button>
+        <button id="redo" type="button" disabled>Redo</button>
+        <button id="cancel-job" type="button" hidden>Cancel operation</button>
       </div>
+      <p id="history-status" hidden></p>
       <p id="status" role="status">Select a model to inspect it locally.</p>
+      <fieldset id="viewer-tools" hidden>
+        <legend>Viewport</legend>
+        <div class="actions">
+          <label for="projection">Projection</label>
+          <select id="projection"><option>Perspective</option><option>Orthographic</option></select>
+          <label for="view-direction">View</label>
+          <select id="view-direction"><option>Oblique</option><option>Front</option><option>Back</option><option>Left</option><option>Right</option><option>Top</option><option>Bottom</option></select>
+          <button id="frame-all" type="button">Frame all</button>
+          <button id="frame-selection" type="button" disabled>Frame selection</button>
+        </div>
+      </fieldset>
       <canvas id="viewport" width="640" height="480" role="img" aria-label="Imported model preview" hidden></canvas>
+      <fieldset id="object-tools" hidden>
+        <legend>Objects</legend>
+        <div class="actions">
+          <label for="object-selection">Select object</label>
+          <select id="object-selection"></select>
+          <button id="object-visibility" type="button" disabled>Hide object</button>
+          <label for="object-label">Project label</label>
+          <input id="object-label" maxlength="160" disabled />
+          <button id="rename-object" type="button" disabled>Apply label</button>
+        </div>
+        <p id="selection-details"></p>
+      </fieldset>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>

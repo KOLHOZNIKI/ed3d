@@ -1,284 +1,498 @@
-import { AmbientLight, Box3, DirectionalLight, Mesh, MeshLambertMaterial, MeshPhongMaterial, PerspectiveCamera, Scene, SkinnedMesh, SRGBColorSpace, Texture, Vector3, WebGLRenderer, type BufferGeometry } from 'three';
-import { exportAsset, importAsset, type ImportedAsset } from './e00/round-trip';
-import { exportGlb, importGlb, type ImportedGlb } from './e00/glb-round-trip';
+import { Mesh, Vector3 } from 'three';
+import { exportAsset } from './e00/round-trip';
+import { exportGlb } from './e00/glb-round-trip';
 import { unwrapAsset } from './e00/uv-atlas';
 import { rebakeAsset } from './e00/rebake';
-import { brushRadius, paintableMesh, paintStroke, type TexturePaint } from './e00/paint';
+import { brushRadius, paintableMesh, paintStroke } from './e00/paint';
+import { captureAtlas, importOriginals, ModelAdapter, type Model } from './project/adapter';
+import { captureOriginals, readProject, writeProject, type ProjectData } from './project/archive';
+import { autosaveDelay, latestCheckpoint, saveCheckpoint } from './project/autosave';
+import { AssetDocument, defaultHistoryBudget } from './project/document';
+import { type WorkingState, workingBuffers } from './project/state';
+import { elementId } from './project/topology';
+import { disposeAppearance, disposeModel, prepareAppearance, Viewer, type Appearance } from './project/viewer';
 
-function element<T extends HTMLElement>(selector: string): T {
-  const node = document.querySelector<T>(selector);
-  if (!node) throw new Error(`The E00 prototype is missing ${selector}.`);
-  return node;
-}
-const canvas = element<HTMLCanvasElement>('#viewport');
-const status = element('#status');
-const sources = element<HTMLInputElement>('#sources');
-const closeButton = element<HTMLButtonElement>('#close-model');
-const exportButton = element<HTMLButtonElement>('#export');
-const unwrapButton = element<HTMLButtonElement>('#unwrap');
-const rebakeButton = element<HTMLButtonElement>('#rebake');
-const paintButton = element<HTMLButtonElement>('#paint');
-const paintColor = element<HTMLInputElement>('#paint-color');
-const undoStroke = element<HTMLButtonElement>('#undo-stroke');
-
-const context = canvas.getContext('webgl2', { antialias: true });
-const renderer = context ? new WebGLRenderer({ canvas, context }) : null;
-const scene = new Scene();
-scene.add(new AmbientLight(0xffffff, 1.5));
-const light = new DirectionalLight(0xffffff, 2);
-light.position.set(3, 5, 4);
-scene.add(light);
-renderer?.setClearColor(0x151b25);
-
-let asset: ImportedAsset | ImportedGlb | undefined;
-let camera: PerspectiveCamera | undefined;
-let paintedPreview: { geometry: BufferGeometry; material: MeshLambertMaterial | MeshPhongMaterial; texture: Texture } | undefined;
-let paintEnabled = false;
-const history: (TexturePaint | undefined)[] = [];
-let stroke: { pointer: number; points: [number, number][] } | undefined;
-
-function paintControls(working = false) {
-  const available = !!(renderer && asset?.format === 'fbx' && paintableMesh(asset));
-  closeButton.disabled = working || !asset;
-  paintButton.disabled = working || !available;
-  paintColor.disabled = working || !available || !paintEnabled;
-  undoStroke.disabled = working || !history.length;
-  paintButton.setAttribute('aria-pressed', String(paintEnabled));
-  canvas.style.cursor = paintEnabled && !working ? 'crosshair' : '';
-  canvas.style.touchAction = paintEnabled && !working ? 'none' : '';
+function element<T extends HTMLElement>(id: string): T {
+  const node = document.getElementById(id);
+  if (!node) throw new Error(`Missing interface element: ${id}.`);
+  return node as T;
 }
 
-function clearPaintPreview() {
-  paintedPreview?.geometry.dispose();
-  paintedPreview?.material.dispose();
-  paintedPreview?.texture.dispose();
-  paintedPreview = undefined;
-  paintEnabled = false;
+const canvas = element<HTMLCanvasElement>('viewport');
+const status = element('status'), projectStatus = element('project-status'), historyStatus = element('history-status');
+const sources = element<HTMLInputElement>('sources');
+const close = element<HTMLButtonElement>('close-model'), save = element<HTMLButtonElement>('save-project');
+const saveAs = element<HTMLButtonElement>('save-copy'), exportButton = element<HTMLButtonElement>('export');
+const unwrap = element<HTMLButtonElement>('unwrap'), rebake = element<HTMLButtonElement>('rebake');
+const paintButton = element<HTMLButtonElement>('paint'), paintColor = element<HTMLInputElement>('paint-color');
+const undo = element<HTMLButtonElement>('undo-stroke'), redo = element<HTMLButtonElement>('redo');
+const cancel = element<HTMLButtonElement>('cancel-job');
+const autosaveStatus = element('autosave-status'), restore = element<HTMLButtonElement>('restore-autosave');
+const recovery = element('recovery');
+const objects = element<HTMLSelectElement>('object-selection'), objectLabel = element<HTMLInputElement>('object-label');
+const rename = element<HTMLButtonElement>('rename-object'), visibility = element<HTMLButtonElement>('object-visibility');
+const projection = element<HTMLSelectElement>('projection'), viewDirection = element<HTMLSelectElement>('view-direction');
+const frameSelection = element<HTMLButtonElement>('frame-selection');
+const historyBudget = element<HTMLInputElement>('history-budget');
+const viewer = new Viewer(canvas, lost => {
   stroke = undefined;
-  history.length = 0;
-}
-
-function renderPreview() {
-  if (!renderer || !camera) return;
-  const mesh = asset?.format === 'fbx' ? paintableMesh(asset) : undefined;
-  if (!mesh || !paintedPreview) {
-    renderer.render(scene, camera);
-    return;
-  }
-  const { geometry, material } = mesh;
-  try {
-    mesh.geometry = paintedPreview.geometry;
-    mesh.material = paintedPreview.material;
-    renderer.render(scene, camera);
-  } finally {
-    mesh.geometry = geometry;
-    mesh.material = material;
-  }
-}
-
-async function previewTexture(snapshot: ImportedAsset, paint?: TexturePaint) {
-  const mesh = paintableMesh(snapshot);
-  const original = mesh?.material;
-  const png = paint?.png ?? snapshot.textureBake?.maps.find(map => map.slot === 'map')?.png;
-  if (!mesh || !png || !(original instanceof MeshLambertMaterial || original instanceof MeshPhongMaterial)) return;
-  const url = URL.createObjectURL(new Blob([png], { type: 'image/png' }));
-  try {
-    const image = new Image();
-    image.src = url;
-    await image.decode();
-    if (!paintedPreview) {
-      const geometry = snapshot.uvAtlas!.geometry.clone();
-      geometry.setAttribute('uv', geometry.getAttribute('uv1'));
-      const material = original.clone();
-      const texture = new Texture();
-      texture.colorSpace = SRGBColorSpace;
-      material.map = texture;
-      paintedPreview = { geometry, material, texture };
-    }
-    paintedPreview.texture.image = image;
-    paintedPreview.texture.needsUpdate = true;
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
-
-function releaseCurrentAsset() {
-  clearPaintPreview();
-  if (asset) {
-    releasePreview(asset.scene);
-    if (asset.format === 'fbx') asset.uvAtlas?.geometry.dispose();
-  }
-  asset = undefined;
-  camera = undefined;
-  renderer?.renderLists.dispose();
-}
-
-closeButton.addEventListener('click', () => {
-  releaseCurrentAsset();
-  renderer?.clear();
-  canvas.hidden = true;
-  exportButton.textContent = 'Export FBX ZIP';
-  unwrapButton.textContent = 'Generate UV atlas';
-  rebakeButton.textContent = 'Rebake textures';
-  exportButton.disabled = unwrapButton.disabled = rebakeButton.disabled = true;
-  paintControls();
-  status.textContent = 'Model closed.';
+  status.textContent = lost ? 'WebGL context lost. The project is still open and can be saved.' : 'WebGL preview restored.';
+  controls();
+  resumeAutosave();
 });
 
-sources.addEventListener('change', async () => {
+interface Workspace {
+  adapter: ModelAdapter;
+  document: AssetDocument<WorkingState>;
+  model: Model;
+}
+
+let current: Workspace | undefined;
+let selected = '';
+let painting = false;
+let stroke: { pointer: number; points: [number, number][] } | undefined;
+let picking: { pointer: number; x: number; y: number } | undefined;
+let busy = false;
+let abort: AbortController | undefined;
+let pendingRecovery: ProjectData | undefined;
+let autosaveTimer: number | undefined;
+let autosaveDue: number | undefined;
+let writingCheckpoint = false;
+
+function controls() {
+  const document = current?.document;
+  const model = current?.model;
+  const locked = busy || !!stroke;
+  const fbx = model?.format === 'fbx';
+  const availablePaint = !!(viewer.available && fbx && paintableMesh(model));
+  if (!availablePaint) painting = false;
+  sources.disabled = locked;
+  close.disabled = save.disabled = saveAs.disabled = exportButton.disabled = locked || !document;
+  unwrap.disabled = locked || !fbx;
+  rebake.disabled = locked || !fbx || !model.uvAtlas;
+  paintButton.disabled = locked || !availablePaint;
+  paintColor.disabled = locked || !painting;
+  undo.disabled = locked || !document?.undoDepth;
+  redo.disabled = locked || !document?.redoDepth;
+  restore.disabled = locked;
+  cancel.hidden = !abort;
+  cancel.disabled = abort?.signal.aborted ?? true;
+  paintButton.setAttribute('aria-pressed', String(painting));
+  canvas.style.cursor = painting && !busy ? 'crosshair' : '';
+  canvas.style.touchAction = 'none';
+  viewer.setPainting(painting);
+  exportButton.textContent = model?.format === 'glb' ? 'Export GLB' : 'Export FBX ZIP';
+  unwrap.textContent = fbx && model.uvAtlas ? 'Discard UV atlas' : 'Generate UV atlas';
+  rebake.textContent = fbx && model.textureBake ? 'Discard texture bake' : 'Rebake textures';
+  projectStatus.textContent = document
+    ? `${document.name} · Revision ${document.revision} · ${document.dirty ? 'Unsaved changes' : 'No unsaved changes'}`
+    : 'No open project';
+  historyStatus.hidden = !document;
+  historyStatus.textContent = document ? `Undo available: ${document.undoDepth} · Redo available: ${document.redoDepth}` : '';
+  element('project-settings').hidden = !document;
+  historyBudget.disabled = locked;
+  if (document && historyBudget !== window.document.activeElement) historyBudget.value = String(document.historyBudget / 1048576);
+  element('viewer-tools').hidden = !viewer.camera;
+  element('object-tools').hidden = !document;
+  objects.disabled = locked;
+  objectLabel.disabled = rename.disabled = visibility.disabled = locked || !selected;
+  frameSelection.disabled = !selected || locked;
+}
+
+function renderObjects() {
+  if (!current) {
+    objects.replaceChildren();
+    return;
+  }
+  const entries = current.document.scene.filter(entry => entry.mesh);
+  objects.replaceChildren(new Option('None', ''), ...entries.map(entry => {
+    const state = current!.document.state.objects[entry.id] ?? entry;
+    return new Option(state.visible ? state.name : `${state.name} (hidden)`, entry.id);
+  }));
+  selectObject(selected);
+}
+
+function selectObject(id: string) {
+  const entry = current?.document.scene.find(node => node.id === id && node.mesh);
+  selected = entry?.id ?? '';
+  objects.value = selected;
+  const state = entry && (current!.document.state.objects[selected] ?? entry);
+  objectLabel.value = state?.name ?? '';
+  visibility.textContent = state?.visible === false ? 'Show object' : 'Hide object';
+  const topology = current?.document.topology.get(selected);
+  element('selection-details').textContent = topology
+    ? `${selected} · ${topology.positions.length / 3} vertices · ${topology.faceEnds.length} faces · First face ID ${elementId(selected, 'face', 0)}`
+    : '';
+  viewer.select(current?.adapter.objects.get(selected));
+  controls();
+}
+
+function modelStatus(model: Model) {
+  const { name, stats } = model;
+  let message = `${name} · ${stats.triangles.toLocaleString()} triangles · ${stats.bones} bones · ${stats.clips} clips`;
+  if (model.format === 'glb') {
+    if (model.affineCorrections) message += ` · Corrected rounding in ${model.affineCorrections} inverse bind matrices for GLB export`;
+    if (model.nonManifoldEdges) message += ` · Non-manifold topology: ${model.nonManifoldEdges} indexed mesh edge(s) with more than two incident triangles`;
+  } else {
+    const { maxSkinInfluences, pointsOverPreviewLimit, morphChannels, hasMorphTargets } = model.deformation;
+    if (pointsOverPreviewLimit) message += ` · Approximate skin preview: ${pointsOverPreviewLimit} control points exceed the four-influence limit` +
+      ` (maximum ${maxSkinInfluences}). All source weights are retained.`;
+    if (hasMorphTargets) message += ` · ${morphChannels} morph channels detected. FBX export is blocked for morph targets.`;
+  }
+  return message + (viewer.available ? '' : ' · WebGL2 preview unavailable');
+}
+
+async function locked(action: (signal?: AbortSignal) => Promise<void>, message?: string, cancellable = false) {
+  if (busy || stroke) return;
+  busy = true;
+  if (cancellable) abort = new AbortController();
+  const signal = abort?.signal;
+  if (message) status.textContent = message;
+  controls();
+  try {
+    await action(signal);
+  } catch (error) {
+    status.textContent = signal?.aborted ? 'Operation cancelled. The document is unchanged.' : errorMessage(error);
+  } finally {
+    abort = undefined;
+    busy = false;
+    controls();
+    resumeAutosave();
+  }
+}
+
+const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
+
+function canReplace() {
+  return !current?.document.dirty || window.confirm('Close this project with unsaved changes? Save a project file to keep them.');
+}
+
+function closeWorkspace() {
+  viewer.close();
+  if (current) {
+    current.adapter.dispose();
+    disposeModel(current.model);
+  }
+  current = undefined;
+  selected = '';
+  painting = false;
+  autosaveDue = undefined;
+  window.clearTimeout(autosaveTimer);
+  autosaveStatus.textContent = '';
+  renderObjects();
+}
+
+function install(workspace: Workspace, appearance?: Appearance) {
+  closeWorkspace();
+  current = workspace;
+  workspace.adapter.applyVisibility(workspace.document.state);
+  viewer.setPainting(false);
+  viewer.install(workspace.model.scene, appearance);
+  projection.selectedIndex = viewDirection.selectedIndex = 0;
+  renderObjects();
+  status.textContent = modelStatus(workspace.model);
+  pendingRecovery = undefined;
+  recovery.hidden = true;
+}
+
+async function makeWorkspace(model: Model, data?: ProjectData, originals = data?.originals) {
+  if (!originals) throw new Error('The project has no captured originals.');
+  let adapter: ModelAdapter | undefined;
+  try {
+    adapter = new ModelAdapter(model);
+    if (data && (data.scene.length !== adapter.entries.length || data.scene.some((entry, index) => {
+      const source = adapter!.entries[index];
+      return entry.id !== source.id || entry.parent !== source.parent || entry.mesh !== source.mesh ||
+        entry.name !== source.name || entry.visible !== source.visible || entry.transform.some((value, i) => value !== source.transform[i]);
+    }))) throw new Error('The saved object hierarchy does not match the original assets.');
+    const document = new AssetDocument<WorkingState>({ id: data?.id ?? crypto.randomUUID(), name: data?.name ?? model.name.slice(0, 160),
+      revision: data?.revision ?? 0, originals, historyBudget: data?.historyBudget ?? defaultHistoryBudget,
+      scene: adapter.entries, topology: adapter.topology, state: data?.state ?? { objects: {} } }, workingBuffers);
+    const working = adapter.materialize(document.state);
+    if (working.format === 'fbx' && working.textureBake?.maps.some(map => !working.images.has(map.source))) {
+      throw new Error('A saved baked map refers to an unknown source image.');
+    }
+    return { workspace: { adapter, document, model: working }, appearance: await prepareAppearance(working) };
+  } catch (error) {
+    adapter?.dispose();
+    disposeModel(model);
+    throw error;
+  }
+}
+
+sources.addEventListener('change', () => {
   const input = Array.from(sources.files ?? []);
+  sources.value = '';
   if (!input.length) return;
-  sources.disabled = true;
-  exportButton.disabled = true;
-  unwrapButton.disabled = true;
-  rebakeButton.disabled = true;
-  paintControls(true);
-  status.textContent = 'Opening local asset…';
-  try {
-    const glb = input.find(file => /\.glb$/i.test(file.name));
-    if (glb && input.length !== 1) throw new Error('Select one GLB file at a time.');
-    const imported = glb ? await importGlb(glb) : await importAsset(input);
-    releaseCurrentAsset();
-    asset = imported;
-    exportButton.textContent = asset.format === 'glb' ? 'Export GLB' : 'Export FBX ZIP';
-    unwrapButton.textContent = 'Generate UV atlas';
-    rebakeButton.textContent = 'Rebake textures';
-    const { stats } = asset;
-    status.textContent = `${asset.name} · ${stats.triangles.toLocaleString()} triangles · ${stats.bones} bones · ${stats.clips} clips`;
-    if (asset.format === 'glb' && asset.affineCorrections) {
-      status.textContent += ` · Corrected rounding in ${asset.affineCorrections} inverse bind matrices for GLB export`;
+  void locked(async () => {
+    const project = input.find(file => /\.assetfixer$/i.test(file.name));
+    if (project && input.length !== 1) throw new Error('Open one .assetfixer project at a time.');
+    const data = project && await readProject(project);
+    const originals = data?.originals ?? await captureOriginals(input);
+    const model = await importOriginals(originals);
+    const { workspace, appearance } = await makeWorkspace(model, data, originals);
+    if (!canReplace()) {
+      if (appearance) disposeAppearance(appearance);
+      workspace.adapter.dispose();
+      disposeModel(workspace.model);
+      status.textContent = 'Open cancelled.';
+      return;
     }
-    if (asset.format === 'glb' && asset.nonManifoldEdges) {
-      status.textContent += ` · Non-manifold topology: ${asset.nonManifoldEdges} indexed mesh edge(s) with more than two incident triangles`;
-    }
-    if (asset.format === 'fbx') {
-      const { maxSkinInfluences, pointsOverPreviewLimit, morphChannels, hasMorphTargets } = asset.deformation;
-      if (pointsOverPreviewLimit > 0) {
-        status.textContent += ` · Approximate skin preview: ${pointsOverPreviewLimit} control points exceed the four-influence limit` +
-          ` (maximum ${maxSkinInfluences}). All source weights are retained.`;
-      }
-      if (hasMorphTargets) status.textContent += ` · ${morphChannels} morph channels detected. FBX export is blocked for morph targets.`;
-    }
-    if (renderer) {
-      scene.add(asset.scene);
-      const bounds = new Box3().setFromObject(asset.scene);
-      const center = bounds.getCenter(new Vector3());
-      const radius = Math.max(bounds.getSize(new Vector3()).length() / 2, 0.001);
-      camera = new PerspectiveCamera(40, canvas.width / canvas.height, radius / 100, radius * 100);
-      camera.position.copy(center).addScaledVector(new Vector3(0.6, 0.45, 1).normalize(), 3.5 * radius);
-      camera.lookAt(center);
-      renderPreview();
-      canvas.hidden = false;
-    } else {
-      status.textContent += ' · WebGL2 preview unavailable';
-    }
-  } catch (error) {
-    status.textContent = error instanceof Error ? error.message : String(error);
-  } finally {
-    sources.value = '';
-    sources.disabled = false;
-    exportButton.disabled = !asset;
-    unwrapButton.disabled = asset?.format !== 'fbx';
-    rebakeButton.disabled = asset?.format !== 'fbx' || !asset.uvAtlas;
-    paintControls();
-  }
+    install(workspace, appearance);
+    if (data) status.textContent += ' · Project restored. Undo history starts here.';
+    else scheduleAutosave();
+  }, 'Opening local asset…');
 });
 
-exportButton.addEventListener('click', async () => {
-  if (!asset) return;
-  sources.disabled = true;
-  exportButton.disabled = true;
-  unwrapButton.disabled = true;
-  rebakeButton.disabled = true;
-  paintControls(true);
-  const glb = asset.format === 'glb';
-  status.textContent = glb ? 'Preparing GLB…' : 'Preparing FBX package…';
+close.addEventListener('click', () => {
+  if (!canReplace()) return;
+  closeWorkspace();
+  status.textContent = 'Model closed.';
+  controls();
+});
+
+window.addEventListener('beforeunload', event => {
+  if (!current?.document.dirty && !stroke) return;
+  event.preventDefault();
+  event.returnValue = '';
+});
+
+function download(data: Blob, name: string) {
+  const url = URL.createObjectURL(data);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = name;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function saveFile(copy: boolean) {
+  void locked(async () => {
+    const document = current!.document;
+    const name = copy ? `${document.name.slice(0, 155)} copy` : document.name;
+    const archive = await writeProject(document, copy ? { id: crypto.randomUUID(), name } : undefined);
+    download(archive, `${name.replace(/[\\/:*?"<>|\x00-\x1f]/g, '_')}.assetfixer`);
+    if (!copy) document.markSaved();
+    status.textContent = copy ? 'Saved an independent project copy.' : 'Project saved as .assetfixer.';
+  }, 'Packing project…');
+}
+save.addEventListener('click', () => saveFile(false));
+saveAs.addEventListener('click', () => saveFile(true));
+historyBudget.addEventListener('change', () => {
+  if (!current || busy || stroke) return;
+  const { document } = current;
   try {
-    const output = asset.format === 'glb' ? await exportGlb(asset) : await exportAsset(asset);
-    const url = URL.createObjectURL(new Blob([output.bytes], { type: glb ? 'model/gltf-binary' : 'application/zip' }));
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = output.name;
-    link.click();
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    if (!Number.isInteger(historyBudget.valueAsNumber)) throw new Error('Enter a whole number of MiB.');
+    if (document.configureHistory(historyBudget.valueAsNumber * 1048576)) scheduleAutosave();
+  } catch (error) {
+    status.textContent = errorMessage(error);
+  }
+  historyBudget.value = String(document.historyBudget / 1048576);
+  controls();
+});
+
+exportButton.addEventListener('click', () => void locked(async () => {
+  const { model, adapter, document } = current!;
+  // Viewport visibility is a project setting. Export preserves the original visibility and complete asset.
+  adapter.applyVisibility({ objects: {} });
+  try {
+    const glb = model.format === 'glb';
+    const output = glb ? await exportGlb(model) : await exportAsset(model);
+    download(new Blob([output.bytes], { type: glb ? 'model/gltf-binary' : 'application/zip' }), output.name);
     status.textContent = `Exported ${output.name}.` + (glb ? '' : ' See manifest.json for material assignments and scope.');
-  } catch (error) {
-    status.textContent = error instanceof Error ? error.message : String(error);
   } finally {
-    sources.disabled = false;
-    exportButton.disabled = false;
-    unwrapButton.disabled = asset.format !== 'fbx';
-    rebakeButton.disabled = asset.format !== 'fbx' || !asset.uvAtlas;
-    paintControls();
+    adapter.applyVisibility(document.state);
   }
+}, 'Preparing export…'));
+
+function scheduleAutosave() {
+  autosaveDue = performance.now() + autosaveDelay;
+  autosaveStatus.textContent = 'Autosave pending.';
+  resumeAutosave();
+}
+
+function resumeAutosave() {
+  window.clearTimeout(autosaveTimer);
+  if (!current || autosaveDue === undefined || busy || stroke || writingCheckpoint) return;
+  autosaveTimer = window.setTimeout(() => void writeAutosave(), Math.max(0, autosaveDue - performance.now()));
+}
+
+async function writeAutosave() {
+  if (!current || busy || stroke || writingCheckpoint) return;
+  const { document } = current;
+  const revision = document.revision;
+  autosaveDue = undefined;
+  writingCheckpoint = true;
+  const isCurrent = () => current?.document === document && document.revision === revision;
+  try {
+    const archive = await writeProject(document);
+    if (!isCurrent()) return;
+    await saveCheckpoint({ key: `${document.id}/${revision}`, name: document.name, projectId: document.id, revision,
+      savedAt: Date.now(), archive });
+    if (isCurrent()) autosaveStatus.textContent = `Autosaved revision ${revision} in this browser.`;
+  } catch (error) {
+    if (isCurrent()) autosaveStatus.textContent = `Autosave unavailable. ${errorMessage(error)} Use Save Project to download a file.`;
+  } finally {
+    writingCheckpoint = false;
+    resumeAutosave();
+  }
+}
+
+async function offerRecovery() {
+  try {
+    const { data, checkpoint, skipped } = await latestCheckpoint();
+    if (current) return;
+    pendingRecovery = data;
+    recovery.hidden = !checkpoint;
+    if (checkpoint) autosaveStatus.textContent = `Recover ${checkpoint.name}, revision ${checkpoint.revision} (${new Date(checkpoint.savedAt).toLocaleString()}).` +
+      (skipped ? ` Skipped ${skipped} damaged checkpoint(s).` : '');
+    else if (skipped) autosaveStatus.textContent = 'No intact autosave. Open a saved project file.';
+  } catch {
+    if (!current) autosaveStatus.textContent = 'Browser autosave is unavailable. Use Save Project to keep a file.';
+  }
+}
+
+restore.addEventListener('click', () => void locked(async () => {
+  const data = pendingRecovery;
+  if (!data) return;
+  if (!canReplace()) return;
+  const { workspace, appearance } = await makeWorkspace(await importOriginals(data.originals), data);
+  workspace.document.markRecovered();
+  install(workspace, appearance);
+  status.textContent += ' · Autosave restored. Undo history starts here.';
+}, 'Restoring autosave…'));
+element('dismiss-autosave').addEventListener('click', () => {
+  pendingRecovery = undefined;
+  recovery.hidden = true;
+  autosaveStatus.textContent = '';
 });
 
-unwrapButton.addEventListener('click', async () => {
-  if (asset?.format !== 'fbx') return;
-  if (asset.uvAtlas) {
-    clearPaintPreview();
-    asset.uvAtlas.geometry.dispose();
-    asset = { ...asset, uvAtlas: undefined, textureBake: undefined, texturePaint: undefined };
-    unwrapButton.textContent = 'Generate UV atlas';
-    rebakeButton.textContent = 'Rebake textures';
-    rebakeButton.disabled = true;
+async function applyWorking(work: Workspace, revision: number, state: WorkingState, commit: () => void, signal?: AbortSignal) {
+  work.document.assertRevision(revision);
+  signal?.throwIfAborted();
+  const previous = work.document.state;
+  const visualChange = state.atlas !== previous.atlas || state.bake !== previous.bake || state.paint !== previous.paint;
+  let appearance: Appearance | undefined;
+  try {
+    const model = work.adapter.materialize(state);
+    if (visualChange) appearance = await prepareAppearance(model);
+    signal?.throwIfAborted();
+    if (current !== work) throw new Error('The active project changed during the operation.');
+    work.document.assertRevision(revision);
+    commit();
+    work.model = model;
+  } catch (error) {
+    if (appearance) disposeAppearance(appearance);
+    work.model = work.adapter.materialize(previous);
+    throw error;
+  }
+  if (visualChange) viewer.replaceAppearance(appearance);
+  work.adapter.applyVisibility(state);
+  renderObjects();
+  scheduleAutosave();
+}
+
+async function edit(work: Workspace, revision: number, state: WorkingState, label: string, resource: string, signal?: AbortSignal) {
+  await applyWorking(work, revision, state, () => {
+    work.document.execute({ id: crypto.randomUUID(), label, baseRevision: revision, affectedResources: [resource], state });
+  }, signal);
+}
+
+cancel.addEventListener('click', () => { abort?.abort(); controls(); });
+
+unwrap.addEventListener('click', () => void locked(async signal => {
+  const work = current!;
+  const { model, document } = work;
+  if (model.format !== 'fbx') return;
+  const { state, revision } = document;
+  if (state.atlas) {
+    if (state.paint && !window.confirm('Discard this atlas, its baked maps and paint? Undo can restore them.')) {
+      status.textContent = 'Kept the current atlas and paint.';
+      return;
+    }
+    await edit(work, revision, { objects: state.objects }, 'Discard UV atlas', 'geometry', signal);
     status.textContent = 'Restored the source UV channels.';
-    paintControls();
-    renderPreview();
     return;
   }
-  sources.disabled = exportButton.disabled = unwrapButton.disabled = rebakeButton.disabled = true;
-  paintControls(true);
-  status.textContent = 'Generating UV atlas…';
-  try {
-    asset = await unwrapAsset(asset);
-    const atlas = asset.uvAtlas!.metrics;
-    status.textContent = `Generated ${atlas.charts} charts at ${atlas.width}×${atlas.height} in UV1. Export writes triangles. Existing textures still use UV0.`;
-    unwrapButton.textContent = 'Discard UV atlas';
-  } catch (error) {
-    status.textContent = error instanceof Error ? error.message : String(error);
-  } finally {
-    sources.disabled = exportButton.disabled = unwrapButton.disabled = false;
-    rebakeButton.disabled = !asset.uvAtlas;
-    paintControls();
-  }
-});
+  const result = await unwrapAsset(model, signal);
+  const atlas = result.uvAtlas!;
+  const target = captureAtlas(atlas);
+  atlas.geometry.dispose();
+  await edit(work, revision, { ...state, atlas: target }, 'Generate UV atlas', 'geometry', signal);
+  status.textContent = `Generated ${target.metrics.charts} charts at ${target.metrics.width}×${target.metrics.height} in UV1. Export writes triangles. Existing textures still use UV0.`;
+}, 'Generating UV atlas…', true));
 
-rebakeButton.addEventListener('click', async () => {
-  if (asset?.format !== 'fbx' || !asset.uvAtlas) return;
-  if (asset.textureBake) {
-    clearPaintPreview();
-    asset = { ...asset, textureBake: undefined, texturePaint: undefined };
-    rebakeButton.textContent = 'Rebake textures';
+rebake.addEventListener('click', () => void locked(async signal => {
+  const work = current!;
+  const { model, document } = work;
+  if (model.format !== 'fbx') return;
+  const { state, revision } = document;
+  if (state.bake) {
+    if (state.paint && !window.confirm('Discard the baked maps and paint? Undo can restore them.')) {
+      status.textContent = 'Kept the current baked maps and paint.';
+      return;
+    }
+    await edit(work, revision, { ...state, bake: undefined, paint: undefined }, 'Discard texture bake', 'textures', signal);
     status.textContent = 'Restored the UV atlas with the original maps on UV0.';
-    paintControls();
-    renderPreview();
     return;
   }
-  sources.disabled = exportButton.disabled = unwrapButton.disabled = rebakeButton.disabled = true;
-  paintControls(true);
-  status.textContent = 'Rebaking the original textures from UV0 to UV1…';
-  try {
-    const baked = await rebakeAsset(asset);
-    await previewTexture(baked);
-    asset = baked;
-    renderPreview();
-    const bake = baked.textureBake!;
-    status.textContent = `Rebaked ${bake.maps.length} maps from UV0 to UV1 at ${bake.width}×${bake.height}. FBX export makes the atlas primary for Unity.`;
-    rebakeButton.textContent = 'Discard texture bake';
-  } catch (error) {
-    status.textContent = error instanceof Error ? error.message : String(error);
-  } finally {
-    sources.disabled = exportButton.disabled = unwrapButton.disabled = rebakeButton.disabled = false;
-    paintControls();
+  const result = await rebakeAsset(model, signal), bake = result.textureBake!;
+  await edit(work, revision, { ...state, bake }, 'Rebake textures', 'textures', signal);
+  status.textContent = `Rebaked ${bake.maps.length} maps from UV0 to UV1 at ${bake.width}×${bake.height}. FBX export makes the atlas primary for Unity.`;
+}, 'Rebaking the original textures from UV0 to UV1…', true));
+
+function navigate(direction: 'undo' | 'redo') {
+  const work = current;
+  const target = direction === 'undo' ? work?.document.undoTarget : work?.document.redoTarget;
+  if (!work || !target) return;
+  void locked(async () => {
+    await applyWorking(work, work.document.revision, target.state, () => work.document.navigate(direction));
+    if (direction === 'undo' && target.label === 'Brush stroke') status.textContent = 'Undid the last stroke.';
+    else status.textContent = `${direction === 'undo' ? 'Undid' : 'Redid'} ${target.label}.`;
+  });
+}
+undo.addEventListener('click', () => navigate('undo'));
+redo.addEventListener('click', () => navigate('redo'));
+
+function changeObject(label: string, update: (state: { name: string; visible: boolean }) => { name: string; visible: boolean }) {
+  const work = current, id = selected;
+  const entry = work?.document.scene.find(object => object.id === id);
+  if (!work || !entry) return;
+  void locked(async () => {
+    const { state, revision } = work.document;
+    const before = state.objects[id] ?? entry, after = update(before);
+    if (after.name === before.name && after.visible === before.visible) return;
+    await edit(work, revision, { ...state, objects: { ...state.objects, [id]: after } }, label, id);
+    status.textContent = `${label} applied.`;
+  });
+}
+objects.addEventListener('change', () => selectObject(objects.value));
+rename.addEventListener('click', () => changeObject('Object label', state => ({ ...state, name: objectLabel.value.trim() || state.name })));
+visibility.addEventListener('click', () => changeObject('Object visibility', state => ({ name: state.name, visible: !state.visible })));
+
+function frame(selection = false) {
+  const direction = [new Vector3(.6, .45, 1), new Vector3(0, 0, 1), new Vector3(0, 0, -1), new Vector3(-1, 0, 0),
+    new Vector3(1, 0, 0), new Vector3(0, 1, .00001), new Vector3(0, -1, .00001)][viewDirection.selectedIndex];
+  viewer.frame(selection ? current?.adapter.objects.get(selected) : undefined, projection.selectedIndex === 1, direction);
+}
+projection.addEventListener('change', () => frame());
+viewDirection.addEventListener('change', () => frame());
+element('frame-all').addEventListener('click', () => frame());
+frameSelection.addEventListener('click', () => frame(true));
+
+window.addEventListener('keydown', event => {
+  if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement || busy || stroke) return;
+  if (event.key.toLowerCase() === 'f' && !event.ctrlKey && !event.metaKey) frame(!!selected);
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
+    event.preventDefault();
+    navigate(event.shiftKey ? 'redo' : 'undo');
   }
 });
 
 paintButton.addEventListener('click', () => {
-  paintEnabled = !paintEnabled;
-  stroke = undefined;
-  paintControls();
-  status.textContent = paintEnabled ? `Drag on the model to paint Base Color. Brush diameter ${brushRadius * 2} viewport pixels.` : '3D brush is off.';
+  painting = !painting;
+  controls();
+  status.textContent = painting ? `Drag on the model to paint Base Color. Brush diameter ${brushRadius * 2} viewport pixels.` : '3D brush is off.';
 });
 
 function pointerPoint(event: PointerEvent): [number, number] {
@@ -286,86 +500,53 @@ function pointerPoint(event: PointerEvent): [number, number] {
   return [(event.clientX - bounds.left) * canvas.width / bounds.width, (event.clientY - bounds.top) * canvas.height / bounds.height];
 }
 
-canvas.addEventListener('pointerdown', (event) => {
-  if (!paintEnabled || paintButton.disabled || stroke || event.button !== 0) return;
+canvas.addEventListener('pointerdown', event => {
+  if (event.button !== 0 || busy || stroke || !current) return;
+  if (!painting) {
+    picking = { pointer: event.pointerId, x: event.clientX, y: event.clientY };
+    return;
+  }
+  if (paintButton.disabled) return;
   canvas.setPointerCapture(event.pointerId);
   stroke = { pointer: event.pointerId, points: [pointerPoint(event)] };
+  controls();
   event.preventDefault();
 });
-canvas.addEventListener('pointermove', (event) => {
-  if (stroke?.pointer !== event.pointerId) return;
-  stroke.points.push(pointerPoint(event));
+
+canvas.addEventListener('pointermove', event => {
+  if (stroke?.pointer === event.pointerId) stroke.points.push(pointerPoint(event));
+  if (picking?.pointer === event.pointerId && Math.hypot(event.clientX - picking.x, event.clientY - picking.y) > 4) picking = undefined;
 });
-canvas.addEventListener('pointercancel', (event) => {
-  if (stroke?.pointer === event.pointerId) stroke = undefined;
+
+canvas.addEventListener('pointercancel', () => {
+  stroke = picking = undefined;
+  controls();
+  resumeAutosave();
 });
-canvas.addEventListener('pointerup', async (event) => {
+
+canvas.addEventListener('pointerup', event => {
+  const work = current, camera = viewer.camera;
+  if (!work) return;
+  if (picking?.pointer === event.pointerId) {
+    picking = undefined;
+    const list = [...work.adapter.objects].filter((pair): pair is [string, Mesh] => pair[1] instanceof Mesh);
+    const model = viewer.pick(event, list.map(([, mesh]) => mesh));
+    selectObject(list.find(([, mesh]) => mesh === model)?.[0] ?? '');
+  }
   if (stroke?.pointer !== event.pointerId) return;
-  const { points } = stroke;
+  const points = stroke.points;
   stroke = undefined;
-  if (asset?.format !== 'fbx' || !camera || paintButton.disabled) return;
+  if (work.model.format !== 'fbx' || !camera) { controls(); resumeAutosave(); return; }
+  const model = work.model;
   points.push(pointerPoint(event));
-  const snapshot = asset;
-  setStrokeBusy(true);
-  status.textContent = 'Projecting the stroke onto visible faces…';
-  try {
-    const paint = await paintStroke(snapshot, camera, canvas.width, canvas.height, points, paintColor.value);
-    if (paint) {
-      await previewTexture(snapshot, paint);
-      history.push(snapshot.texturePaint);
-      asset = { ...snapshot, texturePaint: paint };
-      renderPreview();
-      status.textContent = `Painted ${paint.lastStrokeTexels.toLocaleString()} Base Color texels.`;
-    } else status.textContent = 'The stroke missed the visible model.';
-  } catch (error) {
-    status.textContent = error instanceof Error ? error.message : String(error);
-  } finally {
-    setStrokeBusy(false);
-  }
+  void locked(async signal => {
+    const { state, revision } = work.document;
+    const paint = await paintStroke(model, camera, canvas.width, canvas.height, points, paintColor.value, signal);
+    if (!paint) { status.textContent = 'The stroke missed the visible model.'; return; }
+    await edit(work, revision, { ...state, paint }, 'Brush stroke', 'BaseColor', signal);
+    status.textContent = `Painted ${paint.lastStrokeTexels.toLocaleString()} Base Color texels.`;
+  }, 'Projecting the stroke onto visible faces…', true);
 });
 
-undoStroke.addEventListener('click', async () => {
-  if (asset?.format !== 'fbx' || !history.length) return;
-  stroke = undefined;
-  const previous = history.at(-1);
-  setStrokeBusy(true);
-  try {
-    await previewTexture(asset, previous);
-    asset = { ...asset, texturePaint: previous };
-    history.pop();
-    renderPreview();
-    status.textContent = 'Undid the last stroke.';
-  } catch (error) {
-    status.textContent = error instanceof Error ? error.message : String(error);
-  } finally {
-    setStrokeBusy(false);
-  }
-});
-
-function setStrokeBusy(working: boolean) {
-  sources.disabled = exportButton.disabled = unwrapButton.disabled = rebakeButton.disabled = working;
-  paintControls(working);
-}
-
-function releasePreview(model: ImportedAsset['scene']): void {
-  model.removeFromParent();
-  const textures = new Set<Texture>();
-  const bitmaps = new Set<ImageBitmap>();
-  model.traverse(object => {
-    if (!(object instanceof Mesh)) return;
-    object.geometry.dispose();
-    if (object instanceof SkinnedMesh) object.skeleton.dispose();
-    const materials = Array.isArray(object.material) ? object.material : [object.material];
-    for (const material of materials) {
-      for (const property of Object.values(material)) {
-        if (property instanceof Texture) textures.add(property);
-      }
-      material.dispose();
-    }
-  });
-  for (const texture of textures) {
-    if (texture.image instanceof ImageBitmap) bitmaps.add(texture.image);
-    texture.dispose();
-  }
-  for (const bitmap of bitmaps) bitmap.close();
-}
+controls();
+void offerRecovery();

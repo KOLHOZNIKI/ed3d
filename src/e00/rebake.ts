@@ -2,7 +2,8 @@ import { BufferAttribute, ClampToEdgeWrapping, Matrix3, Mesh, MeshPhongMaterial,
   MirroredRepeatWrapping, RepeatWrapping, SkinnedMesh, type Texture, type Wrapping } from 'three';
 import { decode } from 'fast-png';
 import type { ImportedAsset } from './round-trip';
-import type { BakeInput, BakeMap, BakeOutput } from './rebake-worker';
+import type { BakeInput, BakeMap } from './rebake-worker';
+import { finishWorker } from '../project/worker';
 import { bakeScale, chartPadding } from './atlas-raster';
 import { renderControlPoints, sourceMesh } from './fbx-topology';
 import { faceComponents } from './topology-components';
@@ -19,7 +20,8 @@ export interface TextureBake {
   projection?: { sourceName: string; misses: number; maxDistance: number; eligibleSources: number[][] };
 }
 
-export async function rebakeAsset(asset: ImportedAsset): Promise<ImportedAsset> {
+export async function rebakeAsset(asset: ImportedAsset, signal?: AbortSignal): Promise<ImportedAsset> {
+  signal?.throwIfAborted();
   const atlas = asset.uvAtlas;
   const mesh = asset.scene.getObjectByProperty('isMesh', true);
   if (!atlas || !(mesh instanceof Mesh) || atlas.inputGeometry !== mesh.geometry || asset.textureBake) {
@@ -50,7 +52,7 @@ export async function rebakeAsset(asset: ImportedAsset): Promise<ImportedAsset> 
   const output = await bakeInWorker({
     ...bakeTarget(atlas), position: Float32Array.from(position.array), normals: Float32Array.from(normals.array),
     sourceUv: Float32Array.from(uv.array), maps,
-  });
+  }, signal);
   return { ...asset, textureBake: output };
 }
 
@@ -166,21 +168,10 @@ async function readPixels(bytes: Uint8Array<ArrayBuffer>) {
   }
 }
 
-async function bakeInWorker(input: BakeInput): Promise<TextureBake> {
+async function bakeInWorker(input: BakeInput, signal?: AbortSignal): Promise<TextureBake> {
   const worker = new Worker(new URL('./rebake-worker.ts', import.meta.url), { type: 'module' });
-  try {
-    return await new Promise<TextureBake>((resolve, reject) => {
-      worker.onmessage = ({ data }: MessageEvent<BakeOutput | { error: string }>) => {
-        if ('error' in data) reject(new Error(data.error));
-        else resolve(data);
-      };
-      worker.onerror = event => reject(new Error(event.message || 'Could not run the rebake worker.'));
-      const projection = input.projection;
-      worker.postMessage(input, [input.position.buffer, input.normals.buffer, input.sourceUv.buffer, input.targetUv.buffer,
-        ...input.maps.map(map => map.pixels.buffer), ...(projection ? [projection.sourcePosition.buffer,
-          projection.sourceComponents.buffer, projection.targetComponents.buffer] : [])]);
-    });
-  } finally {
-    worker.terminate();
-  }
+  const projection = input.projection;
+  return finishWorker(worker, input, [input.position.buffer, input.normals.buffer, input.sourceUv.buffer, input.targetUv.buffer,
+    ...input.maps.map(map => map.pixels.buffer), ...(projection ? [projection.sourcePosition.buffer,
+      projection.sourceComponents.buffer, projection.targetComponents.buffer] : [])], signal);
 }

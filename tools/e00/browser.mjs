@@ -42,6 +42,7 @@ try {
   });
   try {
     const page = await browser.newPage();
+    page.on('dialog', dialog => dialog.accept());
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     const outsideRequests = [];
@@ -236,9 +237,11 @@ try {
             paintedExport = await checkSeamStroke(page, bakedExport, exportButton, status);
           }
           await page.getByRole('button', { name: 'Discard texture bake' }).click();
+          await page.waitForFunction(() => !document.querySelector('#sources').disabled);
           assert.match(await status.textContent(), /original maps on UV0/);
         }
         await unwrapButton.click();
+        await page.waitForFunction(() => !document.querySelector('#sources').disabled);
         assert.equal(await unwrapButton.textContent(), 'Generate UV atlas');
         await input.setInputFiles(paintedExport ?? bakedExport ?? exported);
         await page.waitForFunction(() => !document.querySelector('#sources').disabled);
@@ -539,6 +542,7 @@ async function checkSeamStroke(page, bakedExport, exportButton, status) {
   await canvas.scrollIntoViewIfNeeded();
   const start = path.samples[0], end = path.samples.at(-1);
   const draw = async () => {
+    await canvas.scrollIntoViewIfNeeded();
     const box = await canvas.boundingBox();
     await page.mouse.move(box.x + start.x * box.width / path.width, box.y + start.y * box.height / path.height);
     await page.mouse.down();
@@ -549,7 +553,7 @@ async function checkSeamStroke(page, bakedExport, exportButton, status) {
   };
   await page.locator('#paint').click();
   await draw();
-  await page.getByRole('button', { name: 'Undo stroke' }).click();
+  await page.locator('#undo-stroke').click();
   await page.waitForFunction(() => !document.querySelector('#paint').disabled);
   assert.equal(await status.textContent(), 'Undid the last stroke.');
   const [undone] = await Promise.all([page.waitForEvent('download'), exportButton.click()]);

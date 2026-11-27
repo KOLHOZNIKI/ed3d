@@ -18,6 +18,7 @@ try {
   chrome = await chromium.launch({ ...(executablePath ? { executablePath } : { channel: 'chrome' }),
     args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
   const page = await chrome.newPage(), errors = [], external = [];
+  page.on('dialog', dialog => dialog.accept());
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => {
     const url = new URL(request.url());

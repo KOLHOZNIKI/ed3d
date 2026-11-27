@@ -8,7 +8,13 @@ const totalLimit = 256 * MiB;
 export type Files = Map<string, Uint8Array<ArrayBuffer>>;
 
 export async function unpack(bytes: Uint8Array): Promise<Files> {
-  if (bytes.byteLength > inputLimit) throw new Error('ZIP exceeds the 160 MiB input limit.');
+  return readPackage(bytes, { input: inputLimit, entry: entryLimit, total: totalLimit, entries: 256 },
+    (path, size) => /\.(fbx|png|jpe?g)$/i.test(path) || (path === 'manifest.json' && size <= 64 * 1024));
+}
+
+export async function readPackage(bytes: Uint8Array, limits: { input: number; entry: number; total: number; entries: number },
+  accepts: (path: string, size: number) => boolean): Promise<Files> {
+  if (bytes.byteLength > limits.input) throw new Error(`ZIP exceeds the ${limits.input / MiB} MiB input limit.`);
   let total = 0;
   const paths = new Set<string>();
   const accepted = new Map<string, number>();
@@ -22,10 +28,10 @@ export async function unpack(bytes: Uint8Array): Promise<Files> {
     if (paths.has(key)) throw new Error(`Duplicate ZIP path: ${name}`);
     paths.add(key);
     total += originalSize;
-    if (paths.size > 256 || !Number.isSafeInteger(originalSize) || originalSize < 0 || originalSize > entryLimit || total > totalLimit) {
+    if (paths.size > limits.entries || !Number.isSafeInteger(originalSize) || originalSize < 0 || originalSize > limits.entry || total > limits.total) {
       throw new Error('ZIP exceeds the file count or expanded size limit.');
     }
-    if (!normalized.endsWith('/') && (/\.(fbx|png|jpe?g)$/i.test(path) || (path === 'manifest.json' && originalSize <= 64 * 1024))) {
+    if (!normalized.endsWith('/') && accepts(path, originalSize)) {
       if ((compression === 0 && size !== originalSize) || size > bytes.byteLength) throw new Error(`Invalid ZIP entry size: ${name}`);
       accepted.set(name, originalSize);
     }

@@ -3,6 +3,7 @@ import { renderControlPoints, sourceMesh, type FbxSourceMesh } from './fbx-topol
 import { faceComponents } from './topology-components';
 import type { ImportedAsset } from './round-trip';
 import type { AtlasInput, AtlasOutput } from './xatlas-worker';
+import { finishWorker } from '../project/worker';
 
 export interface UvAtlasEdit {
   inputGeometry: BufferGeometry;
@@ -16,7 +17,8 @@ export interface UvAtlasEdit {
   };
 }
 
-export async function unwrapAsset(asset: ImportedAsset): Promise<ImportedAsset> {
+export async function unwrapAsset(asset: ImportedAsset, signal?: AbortSignal): Promise<ImportedAsset> {
+  signal?.throwIfAborted();
   const mesh = asset.scene.getObjectByProperty('isMesh', true);
   if (!(mesh instanceof Mesh) || asset.stats.meshes !== 1 || asset.positionEdit || asset.uvAtlas || asset.repairPatch) {
     throw new Error('The E00 atlas probe requires one unedited FBX mesh.');
@@ -33,24 +35,13 @@ export async function unwrapAsset(asset: ImportedAsset): Promise<ImportedAsset> 
   for (const group of geometry.groups) {
     faceMaterialData.fill(group.materialIndex ?? 0, group.start / 3, (group.start + group.count) / 3);
   }
-  const atlas = await generateAtlas({ positions, indices: controlPoints.slice(), faceMaterialData });
+  const atlas = await generateAtlas({ positions, indices: controlPoints.slice(), faceMaterialData }, signal);
   return { ...asset, uvAtlas: remap(geometry, source, controlPoints, atlas) };
 }
 
-async function generateAtlas(input: AtlasInput): Promise<AtlasOutput> {
+async function generateAtlas(input: AtlasInput, signal?: AbortSignal): Promise<AtlasOutput> {
   const worker = new Worker(new URL('./xatlas-worker.ts', import.meta.url), { type: 'module' });
-  try {
-    return await new Promise<AtlasOutput>((resolve, reject) => {
-      worker.onmessage = ({ data }: MessageEvent<AtlasOutput | { error: string }>) => {
-        if ('error' in data) reject(new Error(data.error));
-        else resolve(data);
-      };
-      worker.onerror = event => reject(new Error(event.message || 'Could not run the xatlas worker.'));
-      worker.postMessage(input, [input.positions.buffer, input.indices.buffer, input.faceMaterialData.buffer]);
-    });
-  } finally {
-    worker.terminate();
-  }
+  return finishWorker(worker, input, [input.positions.buffer, input.indices.buffer, input.faceMaterialData.buffer], signal);
 }
 
 function remap(input: BufferGeometry, source: FbxSourceMesh, controlPoints: Uint32Array, atlas: AtlasOutput): UvAtlasEdit {

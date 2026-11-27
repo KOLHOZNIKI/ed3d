@@ -1,6 +1,7 @@
 import { FrontSide, Matrix4, Mesh, MeshLambertMaterial, MeshPhongMaterial, SkinnedMesh, Vector4, type Camera } from 'three';
 import type { PaintInput, StrokeResult } from './paint-worker';
 import type { ImportedAsset } from './round-trip';
+import { finishWorker } from '../project/worker';
 
 export interface TexturePaint {
   png: Uint8Array<ArrayBuffer>;
@@ -13,13 +14,15 @@ export const brushRadius = 12;
 export function paintableMesh(asset: ImportedAsset) {
   const mesh = asset.scene.getObjectByProperty('isMesh', true);
   const material = mesh instanceof Mesh ? mesh.material : null;
+  for (let object = mesh; object; object = object.parent ?? undefined) if (!object.visible) return;
   if (asset.textureBake?.maps.length === 1 && asset.uvAtlas && mesh instanceof Mesh && !(mesh instanceof SkinnedMesh)
       && (material instanceof MeshPhongMaterial || material instanceof MeshLambertMaterial)
       && !material.transparent && material.alphaTest === 0 && material.side === FrontSide) return mesh;
 }
 
 export async function paintStroke(asset: ImportedAsset, camera: Camera, screenWidth: number, screenHeight: number,
-  points: PaintInput['points'], color: string): Promise<TexturePaint | undefined> {
+  points: PaintInput['points'], color: string, signal?: AbortSignal): Promise<TexturePaint | undefined> {
+  signal?.throwIfAborted();
   const mesh = paintableMesh(asset);
   const atlas = asset.uvAtlas;
   const bake = asset.textureBake;
@@ -45,17 +48,6 @@ export async function paintStroke(asset: ImportedAsset, camera: Camera, screenWi
     winding: Math.sign(mesh.matrixWorld.determinant()), points, color, radius: brushRadius, padding: bake.padding,
   };
   const worker = new Worker(new URL('./paint-worker.ts', import.meta.url), { type: 'module' });
-  try {
-    const result = await new Promise<StrokeResult>((resolve, reject) => {
-      worker.onmessage = ({ data }: MessageEvent<StrokeResult | { error: string }>) => {
-        if ('error' in data) reject(new Error(data.error));
-        else resolve(data);
-      };
-      worker.onerror = event => reject(new Error(event.message || 'Could not run the 3D brush worker.'));
-      worker.postMessage(input, [png.buffer, clip.buffer, targetUv.buffer, components.buffer]);
-    });
-    if (result.texels) return { png: result.png, strokes: (asset.texturePaint?.strokes ?? 0) + 1, lastStrokeTexels: result.texels };
-  } finally {
-    worker.terminate();
-  }
+  const result = await finishWorker<StrokeResult>(worker, input, [png.buffer, clip.buffer, targetUv.buffer, components.buffer], signal);
+  if (result.texels) return { png: result.png, strokes: (asset.texturePaint?.strokes ?? 0) + 1, lastStrokeTexels: result.texels };
 }

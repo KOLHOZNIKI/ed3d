@@ -57,11 +57,13 @@ export async function runHistory({ page, measure, snapshot, capture, strokeCount
   };
 
   await checkpoint('paint', 0);
+  const initialHistory = (await page.locator('#history-status').textContent())?.match(/Undo available: (\d+)/)?.[1];
   await paint.click();
-  const box = await canvas.boundingBox();
-  assert.ok(box);
   for (let index = 0; index < strokeCount; index++) {
     await color.fill(palette[index % palette.length]);
+    await canvas.scrollIntoViewIfNeeded();
+    const box = await canvas.boundingBox();
+    assert.ok(box);
     const x = box.x + (0.42 + 0.028 * (index % 6)) * box.width;
     const y = box.y + (0.39 + 0.026 * Math.floor(index / 6)) * box.height;
     await page.mouse.move(x, y);
@@ -85,6 +87,8 @@ export async function runHistory({ page, measure, snapshot, capture, strokeCount
     });
     if (depth % checkpointInterval === 0) manifest = await checkpoint('undo', depth);
   }
-  assert.ok(await undo.isDisabled());
+  if (initialHistory !== undefined) {
+    assert.equal((await page.locator('#history-status').textContent()).match(/Undo available: (\d+)/)?.[1], initialHistory);
+  } else assert.ok(await undo.isDisabled());
   return { checkpoints, paintedTexels, manifest, editedPath: join(directory, `${label}-paint-${String(strokeCount).padStart(2, '0')}.zip`) };
 }
