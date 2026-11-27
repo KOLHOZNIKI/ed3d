@@ -11,7 +11,7 @@
 | Animation | Read and write supported skeletal takes, including source timing. Rest edits require review of affected clips. Supported clips can be adapted or explicitly excluded. Published diagnostic motions use sampled keys. | Supported skeletal tracks and published diagnostic clips are written. Both the working timeline and export honor the active compatibility decisions. |
 | Unsupported entities | The writer blocks FBX morph export. **Export Original** retains the source bytes. Non-profile axes and vendor-specific FBX entities require a supported conversion. Unity avatar configuration belongs to the Unity import settings. | Meshopt decoding is bundled for the tested Meshy profile. Export writes regular GLB buffers. Draco, KTX2, additional joint sets and unlisted extensions are refused. Use the source tool to produce a supported GLB where needed. |
 
-The local module accepts one scene or one FBX model per import. Standalone and batch exports target independent static objects created in **Extract**. Project labels and viewport visibility remain editor state. Export uses the source object hierarchy and its original visibility. Resource scope, known conversions, and original SHA-256 hashes appear in the compatibility reports.
+The local module accepts one scene or one FBX model per import. **Export selection** includes selected meshes or groups, required ancestor transforms, referenced skin joints and surviving animation tracks. Standalone and batch exports target independent static objects created in **Extract**. Project labels and viewport visibility remain editor state. Whole-scene export retains source visibility. Resource scope, known conversions, and original SHA-256 hashes appear in the compatibility reports.
 
 ## Project archives
 
@@ -28,15 +28,18 @@ The local module accepts one scene or one FBX model per import. Standalone and b
 | 10 | Weight influence locks, together with replayable weight edits. |
 | 11 | Humanoid role mapping, calibration, offsets, and published clip recipes. |
 | 12 | Relative original paths and local FBX material-map assignments. |
+| 13 | Object transform overrides and editable scalar texture bindings. |
 
-The reader accepts schemas 1 through 12. Older archives without texture assignments continue to use the local path and unique basename resolver. The next save writes schema 12. A future schema is refused before replacing the open project. Reopen uses the archived originals and working state, requires no Tripo or Meshy connection, and starts a new Undo history.
+The reader accepts schemas 1 through 13. Older archives without texture assignments continue to use the local path and unique basename resolver. Saves use schema 13 for data that uses its new fields and schema 12 for earlier document features. A future schema is refused before replacing the open project. Reopen uses the archived originals and working state, requires no Tripo or Meshy connection, and starts a new Undo history.
 
 ## Resource and engine limits
 
 - Model inputs have a 160 MiB aggregate limit. FBX ZIP entries are capped at 128 MiB each and 256 MiB expanded overall, with at most 256 entries. Projects have a 512 MiB limit. Invalid or duplicate archive paths are refused.
-- Texture editing supports maps through 4096 × 4096. The direct UV tool can bake through 4096 × 4096. Spatial projection is capped at 2048 × 2048.
+- Import checks texture headers before decoding. The limits are 8192 × 8192 pixels per image and 512 MiB of estimated RGBA storage across the linked or embedded maps. The 2D editor and direct UV bake support maps through 4096 × 4096. Spatial projection is capped at 2048 × 2048.
+- GLB numeric editing uses R for AO, G for Roughness and B for Metallic. The packed Roughness/Metallic image keeps its two independent channels. If an input image also supplies AO, editing can produce a separate image for that binding. Alpha editing works on the Base Color image and preserves the material's existing alpha mode. Recognized separate Tripo Roughness and Metallic maps are exported for assignment to the Unity material.
+- Object transforms accept static meshes and groups. Transform tracks, skinned objects and joint hierarchies remain in the rig workflow. A scale or rotation that would require a sheared local transform is refused before commit.
 - The diagnostic texture estimate counts four bytes per decoded texel. Mipmaps, source snapshots, Undo, GPU copies and worker buffers add to peak use.
 - The mesh scan highlights a sample for each finding. Coincident points, open borders, out-of-range UVs and mirrored winding can be intentional. The coarse UV overlap scan is advisory. Bake performs its own coverage checks. The optional self-intersection scan applies a comparison budget.
 - Unity 2022.3.62f2 and 6000.3.9f1 are the tested FBX importers. GLB uses an independent glTF reader and the Khronos validator. See the acceptance report for the test settings and measured limits.
 
-[Full acceptance and references](E12_Report.md) · [Technical specification](AssetFixer_Technical_Specification_v1.0.md)
+[V1 closure verification](V1_Report.md) · [E12 acceptance and references](E12_Report.md) · [Technical specification](AssetFixer_Technical_Specification_v1.0.md)

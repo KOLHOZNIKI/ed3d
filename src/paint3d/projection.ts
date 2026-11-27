@@ -13,6 +13,7 @@ export interface Face {
   readonly edges: Triple<readonly Link[]>;
   readonly island: string;
   readonly source: string;
+  readonly stable?: string;
   readonly material: string;
   readonly orientation: number;
   readonly side: number;

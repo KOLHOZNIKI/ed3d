@@ -10,6 +10,7 @@ export interface BrushSettings {
   square: boolean;
   color: Rgba;
   alpha: boolean;
+  channel?: 0 | 1 | 2 | 'rgb';
   region?: Region;
   sourceOffset?: Point;
 }
@@ -113,7 +114,7 @@ export class TextureStroke {
 
   #write(x: number, y: number, strength: number, changed: Set<number>) {
     if (strength <= 0) return;
-    const { sourceOffset, alpha, color } = this.settings;
+    const { sourceOffset, alpha, channel: scalar, color } = this.settings;
     let replacement = color;
     if (sourceOffset) {
       const sx = x + sourceOffset.x, sy = y + sourceOffset.y;
@@ -132,8 +133,9 @@ export class TextureStroke {
     const original = this.base.tiles[index];
     let tile = this.tiles.get(index);
     let wrote = false;
-    for (let channel = alpha ? 3 : 0; channel < (alpha ? 4 : 3); channel++) {
-      const value = Math.round(mix(original[offset + channel], replacement[channel], strength, alpha));
+    const component = typeof scalar === 'number' ? scalar : undefined;
+    for (let channel = component ?? (alpha ? 3 : 0); channel < (component === undefined ? alpha ? 4 : 3 : component + 1); channel++) {
+      const value = Math.round(mix(original[offset + channel], replacement[scalar === 'rgb' ? 0 : channel], strength, alpha || scalar !== undefined));
       if (value === (tile ?? original)[offset + channel]) continue;
       if (!tile) {
         tile = original.slice();

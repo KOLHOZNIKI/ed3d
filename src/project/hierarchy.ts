@@ -14,9 +14,9 @@ export class SceneHierarchy {
   #selected = '';
   #joint = '';
 
-  constructor(readonly select: (id: string) => void, readonly selectMap: (id: string) => void, readonly selectBone: (id: string) => void) {}
+  constructor(readonly select: (id: string, toggle: boolean) => void, readonly selectMap: (id: string) => void, readonly selectBone: (id: string) => void) {}
 
-  configure(context: SceneContext | undefined, selected: string, joint: string, locked: boolean) {
+  configure(context: SceneContext | undefined, selected: string, all: ReadonlySet<string>, joint: string, locked: boolean) {
     this.#list.inert = this.#materials.inert = this.#bones.inert = locked;
     const changed = context?.adapter !== this.#context?.adapter || context?.state !== this.#context?.state;
     if (changed) {
@@ -29,6 +29,7 @@ export class SceneHierarchy {
       this.#select(this.#list, selected);
       this.#materialList(context, selected);
     }
+    for (const button of this.#list.querySelectorAll<HTMLButtonElement>('button')) button.setAttribute('aria-pressed', String(all.has(button.dataset.id!)));
     if (changed || this.#joint !== joint) {
       this.#joint = joint;
       this.#select(this.#bones, joint);
@@ -50,7 +51,9 @@ export class SceneHierarchy {
       const state = context!.state.objects[entry.id] ?? entry;
       const level = (depth.get(entry.parent ?? '') ?? -1) + 1;
       depth.set(entry.id, level);
-      rows.push(this.#row(state.name, level, entry.mesh ? () => this.select(entry.id) : undefined, entry.id, !state.visible));
+      let hasMesh = entry.mesh;
+      if (!hasMesh) node?.traverse(child => { hasMesh ||= child instanceof Mesh; });
+      rows.push(this.#row(state.name, level, hasMesh ? event => this.select(entry.id, event.shiftKey) : undefined, entry.id, !state.visible));
     }
     this.#list.replaceChildren(...rows);
     this.#list.hidden = !rows.length;
@@ -100,7 +103,7 @@ export class SceneHierarchy {
     byId('scene-bones').hidden = !rows.length;
   }
 
-  #row(name: string, depth: number, action?: () => void, id?: string, hidden = false) {
+  #row(name: string, depth: number, action?: (event: MouseEvent) => void, id?: string, hidden = false) {
     const row = document.createElement('li');
     row.style.setProperty('--depth', String(depth));
     if (action) {

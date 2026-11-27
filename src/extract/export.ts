@@ -12,14 +12,14 @@ import { extractedReport, reportText, type ExportReport } from '../diagnostics/r
 
 const encode = new TextEncoder();
 
-function trimmedMesh(source: Mesh, format: Model['format']) {
+export function trimmedMesh(source: Mesh, format: Model['format'], extracted = true) {
   const mesh = source.clone(false);
-  if (mesh.userData.gltfExtensions?.FB_ngon_encoding) {
+  if (extracted && mesh.userData.gltfExtensions?.FB_ngon_encoding) {
     const { FB_ngon_encoding: _, ...extensions } = mesh.userData.gltfExtensions;
     mesh.userData.gltfExtensions = extensions;
   }
   if (!Array.isArray(mesh.material)) return mesh;
-  const used = [...new Set(source.geometry.groups.map(group => group.materialIndex ?? 0))];
+  const used = source.geometry.groups.length ? [...new Set(source.geometry.groups.map(group => group.materialIndex ?? 0))] : [0];
   const remap = new Map(used.map((slot, i) => [slot, i]));
   const materials = source.material as Material[];
   mesh.material = used.map(slot => materials[slot]);
@@ -52,7 +52,7 @@ export async function exportExtract(model: Model, adapter: ModelAdapter, catalog
     const mesh = extracted = trimmedMesh(source, model.format);
     const pivot = source.getWorldPosition(new Vector3());
     const auxiliary: { semantic: string; file: string; colorSpace: string; channel: string; png: Uint8Array<ArrayBuffer> }[] = [];
-    for (const [slot, { bake }] of Object.entries(asset.bakes)) for (const map of bake.maps) {
+    for (const [slot, { bake }] of Object.entries(asset.bakes)) for (const map of catalog.workingBake(state, object, Number(slot), bake).maps) {
       if (map.slot === 'roughness' || map.slot === 'metallic') auxiliary.push({
         semantic: map.slot, file: `maps/material-${Number(slot) + 1}-${map.slot}.png`, colorSpace: 'linear', channel: 'uv0', png: map.png,
       });

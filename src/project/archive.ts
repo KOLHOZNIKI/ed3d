@@ -2,6 +2,7 @@ import { inputLimit, pack, readPackage, validLocalPath, type Files } from '../e0
 import { AssetDocument, defaultHistoryBudget, type ObjectOverrides, type OriginalFile, type SceneEntry, type TextureAssignments } from './document';
 import { atlasColor, type AtlasState, type ExtractedAsset, type TextureEdit, type WorkingState } from './state';
 import { decodePng, encodeImage } from '../texture/image';
+import { validatedTransform } from './object-transform';
 import { boundaryId, decodeEdit } from '../mesh/commands';
 import type { TextureBake } from '../e00/rebake';
 import { glbSlots } from '../uv/transfer';
@@ -55,9 +56,11 @@ export async function captureOriginals(files: readonly File[]): Promise<Original
   return original;
 }
 
-export async function writeProject(document: AssetDocument<WorkingState>, options?: { id: string; name: string }): Promise<Blob> {
+export async function writeProject(document: AssetDocument<WorkingState>, options?: { id: string; name: string },
+  checkpoint?: import('./document').HistoryCheckpoint<WorkingState>): Promise<Blob> {
   // Capture committed, immutable resources before the first asynchronous read.
-  const { state, scene, revision, originals, historyBudget } = document;
+  const { scene, originals } = document;
+  const { state, revision, historyBudget } = checkpoint ?? document;
   const files: Files = new Map();
   const resources: { hash: string; size: number }[] = [];
   let expanded = 0;
@@ -115,10 +118,11 @@ export async function writeProject(document: AssetDocument<WorkingState>, option
     }
     meshEdits = await retain(bytes);
   }
-  const manifest = encoder.encode(JSON.stringify({ format: 'AssetFixer', schemaVersion: 12, id: options?.id ?? document.id,
+  const schemaVersion = state.objectTransforms && Object.keys(state.objectTransforms).length || textures.some(texture => texture.key.split('/').length > 3) ? 13 : 12;
+  const manifest = encoder.encode(JSON.stringify({ format: 'AssetFixer', schemaVersion, id: options?.id ?? document.id,
     name: options?.name ?? document.name, revision, settings: { historyBudget }, scene, originals: originalRefs,
     textureAssignments: document.textureAssignments && Object.entries(document.textureAssignments),
-    resources, working: { objects: state.objects, geometry, bake, paint, textures, meshEdits, keepOpen: state.keepOpen, uvBakes, extracts,
+    resources, working: { objects: state.objects, objectTransforms: state.objectTransforms, geometry, bake, paint, textures, meshEdits, keepOpen: state.keepOpen, uvBakes, extracts,
       rig: state.rig, poses: state.poses, weightLocks: state.weightLocks, humanoid: state.humanoid } }));
   if (manifest.byteLength > MiB || expanded + manifest.byteLength > limits.total) throw new Error('The project manifest exceeds its size limit.');
   files.set('manifest.json', manifest);
@@ -136,7 +140,7 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
   const manifest = record(JSON.parse(decoder.decode(encoded)));
   if (manifest.format !== 'AssetFixer') throw new Error('This file is not an AssetFixer project.');
   const version = integer(manifest.schemaVersion, 1);
-  if (version > 12) throw new Error(`Project schema ${version} is newer than this application supports.`);
+  if (version > 13) throw new Error(`Project schema ${version} is newer than this application supports.`);
   // Version 1 had a fixed history budget. Version 2 persists the project setting.
   const historyBudget = version === 1 ? defaultHistoryBudget : integer(record(manifest.settings).historyBudget, MiB, projectLimit);
   if (historyBudget % MiB) throw new Error('Invalid project history budget.');
@@ -211,6 +215,13 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
     if (!entries.has(id)) throw new Error('The project refers to an unknown object.');
     const node = record(value);
     objects[id] = { name: text(node.name, 1024), visible: bool(node.visible) };
+  }
+  const objectTransforms: Record<string, number[]> = Object.create(null);
+  if (version >= 13 && working.objectTransforms !== undefined) for (const [id, value] of Object.entries(record(working.objectTransforms))) {
+    if (!entries.has(id)) throw new Error('A saved transform refers to an unknown object.');
+    const matrix = list(value, 16).map(finite);
+    validatedTransform(matrix);
+    objectTransforms[id] = matrix;
   }
   let keepOpen: Record<string, Record<string, boolean>> | undefined;
   if (version >= 5 && working.keepOpen !== undefined) {
@@ -328,7 +339,7 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
   const textures: Record<string, TextureEdit> = Object.create(null);
   if (version >= 3) for (const value of list(working.textures, 256)) {
     const entry = record(value), key = text(entry.key, 100);
-    if ((key !== atlasColor && !/^(slot|base)\/object-\d+\/\d+$/.test(key)) || Object.hasOwn(textures, key)) {
+    if ((key !== atlasColor && !/^(slot|base)\/object-\d+\/\d+(\/(metalRough|aoMap|roughness|metallic)(\/atlas)?)?$/.test(key)) || Object.hasOwn(textures, key)) {
       throw new Error('Invalid project texture binding ID.');
     }
     if (key === atlasColor && paint) throw new Error('The project contains two versions of the active atlas image.');
@@ -347,7 +358,8 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
   const humanoid = version >= 11 && working.humanoid !== undefined ? readHumanoid(working.humanoid) : undefined;
   return { id, name: text(manifest.name, 160), revision: integer(manifest.revision, 0, 1e12), originals, historyBudget, scene,
     textureAssignments: assignments.size ? Object.fromEntries(assignments) : undefined,
-    state: { objects, atlas, bake, paint, textures, meshEdits, keepOpen, uvBakes, extracts, rig, poses, weightLocks, humanoid } };
+    state: { objects, objectTransforms: Object.keys(objectTransforms).length ? objectTransforms : undefined,
+      atlas, bake, paint, textures, meshEdits, keepOpen, uvBakes, extracts, rig, poses, weightLocks, humanoid } };
 }
 
 function readJointId(value: unknown) {

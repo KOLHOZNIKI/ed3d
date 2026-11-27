@@ -4,6 +4,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { sceneStats } from './scene-stats';
 import { inputLimit } from './zip';
+import { textureImportBudget } from '../texture/image';
 
 const ngon = 'FB_ngon_encoding';
 const meshopt = 'EXT_meshopt_compression';
@@ -242,10 +243,20 @@ function readGlbProfile(buffer: ArrayBuffer): SourceDocument {
   const unsupported = [...(source.extensionsUsed ?? []), ...(source.extensionsRequired ?? [])]
     .find(extension => !supportedExtensions.has(extension));
   if (unsupported) throw new Error(`Unsupported GLB extension: ${unsupported}.`);
-  if (source.extensionsUsed?.includes(meshopt)) {
-    validateMeshoptBuffers(view, 20 + jsonLength, source);
-  } else if (source.buffers?.length !== 1 || source.buffers[0].uri !== undefined) {
+  const chunk = 20 + jsonLength;
+  if (!source.extensionsUsed?.includes(meshopt) && source.buffers?.length !== 1) {
     throw new Error('The GLB requires a single embedded buffer.');
+  }
+  validateBuffers(view, chunk, source);
+  const checkTexture = textureImportBudget();
+  const checkedImages = new Map<number, string>();
+  for (const image of source.images ?? []) {
+    const data = source.bufferViews?.[image.bufferView];
+    if (!data || data.buffer !== 0 || data.extensions?.[meshopt]) throw new Error('Invalid GLB image buffer view.');
+    if (checkedImages.get(image.bufferView) === image.mimeType) continue;
+    checkTexture(new Uint8Array(buffer, chunk + 8 + (data.byteOffset ?? 0), data.byteLength),
+      image.name || `GLB buffer view ${image.bufferView}`, image.mimeType);
+    checkedImages.set(image.bufferView, image.mimeType);
   }
   for (const texture of source.textures ?? []) {
     const webpSource = texture.extensions?.[webp];
@@ -262,7 +273,7 @@ function readGlbProfile(buffer: ArrayBuffer): SourceDocument {
   return source;
 }
 
-function validateMeshoptBuffers(container: DataView, chunk: number, source: SourceDocument): void {
+function validateBuffers(container: DataView, chunk: number, source: SourceDocument): void {
   const buffers = source.buffers ?? [];
   if (buffers.length < 1 || buffers.length > 2 || buffers.some(buffer => buffer.uri !== undefined ||
       !Number.isSafeInteger(buffer.byteLength) || buffer.byteLength <= 0 || buffer.byteLength > inputLimit) ||

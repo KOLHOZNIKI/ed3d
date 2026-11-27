@@ -188,7 +188,12 @@ details > summary { color: var(--muted); padding: 6px 0; font-weight: 600; }
   touch-action: none;
 }
 #viewport { width: 100%; height: 100%; }
-#paint-cursor { width: 100%; height: 100%; position: absolute; inset: 0; pointer-events: none; }
+#shortcuts-dialog { color: inherit; background: #202a35; border: 1px solid #566b81; border-radius: 8px; padding: 20px; }
+#shortcuts-dialog::backdrop { background: #101722b0; }
+#shortcut-bindings { display: grid; grid-template-columns: repeat(auto-fit, minmax(214px, 1fr)); gap: 6px 18px; width: min(540px, 75vw); }
+#shortcut-bindings label { display: grid; grid-template-columns: 1fr 104px; align-items: center; gap: 8px; }
+#shortcut-bindings input { min-width: 0; text-align: center; cursor: pointer; }
+#paint-cursor, #selection-overlay { width: 100%; height: 100%; position: absolute; inset: 0; pointer-events: none; }
 .model-view[data-compare] :is(#paint-cursor, #weights-cursor, #rig-label) { visibility: hidden; }
 #view-compare-labels {
   display: grid;

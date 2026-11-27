@@ -1,4 +1,4 @@
-import { Mesh, PropertyBinding, SkinnedMesh, Texture } from 'three';
+import { Mesh, PropertyBinding, SkinnedMesh, Texture, type Object3D } from 'three';
 import versions from '../../package.json';
 import { renderControlPoints, sourceMesh } from '../e00/fbx-topology';
 import { checkMapping } from '../humanoid/profile';
@@ -23,11 +23,11 @@ function dimensions(image: unknown) {
   return width && height ? { width, height } : undefined;
 }
 
-export function describeAsset(adapter: ModelAdapter, state: WorkingState, model: Model) {
+export function describeAsset(adapter: ModelAdapter, state: WorkingState, model: Model, selected?: ReadonlyMap<string, Object3D>) {
   const resources = new Map<Texture, { id: string; name: string; width?: number; height?: number; colorSpace: string }>();
   const materialIds = new Set<string>();
   const objects = adapter.viewEntries.flatMap(entry => {
-    const node = adapter.objects.get(entry.id);
+    const node = (selected ?? adapter.objects).get(entry.id);
     if (!(node instanceof Mesh)) return [];
     const attributes = node.geometry.attributes;
     const materials = (Array.isArray(node.material) ? node.material : [node.material]).map((material, slot) => {
@@ -104,21 +104,25 @@ export function inspectCapabilities(adapter: ModelAdapter, model: Model, state: 
   return issues;
 }
 
-export function exportReport(adapter: ModelAdapter, model: Model, document: AssetDocument<WorkingState>, issues: readonly Issue[] = []) {
-  const { state } = document, description = describeAsset(adapter, state, model);
+export function exportReport(adapter: ModelAdapter, model: Model, document: AssetDocument<WorkingState>, issues: readonly Issue[] = [],
+  selected?: ReadonlyMap<string, Object3D>) {
+  const { state } = document, description = describeAsset(adapter, state, model, selected);
   const commands: Record<string, number> = {};
   for (const bytes of state.meshEdits ?? []) { const kind = decodeEdit(bytes).type; commands[kind] = (commands[kind] ?? 0) + 1; }
   const conversions = [state.atlas && 'FBX atlas creates a new UV channel', state.bake && 'Baked atlas uses UV0 in FBX',
     document.textureAssignments && 'Missing or ambiguous FBX texture references resolved through local assignments',
+    Object.keys(state.textures ?? {}).some(key => key.split('/').length > 3) &&
+      'Edited scalar maps use lossless PNG. A source image shared across material slots may use separate output bindings.',
     Object.keys(state.uvBakes ?? {}).length && 'Working texture transfers use the recorded bake targets',
     Object.keys(state.extracts ?? {}).length && 'Extracted assets use their selected layouts and independent maps',
     state.rig && 'Working rig and clip policy applied', model.format === 'glb' && model.affineCorrections && 'GLB inverse bind affine row corrected'].filter(Boolean) as string[];
   const knownLosses = [model.format === 'fbx' && 'Vendor-specific FBX entities and PBR authoring metadata are outside the binary adapter profile.',
     model.format === 'glb' && adapter.mesh.omittedPolygonMetadata && 'Private GLB polygon metadata omitted after topology or incompatible corner changes.'].filter(Boolean) as string[];
-  const findings = [...inspectCapabilities(adapter, model, state, description), ...issues];
+  const findings = [...inspectCapabilities(adapter, model, state, description), ...issues].filter(issue =>
+    !selected || (!issue.object || selected.has(issue.object)) && (model.stats.bones || !['clip-incompatible', 'stale-diagnostic-clip'].includes(issue.code)));
   return {
     version: 1, project: { id: document.id, name: document.name, revision: document.revision },
-    target: { format: model.format, scope: 'scene' as 'scene' | 'asset' | 'batch',
+    target: { format: model.format, scope: (selected ? 'selection' : 'scene') as 'scene' | 'selection' | 'asset' | 'batch',
       profile: model.format === 'fbx' ? 'Unity FBX / external texture maps' : 'glTF 2.0 binary' },
     adapters: { three: versions.dependencies.three, fbxWriter: versions.dependencies['@comfyorg/fbx-exporter-three'],
       xatlas: versions.dependencies['xatlas-wasm'], zip: versions.dependencies.fflate },
@@ -127,8 +131,8 @@ export function exportReport(adapter: ModelAdapter, model: Model, document: Asse
     scene: description, files: [] as string[], changes: { commands, textureEdits: Object.keys(state.textures ?? {}).length },
     conversions, knownLosses, findings,
     animations: { source: adapter.rig.originalClips.map(item => item.clip.name), written: model.scene.animations.map(clip => clip.name),
-      adapted: adapter.rig.clips.filter(item => item.setting.mode === 'adapted' && item.clip).map(item => item.clip!.name),
-      published: state.humanoid?.published.map(clip => clip.name) ?? [] },
+      adapted: adapter.rig.clips.filter(item => item.setting.mode === 'adapted' && item.clip && model.scene.animations.some(clip => clip.name === item.clip!.name)).map(item => item.clip!.name),
+      published: state.humanoid?.published.filter(clip => model.scene.animations.some(item => item.name === clip.name)).map(clip => clip.name) ?? [] },
     reimportVerification: { status: 'Pending independent reimport', procedure: 'See Docs/E12_Report.md for the Unity and independent parser procedures.' },
   };
 }

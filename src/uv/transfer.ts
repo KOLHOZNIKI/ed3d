@@ -50,7 +50,9 @@ export async function transfer(adapter: ModelAdapter, model: Model, catalog: Tex
     }
   }
   const target = catalog.targets(state).find(target => target.binding.object === sourceObject && target.binding.slot === slot);
-  const currentColor = !options.original && target && state.textures?.[target.key]?.image;
+  const edited = new Map<string, TextureImage | undefined>(options.original ? [] : catalog.editTargets(state).filter(item => item.binding.object === sourceObject && item.binding.slot === slot)
+    .map(item => [item.binding.semantic ?? 'map', state.textures?.[item.key]?.image]));
+  const currentColor = edited.get('map');
   const fbxHasBakedRepairs = !options.original && model.format === 'fbx' && state.bake?.direct && model.uvAtlas;
   const pending = new Set(fbxHasBakedRepairs || projection ? [] :
     adapter.mesh.render.get(object)?.state.mesh.faces.filter(face => face.needsUv).map(face => face.id));
@@ -61,7 +63,7 @@ export async function transfer(adapter: ModelAdapter, model: Model, catalog: Tex
   const stored = !options.original ? target?.transfer : undefined;
   if (stored) {
     sourceUv = flatten(geometry, uvName(stored.channel), 2);
-    for (const entry of stored.bake.maps) maps.push(pngMap(entry, entry.slot === 'map' ? currentColor || undefined : undefined, model.format === 'glb'));
+    for (const entry of stored.bake.maps) maps.push(pngMap(entry, edited.get(entry.slot), model.format === 'glb'));
   } else if (model.format === 'fbx') {
     if (!scope && !projection && model.stats.meshes !== 1 || !(material instanceof MeshPhongMaterial || material instanceof MeshLambertMaterial)) {
       throw new Error('FBX Preserve Appearance requires a single mesh with one Phong or Lambert material.');
@@ -70,14 +72,17 @@ export async function transfer(adapter: ModelAdapter, model: Model, catalog: Tex
       sourceUv = flatten(model.uvAtlas.geometry, 'uv1', 2);
       for (const entry of state.bake.maps) {
         const bytes = entry.slot === 'map' ? state.paint?.png ?? entry.png : entry.png;
-        maps.push(pngMap({ ...entry, png: bytes }, entry.slot === 'map' ? currentColor || undefined : undefined));
+        maps.push(pngMap({ ...entry, png: bytes }, edited.get(entry.slot)));
       }
     } else {
       sourceUv = flatten(geometry, 'uv', 2);
       if ((material.transparent || material.alphaTest > 0) && !model.alphaProfile) {
         throw new Error('This transparent FBX needs an explicit alpha profile for transfer.');
       }
-      maps.push(...await originalFbxMaps(model, material, currentColor || undefined, !scope || !Array.isArray(mesh.material)));
+      for (const map of await originalFbxMaps(model, material, currentColor, !scope || !Array.isArray(mesh.material))) {
+        const image = edited.get(map.slot);
+        maps.push(image ? { ...map, width: image.width, height: image.height, pixels: rgbaBytes(image) } : map);
+      }
     }
   } else {
     for (const [slot, texture] of glbMaps(material)) {
@@ -92,7 +97,7 @@ export async function transfer(adapter: ModelAdapter, model: Model, catalog: Tex
           Math.abs(material.normalScale.x + material.normalScale.y) > 1e-6)) {
         throw new Error('The normal map requires identity sampling and a supported tangent-space scale.');
       }
-      const data = slot === 'map' && currentColor ? currentColor : await decodeImage(image.blob);
+      const data = edited.get(slot) ?? await decodeImage(image.blob);
       maps.push({ slot, source: image.name || slot, mode: encoding(slot), width: data.width, height: data.height,
         pixels: rgbaBytes(data), preserveAlpha: true, topDown: true, uv, uvTransform,
         wrapS: samplerWrap(texture.wrapS), wrapT: samplerWrap(texture.wrapT) });

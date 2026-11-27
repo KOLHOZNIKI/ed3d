@@ -3,6 +3,7 @@ import { convertIndexedToRgb, decode, encode, hasPngSignature } from 'fast-png';
 export const tileSize = 32;
 const tileBytes = tileSize * tileSize * 4;
 const limit = 4096;
+const importSideLimit = 8192;
 
 export type Rgba = readonly [number, number, number, number];
 export interface TextureImage {
@@ -17,18 +18,49 @@ function checkSize(width: number, height: number) {
   }
 }
 
+export function textureHeader(bytes: Uint8Array) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (hasPngSignature(bytes) && bytes.length >= 33 && view.getUint32(8) === 13 && view.getUint32(12) === 0x49484452) {
+    return { type: 'image/png', width: view.getUint32(16), height: view.getUint32(20) };
+  }
+  const type = bytes.length >= 12 && view.getUint32(0) === 0x52494646 && view.getUint32(8) === 0x57454250 ? 'image/webp'
+    : bytes[0] === 0xff && bytes[1] === 0xd8 ? 'image/jpeg' : undefined;
+  const size = type === 'image/webp' ? webpSize(view) : type === 'image/jpeg' ? jpegSize(view) : undefined;
+  if (type && size) return { type, width: size[0], height: size[1] };
+  if (bytes.length >= 26 && view.getUint16(0) === 0x424d) {
+    const header = view.getUint32(14, true);
+    if (header === 12) return { type: 'image/bmp', width: view.getUint16(18, true), height: view.getUint16(20, true) };
+    if (header >= 40 && header <= bytes.length - 14) {
+      return { type: 'image/bmp', width: view.getInt32(18, true), height: Math.abs(view.getInt32(22, true)) };
+    }
+  }
+  throw new Error('Invalid or unsupported encoded texture header.');
+}
+
+export function textureImportBudget() {
+  let decoded = 0;
+  return (bytes: Uint8Array, name: string, type?: string) => {
+    try {
+      const header = textureHeader(bytes);
+      if (type && header.type !== type) throw new Error(`Expected ${type}.`);
+      if (header.width < 1 || header.height < 1 || header.width > importSideLimit || header.height > importSideLimit) {
+        throw new Error(`Image must fit within ${importSideLimit} × ${importSideLimit} pixels.`);
+      }
+      decoded += header.width * header.height * 4;
+      if (decoded > 512 * 1024 * 1024) throw new Error('The asset exceeds the 512 MiB decoded texture budget.');
+    } catch (error) {
+      throw new Error(`Texture ${name}: ${(error as Error).message}`);
+    }
+  };
+}
+
 export async function decodeImage(blob: Blob, previous?: TextureImage): Promise<TextureImage> {
   if (blob.size > 96 * 1024 * 1024) throw new Error('The texture file exceeds the 96 MiB editing limit.');
   const bytes = new Uint8Array(await blob.arrayBuffer());
   if (hasPngSignature(bytes)) return decodePng(bytes, previous);
-  const view = new DataView(bytes.buffer);
-  const webp = bytes.length >= 12 && view.getUint32(0) === 0x52494646 && view.getUint32(8) === 0x57454250;
-  const jpeg = bytes[0] === 0xff && bytes[1] === 0xd8;
-  if (!webp && !jpeg) throw new Error('Choose an encoded PNG, JPEG or WebP image.');
-  const type = webp ? 'image/webp' : 'image/jpeg';
-  const size = webp ? webpSize(view) : jpegSize(view);
-  if (!size) throw new Error('The texture has an invalid image header.');
-  checkSize(...size);
+  const { type, width, height } = textureHeader(bytes);
+  if (type !== 'image/webp' && type !== 'image/jpeg') throw new Error('Choose an encoded PNG, JPEG or WebP image.');
+  checkSize(width, height);
   const image = await createImageBitmap(new Blob([bytes], { type }), { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
   try {
     checkSize(image.width, image.height);
@@ -78,9 +110,9 @@ function webpSize(view: DataView): [number, number] | undefined {
 }
 
 export function decodePng(bytes: Uint8Array, previous?: TextureImage): TextureImage {
-  if (!hasPngSignature(bytes) || bytes.length < 33) throw new Error('Invalid texture PNG.');
-  const header = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  checkSize(header.getUint32(16), header.getUint32(20));
+  const { type, width, height } = textureHeader(bytes);
+  if (type !== 'image/png') throw new Error('Invalid texture PNG.');
+  checkSize(width, height);
   const png = decode(bytes, { checkCrc: true });
   if (png.depth !== 8 && !png.palette) throw new Error('Use an 8-bit PNG or an indexed PNG for texture editing.');
   const source = png.palette ? convertIndexedToRgb(png) : png.data;
@@ -162,4 +194,26 @@ export function rgbaBytes(image: TextureImage): Uint8ClampedArray<ArrayBuffer> {
 
 export function encodeImage(image: TextureImage): Uint8Array<ArrayBuffer> {
   return new Uint8Array(encode({ width: image.width, height: image.height, channels: 4, data: rgbaBytes(image) }));
+}
+
+export function resizeImage(image: TextureImage, width: number, height: number, filter: 'nearest' | 'bilinear'): TextureImage {
+  checkSize(width, height);
+  if (width === image.width && height === image.height) return image;
+  const pixels = new Uint8ClampedArray(width * height * 4);
+  const limitTo = (x: number, size: number) => Math.max(0, Math.min(size - 1, x));
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const u = (x + .5) * image.width / width - .5, v = (y + .5) * image.height / height - .5;
+    const offset = (y * width + x) * 4;
+    if (filter === 'nearest') {
+      pixels.set(readPixel(image, limitTo(Math.round(u), image.width), limitTo(Math.round(v), image.height)), offset);
+      continue;
+    }
+    const i = Math.floor(u), j = Math.floor(v), fx = u - i, fy = v - j;
+    const left = limitTo(i, image.width), right = limitTo(i + 1, image.width);
+    const top = limitTo(j, image.height), bottom = limitTo(j + 1, image.height);
+    const a = readPixel(image, left, top), b = readPixel(image, right, top);
+    const c = readPixel(image, left, bottom), d = readPixel(image, right, bottom);
+    for (let k = 0; k < 4; k++) pixels[offset + k] = (a[k] * (1 - fx) + b[k] * fx) * (1 - fy) + (c[k] * (1 - fx) + d[k] * fx) * fy;
+  }
+  return tileImage(width, height, pixels);
 }

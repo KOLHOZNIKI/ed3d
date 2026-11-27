@@ -1,4 +1,4 @@
-import { Mesh, SkinnedMesh, Vector3 } from 'three';
+import { Mesh, SkinnedMesh, Vector3, type Object3D } from 'three';
 import { exportAsset } from './e00/round-trip';
 import { exportGlb } from './e00/glb-round-trip';
 import { unwrapAsset } from './e00/uv-atlas';
@@ -39,6 +39,11 @@ import { exportReport, extractedReport, reportText, scanAsset } from './diagnost
 import { offlineSetup } from './project/offline';
 import { WorkspaceLayout, type LayoutChoice } from './project/workspace';
 import { SceneHierarchy } from './project/hierarchy';
+import { transformObjects, validateObject, type TransformSpec } from './project/object-transform';
+import { exportSelection, selectedMeshes } from './project/export-selection';
+import { drawSelection, projectedSelection, selectionPath, SelectionArea, type PickShape } from './project/selection';
+import { paintView } from './paint3d/scene';
+import { configureShortcuts, shortcut } from './project/shortcuts';
 import { pack } from './e00/zip';
 
 function element<T extends HTMLElement>(id: string): T {
@@ -56,6 +61,7 @@ const assignmentRetry = element<HTMLButtonElement>('texture-assignment-retry');
 const assignmentCancel = element<HTMLButtonElement>('texture-assignment-cancel');
 const close = element<HTMLButtonElement>('close-model'), save = element<HTMLButtonElement>('save-project');
 const saveAs = element<HTMLButtonElement>('save-copy'), exportButton = element<HTMLButtonElement>('export');
+const exportSelected = element<HTMLButtonElement>('export-selection');
 const unwrap = element<HTMLButtonElement>('unwrap'), rebake = element<HTMLButtonElement>('rebake');
 const paintButton = element<HTMLButtonElement>('paint');
 const objectButton = element<HTMLButtonElement>('object-mode');
@@ -83,6 +89,13 @@ const viewReference = element<HTMLSelectElement>('view-reference'), viewCompare 
 const viewCapture = element<HTMLButtonElement>('view-capture');
 const frameSelection = element<HTMLButtonElement>('frame-selection');
 const frameAll = element<HTMLButtonElement>('frame-all');
+const pickShape = element<HTMLSelectElement>('view-selection-mode');
+const throughSurface = element<HTMLInputElement>('view-selection-through');
+const selectionOverlay = element<HTMLCanvasElement>('selection-overlay');
+const objectOperation = element<HTMLSelectElement>('object-operation');
+const objectAxes = element<HTMLSelectElement>('object-axes'), objectPivot = element<HTMLSelectElement>('object-pivot');
+const objectApply = element<HTMLButtonElement>('object-apply-transform'), cursorPick = element<HTMLButtonElement>('object-cursor-pick');
+const objectField = (kind: 'delta' | 'cursor', axis: string) => element<HTMLInputElement>(`object-${kind}-${axis}`);
 const historyBudget = element<HTMLInputElement>('history-budget');
 const toggleTexture = element<HTMLButtonElement>('toggle-texture');
 const viewer = new Viewer(canvas, lost => {
@@ -108,6 +121,7 @@ const sceneHierarchy = new SceneHierarchy(selectObject, id => {
 rigJoint.addEventListener('change', () => queueMicrotask(refreshHierarchy));
 element('workspace-open').addEventListener('click', () => sources.click());
 offlineSetup(element('offline-cache'), element('offline-status'));
+configureShortcuts();
 
 interface Workspace {
   adapter: ModelAdapter;
@@ -121,6 +135,8 @@ let comparisonSnapshot: ProjectData | undefined;
 let comparison: { model: Model; adapter?: ModelAdapter; appearance?: Appearance; snapshot?: ProjectData } | undefined;
 let displayMode: DisplayMode = 'textured';
 let selected = '';
+let selectedIds = new Set<string>();
+let placingCursor = false;
 let painting = false;
 let meshEditing = false;
 let repairing = false;
@@ -132,13 +148,16 @@ let diagnostic = false;
 let weightsStroke: number | undefined;
 let stroke: { pointer: number; gesture: Exclude<ReturnType<PaintTool['begin']>, string | undefined> } | undefined;
 let paintBinding = '';
+let textureBinding = '';
 let picking: { pointer: number; x: number; y: number } | undefined;
+let selecting: { pointer: number; shape: Exclude<PickShape, 'click'>; points: Point[] } | undefined;
 let busy = false;
 let abort: AbortController | undefined;
 let pendingRecovery: ProjectData | undefined;
 let autosaveTimer: number | undefined;
 let autosaveDue: number | undefined;
 let writingCheckpoint = false;
+let historyCheckpoint: { id: string; revision: number } | undefined;
 let textureGesture = false;
 let unlit = false;
 let liveId = 0;
@@ -159,20 +178,27 @@ const editor = new TextureEditor({
       const { state, revision } = work.document;
       const key = copy ? target.binding.id : target.key;
       const existing = state.textures?.[target.key]?.paint ?? state.paint;
-      const paint = target.atlas && existing ? { strokes: existing.strokes, lastStrokeTexels: existing.lastStrokeTexels } : undefined;
-      await edit(work, revision, { ...state, paint: target.atlas ? undefined : state.paint,
+      const paint = target.atlas && !target.binding.semantic && existing && existing.lastStrokeTexels <= image.width * image.height
+        ? { strokes: existing.strokes, lastStrokeTexels: existing.lastStrokeTexels } : undefined;
+      await edit(work, revision, { ...state, paint: target.atlas && !target.binding.semantic ? undefined : state.paint,
         textures: { ...state.textures, [key]: { image, paint } } }, label, key);
     });
     if (!ok) throw new Error(status.textContent || 'The image edit was not committed.');
   },
   export(target, image) {
     void locked(async () => {
-      const file = `${current!.document.name}-${target.binding.object}-base-color.png`.replace(/[\\/:*?"<>|\x00-\x1f]/g, '_');
+      const names = { metalRough: 'metallic-roughness', aoMap: 'ao', roughness: 'roughness', metallic: 'metallic' };
+      const map = target.binding.semantic ? names[target.binding.semantic] : 'base-color';
+      const file = `${current!.document.name}-${target.binding.object}-${map}.png`.replace(/[\\/:*?"<>|\x00-\x1f]/g, '_');
       download(new Blob([encodeImage(image)], { type: 'image/png' }), file);
       status.textContent = `Exported ${file}.`;
     });
   },
-  selectBinding(target) { selectBinding(target.binding.id); },
+  selectBinding(target) {
+    textureBinding = target.binding.id;
+    if (target.binding.semantic) selectObject(target.binding.object);
+    else selectBinding(textureBinding);
+  },
   unlit(value) {
     unlit = value;
     void refreshAppearance();
@@ -327,7 +353,7 @@ function commitUv(request: UvRequest) {
       const bake = await transfer(work.adapter, model, work.textures, state, revision, object, layout, request.surface,
         { ...options, projection: { object: source, input } }, signal);
       const textures = { ...state.textures };
-      delete textures[`slot/${object}/0`];
+      clearSlot(textures, object, 0);
       const meshEdits = [...state.meshEdits ?? [], encodeEdit(uvCommand(object, channel, layout, true))];
       next = { ...state, textures, meshEdits,
         ...(extracted ? { extracts: { ...state.extracts, [object]: { ...extracted, bakes: { 0: { channel, bake } } } } }
@@ -341,7 +367,7 @@ function commitUv(request: UvRequest) {
       const bake = await transfer(work.adapter, model, work.textures, state, revision, object, layout, request.surface,
         { ...options, scope: { slot, triangles: Array.from(request.surface.faces.keys()), clearUnused: false } }, signal);
       const textures = { ...state.textures };
-      delete textures[`slot/${object}/${slot}`];
+      clearSlot(textures, object, slot);
       const meshEdits = [...state.meshEdits ?? [], encodeEdit(uvCommand(object, channel, layout, true))];
       next = { ...state, textures, meshEdits,
         ...(extracted ? { extracts: { ...state.extracts, [object]: { ...extracted, bakes: { [slot]: { channel, bake } } } } }
@@ -366,7 +392,7 @@ function commitUv(request: UvRequest) {
       if (request.preserve) {
         const bake = await transfer(work.adapter, model, work.textures, state, revision, object, layout, request.surface, options, signal);
         const textures = { ...state.textures };
-        delete textures[`slot/${object}/0`];
+        clearSlot(textures, object, 0);
         next = { ...next, textures, uvBakes: { ...state.uvBakes, [object]: { channel, bake } } };
       }
     }
@@ -376,6 +402,11 @@ function commitUv(request: UvRequest) {
     status.textContent = baked ? `UVs and ${baked.maps.length} maps applied from ${baked.direct!.sourceName}. ${baked.direct!.misses} occupied texels had no source.` :
       'UV mapping applied. Texture images are unchanged.';
   }, request.preserve ? 'Transferring maps from the frozen source…' : 'Applying UV mapping…', true);
+}
+
+function clearSlot(textures: Record<string, unknown>, object: string, slot: number) {
+  const root = `slot/${object}/${slot}`;
+  for (const key of Object.keys(textures)) if (key === root || key.startsWith(`${root}/`)) delete textures[key];
 }
 
 function commitMesh(command: MeshEdit, revision: number, label: string) {
@@ -455,12 +486,32 @@ function controls() {
   rigButton.setAttribute('aria-pressed', String(rigging));
   weightsButton.setAttribute('aria-pressed', String(weighting));
   diagnosticButton.setAttribute('aria-pressed', String(diagnostic));
-  objectButton.setAttribute('aria-pressed', String(!(painting || meshEditing || repairing || uvEditing || extracting || rigging || weighting || diagnostic)));
-  canvas.style.cursor = painting && !busy ? 'crosshair' : '';
+  objectButton.setAttribute('aria-pressed', String(objectMode()));
+  const canSelectShape = objectMode() || meshEditing || uvEditing;
+  pickShape.disabled = throughSurface.disabled = locked || !availablePaint || !canSelectShape;
+  viewer.areaSelection(canSelectShape && (pickShape.value !== 'click' || placingCursor));
+  canvas.style.cursor = !busy && (painting || canSelectShape && (pickShape.value !== 'click' || placingCursor)) ? 'crosshair' : '';
   canvas.style.touchAction = 'none';
   viewer.setPainting(painting || meshEditing || repairing || uvEditing || extracting || rigging || weighting,
     busy || !!stroke || weightsStroke !== undefined || meshTool.dragging || rigTool.dragging);
   exportButton.textContent = model?.format === 'glb' ? 'Export GLB' : 'Export FBX ZIP';
+  exportSelected.disabled = locked || !selectedIds.size;
+  const transformFields = element<HTMLFieldSetElement>('object-transform-tools');
+  transformFields.hidden = !document || !objectMode();
+  transformFields.disabled = locked;
+  let transformUnavailable = '';
+  if (current && !transformFields.hidden) try {
+    for (const node of selectionNodes()) validateObject(current.adapter, node);
+  } catch (error) { transformUnavailable = errorMessage(error); }
+  objectApply.disabled = !selectedIds.size || !!transformUnavailable;
+  const transformHint = element('object-transform-hint');
+  transformHint.textContent = transformUnavailable;
+  transformHint.hidden = !transformUnavailable;
+  element('object-cursor-controls').hidden = objectPivot.value !== 'cursor';
+  cursorPick.setAttribute('aria-pressed', String(placingCursor));
+  viewer.showCursor(document && objectMode() && objectPivot.value === 'cursor' ? objectVector('cursor') : undefined);
+  element<HTMLButtonElement>('object-show-all').disabled = locked || !document || !current?.adapter.viewEntries.some(entry =>
+    !(document.state.objects[entry.id]?.visible ?? entry.visible));
   unwrap.textContent = fbx && model.uvAtlas ? 'Discard UV atlas' : 'Generate UV atlas';
   rebake.textContent = fbx && model.textureBake ? 'Discard texture bake' : 'Rebake textures';
   projectStatus.textContent = document
@@ -477,14 +528,15 @@ function controls() {
   objects.disabled = locked;
   objectLabel.disabled = rename.disabled = visibility.disabled = locked || !selected;
   isolate.disabled = locked || !availablePaint || !selected && !viewer.isolated;
-  isolate.textContent = viewer.isolated ? 'Exit isolation' : 'Isolate object';
+  isolate.textContent = viewer.isolated ? 'Exit isolation' : selectedIds.size > 1 ? 'Isolate selection' : 'Isolate object';
   isolate.setAttribute('aria-pressed', String(!!viewer.isolated));
   frameSelection.disabled = !selected || locked;
   const targets = current?.textures.targets(document!.state) ?? [];
-  toggleTexture.disabled = locked || !targets.length;
+  const canEditTexture = !!current?.textures.editTargets(document!.state).length;
+  toggleTexture.disabled = locked || !canEditTexture;
   toggleTexture.setAttribute('aria-expanded', String(!editor.panel.hidden));
   workspaceLayout.sync(!!document, viewer.available && !!viewer.camera, locked,
-    uvEditing && selected ? 'uv' : editor.panel.hidden ? undefined : 'texture', !!targets.length);
+    uvEditing && selected ? 'uv' : editor.panel.hidden ? undefined : 'texture', canEditTexture);
   refreshHierarchy();
   editor.lock(busy || !!stroke);
   if (!diagnostic) diagnosticTool.configure(undefined, locked);
@@ -512,8 +564,10 @@ function controls() {
   element('mesh-export-note').textContent = notes.join(' ');
 }
 
+function objectMode() { return !(painting || meshEditing || repairing || uvEditing || extracting || rigging || weighting || diagnostic); }
+
 function refreshHierarchy() {
-  sceneHierarchy.configure(current && { adapter: current.adapter, state: current.document.state, textures: current.textures }, selected,
+  sceneHierarchy.configure(current && { adapter: current.adapter, state: current.document.state, textures: current.textures }, selected, selectedIds,
     rigging ? rigJoint.value : '', busy || !!stroke || weightsStroke !== undefined || textureGesture);
 }
 
@@ -522,21 +576,33 @@ function renderObjects() {
     objects.replaceChildren();
     return;
   }
-  const entries = current.adapter.viewEntries.filter(entry => entry.mesh);
+  const entries = current.adapter.viewEntries.filter(entry => entry.mesh || selectedIds.has(entry.id));
   objects.replaceChildren(new Option('None', ''), ...entries.map(entry => {
     const state = current!.document.state.objects[entry.id] ?? entry;
     return new Option(state.visible ? state.name : `${state.name} (hidden)`, entry.id);
   }));
-  selectObject(selected);
+  updateSelection([...selectedIds].filter(id => current!.adapter.objects.has(id)), selected);
 }
 
-function selectObject(id: string) {
-  const entry = current?.adapter.viewEntries.find(node => node.id === id && node.mesh);
-  selected = entry?.id ?? '';
+function selectObject(id: string, toggle = false) {
+  if (!objectMode() && id && current && !current.adapter.workingTopology(id)) {
+    const mesh = selectedMeshes(current.adapter, new Set([id])).values().next().value;
+    id = [...current.adapter.objects].find(([, node]) => node === mesh)?.[0] ?? '';
+  }
+  const ids = toggle ? selectedIds.has(id) ? [...selectedIds].filter(item => item !== id) : [...selectedIds, id] : id ? [id] : [];
+  updateSelection(ids, id);
+}
+
+function updateSelection(ids: readonly string[], active?: string) {
+  const previous = selected;
+  selectedIds = new Set(ids.filter(id => current?.adapter.objects.has(id)));
+  selected = active && selectedIds.has(active) ? active : [...selectedIds].at(-1) ?? '';
+  const entry = current?.adapter.viewEntries.find(node => node.id === selected);
   const targets = current?.textures.targets(current.document.state) ?? [];
   if (!targets.some(target => target.binding.id === paintBinding && (!selected || target.binding.object === selected))) {
     paintBinding = (targets.find(target => target.binding.object === selected) ?? targets[0])?.binding.id ?? '';
   }
+  if (entry && ![...objects.options].some(option => option.value === selected)) objects.add(new Option(entry.name, selected));
   objects.value = selected;
   const state = entry && (current!.document.state.objects[selected] ?? entry);
   objectLabel.value = state?.name ?? '';
@@ -545,19 +611,25 @@ function selectObject(id: string) {
   const render = current?.adapter.mesh.render.get(selected);
   element('selection-details').textContent = topology
     ? `${selected} · ${render ? new Set(topology.corners).size : topology.positions.length / 3} vertices · ${topology.faceEnds.length} faces · First face ID ${elementId(selected, 'face', render?.render.faceIds[0] ?? 0)}`
-    : '';
-  const node = current?.adapter.objects.get(selected);
-  if (viewer.isolated && viewer.isolated !== node) viewer.isolate();
+    : entry?.name ?? '';
+  if (selectedIds.size > 1) element('selection-details').textContent = `${selectedIds.size} selected · Active ${entry?.name ?? selected}`;
+  const nodes = selectionNodes();
+  if (viewer.isolated && previous !== selected && nodes.some(node => !viewer.inIsolation(node))) viewer.isolate();
   viewer.measureGuides();
-  viewer.select(node);
+  viewer.select(nodes);
   syncTextureEditor();
   controls();
+}
+
+function selectionNodes(): Object3D[] {
+  return [...selectedIds].flatMap(id => { const node = current?.adapter.objects.get(id); return node ? [node] : []; });
 }
 
 function selectBinding(id: string) {
   const target = current?.textures.targets(current.document.state).find(item => item.binding.id === id);
   if (!target) return;
   paintBinding = id;
+  textureBinding = id;
   selectObject(target.binding.object);
 }
 
@@ -565,8 +637,12 @@ function syncTextureEditor() {
   const work = current;
   if (!work || editor.panel.hidden) return;
   const state = work.document.state;
-  editor.setSession({ targets: work.textures.targets(state), atlas: work.model.format === 'fbx' ? work.model.uvAtlas?.geometry : undefined,
-    load: target => work.textures.load(target, state) }, paintBinding);
+  const targets = work.textures.editTargets(state);
+  if (!targets.some(target => target.binding.id === textureBinding && (!selected || target.binding.object === selected))) {
+    textureBinding = targets.find(target => target.binding.object === selected)?.binding.id ?? paintBinding;
+  }
+  editor.setSession({ targets, atlas: work.model.format === 'fbx' ? work.model.uvAtlas?.geometry : undefined,
+    load: target => work.textures.load(target, state) }, textureBinding);
 }
 
 function chooseLayout(layout: LayoutChoice) {
@@ -578,7 +654,7 @@ function chooseLayout(layout: LayoutChoice) {
     editor.close();
     uvEditing = true;
     if (!selected) selectObject(work.adapter.viewEntries.find(entry => entry.mesh)?.id ?? '');
-  } else if (layout.startsWith('texture') && work.textures.targets(work.document.state).length) {
+  } else if (layout.startsWith('texture') && work.textures.editTargets(work.document.state).length) {
     uvEditing = extracting = rigging = weighting = diagnostic = false;
     editor.open();
     syncTextureEditor();
@@ -703,6 +779,10 @@ function closeWorkspace() {
   editor.close();
   previewTextureStroke();
   selected = '';
+  selectedIds.clear();
+  placingCursor = false;
+  for (const axis of objectAxesNames) objectField('cursor', axis).value = '0';
+  textureBinding = '';
   paintBinding = '';
   painting = false;
   meshEditing = false;
@@ -746,7 +826,19 @@ async function makeWorkspace(model: Model, data?: ProjectData, originals = data?
     }))) throw new Error('The saved object hierarchy does not match the original assets.');
     const document = new AssetDocument<WorkingState>({ id: data?.id ?? crypto.randomUUID(), name: data?.name ?? model.name.slice(0, 160),
       revision: data?.revision ?? 0, originals, historyBudget: data?.historyBudget ?? defaultHistoryBudget,
-      scene: adapter.entries, topology: adapter.topology, textureAssignments, state: data?.state ?? { objects: {} } }, workingBuffers);
+      scene: adapter.entries, topology: adapter.topology, textureAssignments, state: data?.state ?? { objects: {} } }, workingBuffers,
+    async (document, snapshot) => {
+      const { revision } = snapshot;
+      try {
+        const archive = await writeProject(document, undefined, snapshot);
+        await saveCheckpoint({ key: `${document.id}/${revision}`, name: document.name, projectId: document.id, revision,
+          savedAt: Date.now(), archive });
+        historyCheckpoint = { id: document.id, revision };
+        autosaveStatus.textContent = `Saved history checkpoint for revision ${revision}.`;
+      } catch (error) {
+        throw new Error(`History was kept. ${errorMessage(error)} Save Project to download a file or raise the history limit.`);
+      }
+    });
     const working = adapter.materialize(document.state);
     const textures = new TextureCatalog(adapter);
     textures.validate(document.state);
@@ -926,58 +1018,75 @@ function saveFile(copy: boolean) {
 }
 save.addEventListener('click', () => saveFile(false));
 saveAs.addEventListener('click', () => saveFile(true));
-historyBudget.addEventListener('change', () => {
+historyBudget.addEventListener('change', () => void (async () => {
   if (!current || busy || stroke) return;
   const { document } = current;
-  try {
-    if (!Number.isInteger(historyBudget.valueAsNumber)) throw new Error('Enter a whole number of MiB.');
-    if (document.configureHistory(historyBudget.valueAsNumber * 1048576)) scheduleAutosave();
-  } catch (error) {
-    status.textContent = errorMessage(error);
-  }
+  const mib = historyBudget.valueAsNumber;
+  await locked(async () => {
+    if (!Number.isInteger(mib)) throw new Error('Enter a whole number of MiB.');
+    if (await document.configureHistory(mib * 1048576)) scheduleAutosave();
+  });
   historyBudget.value = String(document.historyBudget / 1048576);
   controls();
-});
+})());
 
-exportButton.addEventListener('click', () => void locked(async () => {
+exportButton.addEventListener('click', () => saveModel());
+exportSelected.addEventListener('click', () => saveModel(new Set(selectedIds)));
+
+function saveModel(selection?: ReadonlySet<string>) { void locked(async () => {
   const { model, adapter, document, textures } = current!;
-  adapter.rig.assertExportable();
+  const selected = selection && selectedMeshes(adapter, selection);
+  if (!selected || [...selected].some(mesh => mesh instanceof SkinnedMesh)) adapter.rig.assertExportable();
   const published = diagnosticExports(adapter, document.state), animation = model.scene.animations;
-  // Viewport visibility is a project setting. Export preserves the original visibility and complete asset.
-  adapter.applyVisibility({ objects: {} });
+  const state = document.state;
+  const fbxModel = projectedModel(model, state, textures);
+  const bound = sourceAppearance(textures, state, model.format);
+  const auxiliary = new Set(textures.editTargets(state).flatMap(({ binding }) => selected?.has(binding.mesh) &&
+    (binding.semantic === 'roughness' || binding.semantic === 'metallic') && binding.sourceName ? [binding.sourceName] : []));
+  let scoped: ReturnType<typeof exportSelection> | undefined;
+  let restore = () => {};
   try {
-    if (published.length) model.scene.animations = [...animation, ...published];
-    const report = exportReport(adapter, model, document, assetPanel.findings);
+    const clips = published.length ? [...animation, ...published] : animation;
+    if (selection) scoped = exportSelection(fbxModel, adapter, selection, bound.appearance.views, clips, auxiliary);
+    else {
+      // Export the source visibility and committed model independently of the viewport.
+      adapter.applyVisibility({ objects: {} });
+      model.scene.animations = clips;
+      restore = applyViews(bound.appearance.views);
+    }
+    const outputModel = scoped?.model ?? fbxModel;
+    const report = exportReport(adapter, outputModel, document, assetPanel.findings, scoped?.objects);
     const problem = report.findings.find(finding => finding.severity === 'Error');
     if (problem) throw new Error(problem.message);
-    const bound = sourceAppearance(textures, document.state, model.format === 'glb' ? 'glb' : 'fbx');
-    const restore = applyViews(bound.appearance.views);
     let output;
-    const glb = model.format === 'glb';
-    try {
-      if (model.format === 'glb') output = await exportGlb({ ...model, images: new Map([...model.images, ...bound.glb]) });
-      else {
-        const projected = projectedModel(model, document.state);
-        if (projected.format !== 'fbx') throw new Error('Invalid FBX export state.');
-        const transfers = Object.entries(document.state.uvBakes ?? {}).map(([object, transfer]) => ({ object, bake: transfer.bake }));
-        output = await exportAsset(published.length ? { ...projected, stats: { ...projected.stats, clips: model.scene.animations.length } } : projected,
-          bound.fbx, undefined, transfers.length ? transfers : undefined, report);
-      }
-    } finally {
-      restore();
-      disposeAppearance(bound.appearance);
+    const glb = outputModel.format === 'glb';
+    const name = scoped ? `${outputModel.name}_selection` : outputModel.name;
+    if (outputModel.format === 'glb') output = await exportGlb({ ...outputModel, name, images: new Map([...outputModel.images, ...bound.glb]) });
+    else {
+      const transfers = Object.entries(state.uvBakes ?? {}).filter(([object]) => !scoped || scoped.objects.has(object))
+        .map(([object, transfer]) => ({ object, bake: textures.workingBake(state, object, 0, transfer.bake) }));
+      output = await exportAsset({ ...outputModel, name, auxiliaryEdits: bound.auxiliary,
+        stats: { ...outputModel.stats, clips: outputModel.scene.animations.length } }, bound.fbx, undefined, transfers.length ? transfers : undefined, report);
     }
     if (glb) report.files.push(output.name);
     download(new Blob([output.bytes], { type: glb ? 'model/gltf-binary' : 'application/zip' }), output.name);
     assetPanel.exported(report);
     status.textContent = `Exported ${output.name}.` + (glb ? '' : ' See manifest.json for material assignments and scope.');
   } finally {
+    restore();
+    scoped?.dispose();
+    disposeAppearance(bound.appearance);
     model.scene.animations = animation;
     adapter.applyVisibility(document.state);
   }
-}, 'Preparing export…'));
+}, 'Preparing export…'); }
 
 function scheduleAutosave() {
+  const document = current?.document;
+  if (document && historyCheckpoint?.id === document.id && historyCheckpoint.revision === document.revision) {
+    autosaveDue = undefined;
+    return;
+  }
   autosaveDue = performance.now() + autosaveDelay;
   autosaveStatus.textContent = 'Autosave pending.';
   resumeAutosave();
@@ -1039,7 +1148,7 @@ element('dismiss-autosave').addEventListener('click', () => {
   autosaveStatus.textContent = '';
 });
 
-async function applyWorking(work: Workspace, revision: number, state: WorkingState, commit: () => void, signal?: AbortSignal) {
+async function applyWorking(work: Workspace, revision: number, state: WorkingState, commit: () => void | Promise<void>, signal?: AbortSignal) {
   work.document.assertRevision(revision);
   signal?.throwIfAborted();
   const previous = work.document.state;
@@ -1057,7 +1166,7 @@ async function applyWorking(work: Workspace, revision: number, state: WorkingSta
     signal?.throwIfAborted();
     if (current !== work) throw new Error('The active project changed during the operation.');
     work.document.assertRevision(revision);
-    commit();
+    await commit();
     work.model = model;
     work.textures = textures;
   } catch (error) {
@@ -1076,9 +1185,8 @@ async function applyWorking(work: Workspace, revision: number, state: WorkingSta
 }
 
 async function edit(work: Workspace, revision: number, state: WorkingState, label: string, resource: string, signal?: AbortSignal) {
-  await applyWorking(work, revision, state, () => {
-    work.document.execute({ id: crypto.randomUUID(), label, baseRevision: revision, affectedResources: [resource], state });
-  }, signal);
+  await applyWorking(work, revision, state, () => work.document.execute({ id: crypto.randomUUID(), label, baseRevision: revision,
+    affectedResources: [resource], state }), signal);
 }
 
 cancel.addEventListener('click', () => { abort?.abort(); controls(); });
@@ -1171,16 +1279,78 @@ function changeObject(label: string, update: (state: { name: string; visible: bo
 }
 objects.addEventListener('change', () => selectObject(objects.value));
 rename.addEventListener('click', () => changeObject('Object label', state => ({ ...state, name: objectLabel.value.trim() || state.name })));
-visibility.addEventListener('click', () => changeObject('Object visibility', state => ({ name: state.name, visible: !state.visible })));
+visibility.addEventListener('click', () => setVisibility(current?.document.state.objects[selected]?.visible === false ||
+  current?.document.state.objects[selected] === undefined && current?.adapter.viewEntries.find(entry => entry.id === selected)?.visible === false));
+element('object-show-all').addEventListener('click', () => setVisibility(true, true));
+
+function setVisibility(visible: boolean, all = false) {
+  const work = current;
+  if (!work) return;
+  void locked(async () => {
+    const { state, revision } = work.document, objects = { ...state.objects };
+    for (const entry of work.adapter.viewEntries) if (all || selectedIds.has(entry.id)) {
+      const override = objects[entry.id] ?? entry;
+      if (override.visible !== visible) objects[entry.id] = { name: override.name, visible };
+    }
+    await edit(work, revision, { ...state, objects }, 'Object visibility', 'visibility');
+    status.textContent = 'Object visibility applied.';
+  });
+}
+
 isolate.addEventListener('click', () => {
-  viewer.isolate(viewer.isolated ? undefined : current?.adapter.objects.get(selected));
+  viewer.isolate(viewer.isolated ? undefined : selectionNodes());
   controls();
 });
+
+const objectAxesNames = ['x', 'y', 'z'] as const;
+const objectVector = (kind: 'delta' | 'cursor') => new Vector3(...objectAxesNames.map(axis => objectField(kind, axis).valueAsNumber));
+
+function setObjectOperation(operation: TransformSpec['operation']) {
+  objectOperation.value = operation;
+  objectApply.textContent = `Apply ${operation}`;
+  for (const axis of objectAxesNames) objectField('delta', axis).value = operation === 'scale' ? '1' : '0';
+}
+
+objectOperation.addEventListener('change', () => setObjectOperation(objectOperation.value as TransformSpec['operation']));
+objectPivot.addEventListener('change', () => { placingCursor = false; controls(); });
+for (const axis of objectAxesNames) objectField('cursor', axis).addEventListener('input', controls);
+cursorPick.addEventListener('click', () => { placingCursor = !placingCursor; controls(); });
+pickShape.addEventListener('change', controls);
+objectApply.addEventListener('click', () => void locked(async () => {
+  const work = current;
+  if (!work) return;
+  const { state, revision } = work.document;
+  const operation = objectOperation.value as TransformSpec['operation'];
+  const value = objectVector('delta'), cursor = objectVector('cursor');
+  if (!value.toArray().every(Number.isFinite) || objectPivot.value === 'cursor' && !cursor.toArray().every(Number.isFinite)) {
+    throw new Error('Enter finite coordinates on all three axes.');
+  }
+  if (value.equals(operation === 'scale' ? new Vector3(1, 1, 1) : new Vector3())) return;
+  const objectTransforms = transformObjects(work.adapter, selectedIds, selected, { operation, value, cursor,
+    axes: objectAxes.value as TransformSpec['axes'], pivot: objectPivot.value as TransformSpec['pivot'] }, state.objectTransforms);
+  await edit(work, revision, { ...state, objectTransforms }, `${operation[0].toUpperCase()}${operation.slice(1)} objects`, 'transforms');
+  setObjectOperation(operation);
+}));
+
+function visibleMeshIds() {
+  return current?.adapter.viewEntries.filter(entry => {
+    const object = current!.adapter.objects.get(entry.id)!;
+    if (!(object instanceof Mesh) || !viewer.inIsolation(object)) return false;
+    for (let node: Object3D | null = object; node; node = node.parent) if (!node.visible) return false;
+    return true;
+  }).map(entry => entry.id) ?? [];
+}
+
+element('objects-select-all').addEventListener('click', () => updateSelection(visibleMeshIds(), selected));
+element('objects-select-none').addEventListener('click', () => updateSelection([]));
+element('objects-select-invert').addEventListener('click', () => updateSelection(visibleMeshIds().filter(id => !selectedIds.has(id))));
 
 function frame(selection = false) {
   const direction = [new Vector3(.6, .45, 1), new Vector3(0, 0, 1), new Vector3(0, 0, -1), new Vector3(-1, 0, 0),
     new Vector3(1, 0, 0), new Vector3(0, 1, .00001), new Vector3(0, -1, .00001)][viewDirection.selectedIndex];
-  viewer.frame(selection ? current?.adapter.objects.get(selected) : undefined, projection.selectedIndex === 1, direction);
+  const nodes = selection ? selectionNodes() : [];
+  if (nodes.length > 1) viewer.frameSelection(nodes, projection.selectedIndex === 1, direction);
+  else viewer.frame(nodes[0], projection.selectedIndex === 1, direction);
   controls();
 }
 projection.addEventListener('change', () => frame());
@@ -1255,30 +1425,45 @@ window.addEventListener('keydown', event => {
   if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement || event.target instanceof HTMLButtonElement ||
       event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLElement && event.target.isContentEditable ||
       event.defaultPrevented || busy || stroke || weightsStroke !== undefined || textureGesture || meshTool.dragging || rigTool.dragging) return;
-  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's' && !save.disabled) {
+  const action = shortcut(event);
+  if (action === 'cancel' && (placingCursor || selecting)) {
+    clearAreaSelection();
+    placingCursor = false;
+    controls();
+    event.preventDefault();
+    return;
+  }
+  if (action === 'save' && !save.disabled) {
     event.preventDefault();
     save.click();
     return;
   }
-  if (event.code === 'Space' && diagnostic && event.target === canvas) {
+  if (action === 'space' && diagnostic && event.target === canvas) {
     event.preventDefault();
     element<HTMLButtonElement>('diag-play').click();
     return;
   }
-  if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === 'q' && event.target === canvas) {
+  if (action === 'select' && event.target === canvas) {
     event.preventDefault();
+    pickShape.value = 'click';
     objectButton.click();
     return;
   }
-  if (!event.ctrlKey && !event.metaKey && (uvTool.keyboard(event.key) || repairTool.keyboard(event.key) ||
-      meshTool.keyboard(event.key.length === 1 ? event.key.toLowerCase() : event.key))) {
+  if (action && objectMode() && event.target === canvas && ['move', 'rotate', 'scale'].includes(action)) {
+    event.preventDefault();
+    setObjectOperation(action as TransformSpec['operation']);
+    return;
+  }
+  const toolKey = action && ({ move: 'w', rotate: 'e', scale: 'r', vertex: '1', edge: '2', face: '3', island: '4',
+    apply: 'Enter', cancel: 'Escape', delete: 'Delete' } as Partial<Record<NonNullable<ReturnType<typeof shortcut>>, string>>)[action];
+  if (toolKey && (uvTool.keyboard(toolKey) || repairTool.keyboard(toolKey) || meshTool.keyboard(toolKey))) {
     event.preventDefault();
     return;
   }
-  if (event.key.toLowerCase() === 'f' && !event.ctrlKey && !event.metaKey) frame(!!selected);
-  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
+  if (action === 'frame' && event.target === canvas) { event.preventDefault(); frame(!!selected); }
+  if (action === 'undo' || action === 'redo') {
     event.preventDefault();
-    navigate(event.shiftKey ? 'redo' : 'undo');
+    navigate(action);
   }
 });
 
@@ -1395,6 +1580,36 @@ function pointerPoint(event: PointerEvent): Point {
   return { x: (event.clientX - bounds.left) * canvas.width / bounds.width, y: (event.clientY - bounds.top) * canvas.height / bounds.height };
 }
 
+function selectionPoint(event: PointerEvent): Point {
+  const bounds = canvas.getBoundingClientRect();
+  return { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
+}
+
+function clearAreaSelection() {
+  selecting = undefined;
+  selectionOverlay.hidden = true;
+}
+
+function selectArea(points: readonly Point[], toggle: boolean, click?: Point) {
+  const work = current, camera = viewer.camera;
+  if (!work || !camera || points.length < 3) return;
+  const { width, height } = canvas.getBoundingClientRect();
+  const through = throughSurface.checked;
+  const view = viewer.withPose(() => paintView(work.adapter, undefined, new Map(), camera, Math.ceil(width), Math.ceil(height), undefined,
+    { through, includes: mesh => viewer.inIsolation(mesh) }));
+  const hits = projectedSelection(view, new SelectionArea(points), through, click);
+  if (meshEditing || uvEditing) {
+    const active = selected || hits.keys().next().value;
+    if (active && active !== selected) selectObject(active);
+    if (meshEditing) meshTool.selectRegion(active ? hits.get(active) : undefined, toggle);
+    if (uvEditing) uvTool.selectRegion3d(active ? hits.get(active) : undefined, toggle);
+  } else {
+    const ids = [...hits].filter(([, hit]) => hit.faces.size).map(([id]) => id);
+    const next = toggle ? [...selectedIds].filter(id => !ids.includes(id)).concat(ids.filter(id => !selectedIds.has(id))) : ids;
+    updateSelection(next, selected);
+  }
+}
+
 canvas.addEventListener('contextmenu', event => event.preventDefault());
 canvas.addEventListener('pointerdown', event => {
   if (event.button !== 0 || busy || stroke || weightsStroke !== undefined || textureGesture || !current || viewer.comparing) return;
@@ -1410,7 +1625,14 @@ canvas.addEventListener('pointerdown', event => {
   }
   if (!painting) {
     if (meshEditing && meshTool.gizmoHit || rigging && rigTool.gizmoHit) return;
-    if (meshEditing || repairing || uvEditing || extracting || rigging) canvas.focus({ preventScroll: true });
+    canvas.focus({ preventScroll: true });
+    const shape = pickShape.value as PickShape;
+    if (!placingCursor && shape !== 'click' && (meshEditing || uvEditing || objectMode())) {
+      selecting = { pointer: event.pointerId, shape, points: [selectionPoint(event)] };
+      canvas.setPointerCapture(event.pointerId);
+      event.preventDefault();
+      return;
+    }
     picking = { pointer: event.pointerId, x: event.clientX, y: event.clientY };
     return;
   }
@@ -1426,6 +1648,19 @@ canvas.addEventListener('pointerdown', event => {
 
 canvas.addEventListener('pointermove', event => {
   if (viewer.comparing) return;
+  const region = selecting;
+  if (region?.pointer === event.pointerId) {
+    const p = selectionPoint(event), prior = region.points.at(-1)!;
+    if (Math.hypot(p.x - prior.x, p.y - prior.y) < 2) return;
+    if (region.shape === 'rectangle') region.points[1] = p;
+    else if (region.points.length < 1000) region.points.push(p);
+    selectionOverlay.hidden = false;
+    const bounds = canvas.getBoundingClientRect(), ctx = selectionOverlay.getContext('2d')!;
+    selectionOverlay.width = Math.ceil(bounds.width);
+    selectionOverlay.height = Math.ceil(bounds.height);
+    drawSelection(ctx, selectionPath(region.shape, region.points));
+    return;
+  }
   if (weighting) {
     if (!busy && (weightsStroke === event.pointerId || !event.buttons)) weightsTool.move(event);
     return;
@@ -1439,6 +1674,7 @@ canvas.addEventListener('pointermove', event => {
 
 canvas.addEventListener('pointerleave', () => { painter.leave(); weightsTool.leave(); });
 canvas.addEventListener('pointercancel', () => {
+  clearAreaSelection();
   stroke = picking = undefined;
   weightsStroke = undefined;
   weightsTool.cancel();
@@ -1446,10 +1682,21 @@ canvas.addEventListener('pointercancel', () => {
   controls();
   resumeAutosave();
 });
+canvas.addEventListener('lostpointercapture', clearAreaSelection);
 
 canvas.addEventListener('pointerup', event => {
   const work = current;
   if (!work || viewer.comparing) return;
+  if (selecting?.pointer === event.pointerId) {
+    const region = selecting;
+    clearAreaSelection();
+    const p = selectionPoint(event);
+    if (region.shape === 'rectangle') region.points[1] = p;
+    else region.points.push(p);
+    const path = selectionPath(region.shape, region.points);
+    if (path.length >= 3 && (region.shape === 'lasso' || Math.hypot(p.x - path[0].x, p.y - path[0].y) > 4)) selectArea(path, event.shiftKey);
+    return;
+  }
   if (weightsStroke === event.pointerId) {
     weightsStroke = undefined;
     void weightsTool.finish(event).finally(() => { controls(); resumeAutosave(); });
@@ -1461,9 +1708,23 @@ canvas.addEventListener('pointerup', event => {
     if (repairing && repairTool.pick(event)) return;
     if (extracting) { extractTool.pick(event); return; }
     const list = [...work.adapter.objects].filter((pair): pair is [string, Mesh] => pair[1] instanceof Mesh);
+    if (placingCursor && objectMode()) {
+      const hit = viewer.hit(event, list.map(([, mesh]) => mesh));
+      if (hit) {
+        for (const [i, axis] of objectAxesNames.entries()) objectField('cursor', axis).value = String(hit.point.getComponent(i));
+        placingCursor = false;
+        controls();
+      }
+      return;
+    }
+    if (throughSurface.checked && (meshEditing || uvEditing || objectMode())) {
+      const { x, y } = selectionPoint(event);
+      selectArea(selectionPath('rectangle', [{ x: x - 8, y: y - 8 }, { x: x + 8, y: y + 8 }]), event.shiftKey, { x, y });
+      return;
+    }
     const model = viewer.pick(event, list.map(([, mesh]) => mesh));
     const id = list.find(([, mesh]) => mesh === model)?.[0];
-    if ((!meshEditing && !repairing && !uvEditing) || id) selectObject(id ?? '');
+    if ((!meshEditing && !repairing && !uvEditing) || id) selectObject(id ?? '', objectMode() && event.shiftKey);
     if (meshEditing && id) meshTool.pick(event);
     if (uvEditing && id) uvTool.pick3d(event);
   }

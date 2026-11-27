@@ -24,7 +24,7 @@ export function paintMapping(model: Model, target: TextureTarget) {
 }
 
 export function paintView(adapter: ModelAdapter, target: TextureTarget | undefined, uv: ReadonlyMap<number, UvTriangle>, camera: Camera,
-  width: number, height: number, weights?: { object: string; xray: boolean }): View {
+  width: number, height: number, weights?: { object: string; xray: boolean }, selection?: { through: boolean; includes(mesh: Mesh): boolean }): View {
   type MutableFace = Omit<Face, 'island' | 'edges'> & { root: number; stable: string; edges: Triple<Link[]> };
   const { model } = adapter;
   camera.updateMatrixWorld();
@@ -32,7 +32,7 @@ export function paintView(adapter: ModelAdapter, target: TextureTarget | undefin
   const projection = new Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
   const faces: MutableFace[] = [];
   for (const [object, mesh] of adapter.objects) {
-    if (!(mesh instanceof Mesh) || !visible(mesh)) continue;
+    if (!(mesh instanceof Mesh) || !visible(mesh) || selection && !selection.includes(mesh)) continue;
     // A skinned bounding box can outlive its original pose. Sample the same
     // morphed and skinned positions used by Three.js in the current frame.
     const geometry = mesh.geometry, index = geometry.index, positions = geometry.getAttribute('position');
@@ -73,8 +73,8 @@ export function paintView(adapter: ModelAdapter, target: TextureTarget | undefin
         const face: MutableFace = { world: world as unknown as Face['world'], clip: clip as unknown as Face['clip'],
           uv: mapped, edges: [[], [], []], root: id, stable: `${object}/triangle/${i / 3}`, source: `${object}/face/${edited?.faceIds[polygon] ?? polygon}`,
           material: material.name || `${mesh.name || object} material ${(group.materialIndex ?? 0) + 1}`,
-          orientation, side: weights?.object === object && weights.xray ? 2 : material.side,
-          vertices: weights?.object === object ? [keys[0], keys[1], keys[2]] : undefined };
+          orientation, side: selection?.through || weights?.object === object && weights.xray ? 2 : material.side,
+          vertices: selection || weights?.object === object ? [keys[0], keys[1], keys[2]] : undefined };
         faces.push(face);
         if (!mapped) continue;
         for (const edge of corners) {

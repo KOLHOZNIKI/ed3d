@@ -70,6 +70,7 @@
           <button id="undo-stroke" type="button" disabled>Undo</button>
           <button id="redo" type="button" disabled>Redo</button>
           <button id="export" type="button" disabled>Export FBX ZIP</button>
+          <button id="export-selection" type="button" disabled>Export selection</button>
           <button id="export-original" type="button" disabled>Export Original</button>
         </div>
       </header>
@@ -87,6 +88,7 @@
           <button id="diag-mode" type="button" aria-pressed="false" disabled>Humanoid Tests</button>
         </nav>
         <div class="layout-actions actions">
+          <button id="shortcuts-open" type="button">Shortcuts</button>
           <button id="workspace-scene-toggle" type="button" aria-pressed="true" aria-controls="scene-panel">Scene</button>
           <button id="workspace-tools-toggle" type="button" aria-pressed="true" aria-controls="tools-panel">Tools</button>
           <select id="workspace-layout" aria-label="Workspace layout" disabled>
@@ -109,7 +111,8 @@
                 <label for="object-selection">Select object</label>
                 <select id="object-selection"></select>
                 <button id="object-visibility" type="button" disabled>Hide object</button>
-              <button id="object-isolate" type="button" aria-pressed="false" disabled>Isolate object</button>
+                <button id="object-isolate" type="button" aria-pressed="false" disabled>Isolate object</button>
+                <button id="object-show-all" type="button" disabled>Show all</button>
                 <label for="object-label">Project label</label>
                 <input id="object-label" maxlength="160" disabled />
                 <button id="rename-object" type="button" disabled>Apply label</button>
@@ -170,6 +173,8 @@
                 <select id="view-direction"><option>Oblique</option><option>Front</option><option>Back</option><option>Left</option><option>Right</option><option>Top</option><option>Bottom</option></select>
                 <button id="frame-all" type="button">Frame all</button>
                 <button id="frame-selection" type="button" disabled>Frame selection</button>
+                <label>Pick <select id="view-selection-mode"><option value="click">Click</option><option value="rectangle">Rectangle</option><option value="lasso">Lasso</option></select></label>
+                <label><input id="view-selection-through" type="checkbox" /> Select through surfaces</label>
               </div>
                 <details id="view-options">
                   <summary>Guides and lighting</summary>
@@ -199,6 +204,7 @@
               <div class="model-view" id="model-view" hidden>
                 <canvas id="viewport" width="640" height="480" tabindex="0" role="img" aria-label="Imported model preview" hidden></canvas>
                 <canvas id="paint-cursor" width="640" height="480" aria-hidden="true" hidden></canvas>
+                <canvas id="selection-overlay" aria-hidden="true" hidden></canvas>
                 <span id="rig-label" aria-hidden="true" hidden></span>
                 <span id="weights-cursor" aria-hidden="true" hidden></span>
                 <div id="view-compare-labels" hidden><span id="view-reference-label"></span><span>Working</span></div>
@@ -215,6 +221,7 @@
                 <label for="uv-channel">Channel</label><select id="uv-channel"></select>
                 <label for="uv-background">Background</label><select id="uv-background"><option value="texture">Texture</option><option value="checker">Checker</option><option value="solid">Solid</option><option value="coverage">Coverage</option></select>
                 <label for="uv-kind">Select</label><select id="uv-kind"><option value="vertex">UV vertex</option><option value="edge">Edge</option><option value="face">Face</option><option value="island">Island</option></select>
+                <label>Pick <select id="uv-selection-shape"><option value="click">Click</option><option value="rectangle">Rectangle</option><option value="lasso">Lasso</option></select></label>
               </div>
               <canvas id="uv-canvas" width="768" height="556" tabindex="0" aria-label="UV grid and islands"></canvas>
               <div class="actions">
@@ -275,7 +282,7 @@
             <section id="texture-panel" aria-label="Texture editor" hidden>
               <fieldset>
                 <legend>Texture editor</legend>
-                <label for="texture-target">Object and material</label>
+                <label for="texture-target">Material map</label>
                 <select id="texture-target"></select>
                 <div class="actions" id="texture-sharing" hidden>
                   <button id="texture-edit-shared" type="button">Edit shared map</button>
@@ -285,7 +292,11 @@
                 <div class="actions">
                   <label for="texture-tool">Tool</label>
                   <select id="texture-tool"><option value="brush">Brush</option><option value="stamp">Clone Stamp</option><option value="eyedropper">Eyedropper</option><option value="pixel">Pixel Brush</option><option value="select">Rectangle</option><option value="pan">Pan</option></select>
-                  <label for="texture-color">Color</label><input id="texture-color" type="color" value="#15e4f2" />
+                  <label for="texture-color" id="texture-color-label">Color</label><input id="texture-color" type="color" value="#15e4f2" />
+                  <span id="texture-scalar-tool" class="actions" hidden>
+                    <label>Channel <select id="texture-channel"></select></label>
+                    <label>Value <input id="texture-scalar" type="number" min="0" max="255" value="128" /></label>
+                  </span>
                   <label for="texture-size">Size (px)</label><input id="texture-size" type="number" min="1" max="512" value="24" />
                   <label for="texture-opacity">Opacity %</label><input id="texture-opacity" type="number" min="0" max="100" value="100" />
                   <label for="texture-hardness">Hardness %</label><input id="texture-hardness" type="number" min="0" max="100" value="75" />
@@ -293,8 +304,8 @@
                 <div class="actions">
                   <label for="texture-shape">Pixel shape</label><select id="texture-shape"><option>Square</option><option>Round</option></select>
                   <label for="texture-stamp">Stamp</label><select id="texture-stamp"><option>Aligned</option><option>Fixed</option></select>
-                  <label><input id="texture-alpha" type="checkbox" /> Edit alpha</label>
-                  <label for="texture-alpha-value">Alpha</label><input id="texture-alpha-value" type="number" min="0" max="255" value="255" />
+                  <span id="texture-alpha-tools"><label><input id="texture-alpha" type="checkbox" /> Edit alpha</label>
+                  <label for="texture-alpha-value">Alpha</label><input id="texture-alpha-value" type="number" min="0" max="255" value="255" /></span>
                   <button id="texture-fill" type="button" disabled>Fill selection</button>
                   <button id="texture-clear" type="button" disabled>Clear selection</button>
                 </div>
@@ -317,9 +328,17 @@
                 </div>
                 <p id="texture-status" aria-live="polite"></p>
                 <div class="actions">
-                  <label for="texture-import">Replace Base Color</label><input id="texture-import" type="file" accept=".png,.jpg,.jpeg,.webp" />
+                  <label for="texture-import">Replace map</label><input id="texture-import" type="file" accept=".png,.jpg,.jpeg,.webp" />
                   <button id="texture-export" type="button">Export PNG</button>
                 </div>
+                <details><summary>Resize texture</summary>
+                  <div class="actions">
+                    <label>Width <input id="texture-width" type="number" min="1" max="4096" /></label>
+                    <label>Height <input id="texture-height" type="number" min="1" max="4096" /></label>
+                    <label>Filter <select id="texture-filter"><option value="nearest">Nearest</option><option value="bilinear">Bilinear</option></select></label>
+                    <button id="texture-resize" type="button" disabled>Apply size</button>
+                  </div>
+                </details>
               </fieldset>
             </section>
           </section>
@@ -328,6 +347,32 @@
         <aside id="tools-panel" class="workspace-panel" aria-label="Tool settings">
           <h2 class="panel-title">Inspector</h2>
           <div class="panel-content">
+            <fieldset id="object-transform-tools" hidden>
+              <legend>Transform selected objects</legend>
+              <div class="actions">
+                <label>Operation <select id="object-operation"><option value="move">Move</option><option value="rotate">Rotate</option><option value="scale">Scale</option></select></label>
+                <label>Axes <select id="object-axes"><option value="world">World</option><option value="local">Active local</option></select></label>
+                <label>Pivot <select id="object-pivot"><option value="median">Median</option><option value="active">Active object</option><option value="cursor">3D cursor</option></select></label>
+              </div>
+              <div class="actions" id="object-transform-values">
+                <label>X <input id="object-delta-x" type="number" step="any" value="0" /></label>
+                <label>Y <input id="object-delta-y" type="number" step="any" value="0" /></label>
+                <label>Z <input id="object-delta-z" type="number" step="any" value="0" /></label>
+                <button id="object-apply-transform" type="button">Apply move</button>
+              </div>
+              <div class="actions" id="object-cursor-controls" hidden>
+                <label>Cursor X <input id="object-cursor-x" type="number" step="any" value="0" /></label>
+                <label>Cursor Y <input id="object-cursor-y" type="number" step="any" value="0" /></label>
+                <label>Cursor Z <input id="object-cursor-z" type="number" step="any" value="0" /></label>
+                <button id="object-cursor-pick" type="button" aria-pressed="false">Place on surface</button>
+              </div>
+              <p id="object-transform-hint" hidden></p>
+              <div class="actions">
+                <button id="objects-select-all" type="button">Select all</button>
+                <button id="objects-select-none" type="button">Clear</button>
+                <button id="objects-select-invert" type="button">Invert</button>
+              </div>
+            </fieldset>
             <fieldset id="paint-tools" hidden>
               <legend>3D Paint</legend>
               <label for="paint-target">Base Color binding</label>
@@ -772,6 +817,15 @@
         <p id="autosave-status" aria-live="polite"></p>
       </footer>
     </main>
+    <dialog id="shortcuts-dialog" aria-labelledby="shortcuts-title">
+      <h2 id="shortcuts-title">Keyboard shortcuts</h2>
+      <p>Focus a binding and press the desired keys.</p>
+      <div id="shortcut-bindings"></div>
+      <p id="shortcut-status" aria-live="polite"></p>
+      <form class="actions" method="dialog">
+        <button id="shortcuts-reset" type="button">Restore defaults</button><button type="submit">Close</button>
+      </form>
+    </dialog>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

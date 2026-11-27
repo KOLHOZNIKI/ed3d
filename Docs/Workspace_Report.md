@@ -24,9 +24,9 @@ The browser exported the plate while comparing a snapshot in Wireframe mode. It 
 
 The [E12 benchmark workload](E12_Report.md#performance-and-memory) on the RTX 3070 measured a 16.8 ms p95 frame interval at 1920 × 1080. The direct bakes took 3.55 s for 2K and 7.12 s for 4K. The hardware run wrote `test-results/e12/benchmark-workspace.json`.
 
-## Remaining §8 items
+## V1 selection and transforms
 
-Rectangle and Lasso selection with explicit through-surface controls, general Object-mode transforms, the additional active-element and cursor pivots, and user-editable shortcut bindings remain open.
+The V1 follow-up adds rectangle and lasso picking, explicit through-surface selection, shared object transforms with median, active-object and cursor pivots, and editable keyboard bindings. See the [V1 verification](V1_Report.md) for current coverage and constraints.
 
 ## Reproduce
 

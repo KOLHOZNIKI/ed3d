@@ -10,6 +10,7 @@ import { MeshSession } from '../mesh/session';
 import { sceneStats } from '../e00/scene-stats';
 import { RigSession } from '../rig/session';
 import type { RigState } from '../rig/state';
+import { validatedTransform, validateObject, type ObjectTransforms } from './object-transform';
 
 export type Model = ImportedAsset | ImportedGlb;
 
@@ -31,6 +32,7 @@ export class ModelAdapter {
   #atlas?: UvAtlasEdit;
   #rigState?: RigState;
   #rigMeshEdits?: WorkingState['meshEdits'];
+  #objectTransforms?: ObjectTransforms;
 
   constructor(model: Model) {
     this.model = model;
@@ -67,6 +69,7 @@ export class ModelAdapter {
       this.#rigState = state.rig;
       this.#rigMeshEdits = state.meshEdits;
     }
+    this.#applyObjectTransforms(state.objectTransforms);
     if (this.model.format === 'glb') {
       return this.mesh.active || state.rig ? { ...this.model, stats: sceneStats(this.model.scene, 'GLB'), skins: this.mesh.glbSkins() } : this.model;
     }
@@ -84,6 +87,29 @@ export class ModelAdapter {
 
   applyVisibility(state: WorkingState) {
     for (const entry of this.viewEntries) this.objects.get(entry.id)!.visible = state.objects[entry.id]?.visible ?? entry.visible;
+  }
+
+  #applyObjectTransforms(transforms?: ObjectTransforms) {
+    const ids = new Set([...Object.keys(this.#objectTransforms ?? {}), ...Object.keys(transforms ?? {})]);
+    if (!ids.size) return;
+    const entries = new Map(this.viewEntries.map(entry => [entry.id, entry]));
+    const changes = [...ids].flatMap(id => {
+      const node = this.objects.get(id), entry = entries.get(id), override = transforms?.[id];
+      if (!node || !entry) {
+        if (override) throw new Error('A transform refers to a missing object.');
+        return [];
+      }
+      if (override && override !== this.#objectTransforms?.[id]) validateObject(this, node);
+      return [{ node, ...validatedTransform(override ?? entry.transform) }];
+    });
+    for (const { node, position, quaternion, scale } of changes) {
+      node.position.copy(position);
+      node.quaternion.copy(quaternion);
+      node.scale.copy(scale);
+      node.updateMatrix();
+    }
+    this.#objectTransforms = transforms;
+    this.model.scene.updateMatrixWorld(true);
   }
 
   dispose() { this.#atlas?.geometry.dispose(); if (this.#rigState) this.rig.restore(); this.mesh.dispose(); }

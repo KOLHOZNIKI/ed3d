@@ -12,6 +12,9 @@ import { stitchEdge, type EdgeSide } from './stitch';
 import type { TransferOptions } from './transfer';
 import { faceComponents } from '../e00/topology-components';
 import type { SpatialOptions } from './spatial';
+import { drawSelection, selectionPath, SelectionArea, type ElementSelection, type PickShape } from '../project/selection';
+import type { Point } from '../texture/stroke';
+import { shortcut } from '../project/shortcuts';
 
 const ui = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(`uv-${id}`)! as T;
 const choice = (id: string) => ui<HTMLSelectElement>(id).value;
@@ -49,7 +52,7 @@ interface Actions {
 
 type Transform = 'move' | 'rotate' | 'scale';
 type Gesture = { pointer: number; start: Pair; pan: boolean; last: Pair; base: Layout; prior?: Layout;
-  corners: ReadonlySet<number>; transform: Transform; pivot?: Pair };
+  corners: ReadonlySet<number>; transform: Transform; pivot?: Pair; shape?: Exclude<PickShape, 'click'>; path?: Point[] };
 
 export class UvTool {
   #panel = ui<HTMLFieldSetElement>('tools');
@@ -72,7 +75,7 @@ export class UvTool {
   #zoom = 1;
   #gesture?: Gesture;
   #locked = false;
-  #spacePan = false;
+  #spacePan?: string;
   #componentNote = '';
   #wire = new LineSegments(new BufferGeometry(), new LineBasicMaterial({ color: 0x4ee8ff, depthTest: false }));
 
@@ -110,12 +113,12 @@ export class UvTool {
     this.#canvas.addEventListener('pointermove', event => this.#move(event));
     this.#canvas.addEventListener('pointerup', event => this.#up(event));
     this.#canvas.addEventListener('keydown', event => {
-      if (event.code !== 'Space' || this.#locked || event.ctrlKey || event.metaKey) return;
+      if (shortcut(event) !== 'space' || this.#locked) return;
       event.preventDefault();
-      this.#spacePan = true;
+      this.#spacePan = event.code;
     });
-    this.#canvas.addEventListener('keyup', event => { if (event.code === 'Space') this.#spacePan = false; });
-    this.#canvas.addEventListener('blur', () => { this.#spacePan = false; });
+    this.#canvas.addEventListener('keyup', event => { if (event.code === this.#spacePan) this.#spacePan = undefined; });
+    this.#canvas.addEventListener('blur', () => { this.#spacePan = undefined; });
     this.#canvas.addEventListener('pointercancel', () => {
       if (this.#gesture && !this.#gesture.pan) {
         if (this.#gesture.prior) this.#draft.set(this.#channel, this.#gesture.prior);
@@ -252,6 +255,32 @@ export class UvTool {
     this.#update();
   }
 
+  selectRegion3d(hit: ElementSelection | undefined, toggle: boolean) {
+    const grouping = this.#groups, surface = this.#surface, kind = choice('kind');
+    if (!grouping || !surface) return;
+    const chosen = new Set<number>();
+    const vertex = (i: number) => { for (const corner of grouping.vertices.get(grouping.vertexOf(i)) ?? []) chosen.add(corner); };
+    if (kind === 'vertex') {
+      for (const i of this.#corners()) if (hit?.vertices.has(surface.points[i]) && this.#visible(i)) vertex(i);
+    } else if (kind === 'edge') {
+      for (const [key, sides] of grouping.sides) if (hit?.edges.has(key)) {
+        for (const [a, b] of sides) if (this.#visible(a) && hit.triangles.has(Math.floor(a / 3))) { vertex(a); vertex(b); }
+      }
+    } else if (kind === 'island') {
+      for (const triangle of hit?.triangles ?? []) if (this.#visible(triangle * 3)) {
+        for (const corner of grouping.islands.get(grouping.islandOf(triangle * 3)) ?? []) chosen.add(corner);
+      }
+    } else for (const i of this.#corners()) if (hit?.faces.has(surface.faces[Math.floor(i / 3)]) && this.#visible(i)) chosen.add(i);
+    this.#selectArea(chosen, toggle);
+  }
+
+  #selectArea(chosen: ReadonlySet<number>, toggle: boolean) {
+    this.#edge = undefined;
+    if (!toggle) this.#selection.clear();
+    for (const i of chosen) if (!toggle || !this.#selection.delete(i)) this.#selection.add(i);
+    this.#update();
+  }
+
   #corners() { return indices(this.#surface?.points.length ?? 0); }
   #visible(i: number) { return choice('material') === '' || Number(choice('material')) === this.#surface?.slots[Math.floor(i / 3)]; }
 
@@ -263,8 +292,9 @@ export class UvTool {
     this.#target = targets.find(target => target.binding.slot === slot);
     const material = Array.isArray(mesh.material) ? mesh.material[slot] : mesh.material;
     const textures = new Map(Object.entries(material).filter((entry): entry is [string, Texture] => entry[1] instanceof Texture));
+    const editable = context.catalog.editTargets(context.state).filter(target => target.binding.object === context.object && target.binding.slot === slot);
     const bake = this.#target?.transfer?.bake ?? context.state.bake;
-    const slots = bake ? bake.maps.map(map => map.slot) : [...textures.keys()];
+    const slots = bake ? bake.maps.map(map => map.slot) : [...new Set([...textures.keys(), ...editable.flatMap(target => target.binding.semantic ?? [])])];
     if (this.#target && !slots.includes('map')) slots.unshift('map');
     const selector = ui<HTMLSelectElement>('map'), selected = selector.value;
     selector.replaceChildren(...slots.map(name => new Option(mapNames[name] ?? name, name)));
@@ -276,6 +306,9 @@ export class UvTool {
     const map = selector.value;
     const load = async () => {
       if (map === 'map' && this.#target) return context.catalog.load(this.#target, context.state);
+      const semantic = map === 'roughnessMap' || map === 'metalnessMap' ? 'metalRough' : map;
+      const target = editable.find(target => target.binding.semantic === semantic);
+      if (target) return context.catalog.load(target, context.state);
       const baked = bake?.maps.find(entry => entry.slot === map);
       if (baked) return decodePng(baked.png);
       const image = textures.get(map)?.image;
@@ -495,16 +528,19 @@ export class UvTool {
   #down(event: PointerEvent) {
     const layout = this.#layout;
     if (this.#locked || !layout || event.button > 2) return;
-    const start = this.#pointer(event), pan = event.button !== 0 || event.altKey || this.#spacePan;
-    const control = this.#handle(layout);
+    const start = this.#pointer(event), pan = event.button !== 0 || event.altKey || !!this.#spacePan;
+    const shape = choice('selection-shape') as PickShape;
+    const area = !pan && shape !== 'click' ? shape : undefined;
+    const control = !area && this.#handle(layout);
     const handle = !pan && !event.shiftKey && control && Math.hypot(start[0] - control.handle[0], start[1] - control.handle[1]) < 10 ? control : undefined;
-    if (!pan && !handle) {
+    if (!pan && !handle && !area) {
       const hit = this.#pick(start);
       if (hit || !event.shiftKey) this.#select(hit ?? [], event.shiftKey);
     }
     this.#canvas.setPointerCapture(event.pointerId);
     this.#gesture = { pointer: event.pointerId, pan, start, base: layout, last: start, prior: this.#draft.get(this.#channel),
-      corners: new Set(this.#selection), transform: handle?.operation ?? 'move', pivot: handle?.pivot };
+      corners: new Set(this.#selection), transform: handle?.operation ?? 'move', pivot: handle?.pivot,
+      shape: area, path: area ? [{ x: start[0], y: start[1] }] : undefined };
     this.#canvas.focus({ preventScroll: true });
     event.preventDefault();
   }
@@ -558,6 +594,9 @@ export class UvTool {
     if (!gesture || gesture.pointer !== event.pointerId) return;
     if (gesture.pan) {
       this.#offset = [this.#offset[0] + p[0] - gesture.last[0], this.#offset[1] + p[1] - gesture.last[1]];
+    } else if (gesture.path) {
+      if (gesture.shape === 'rectangle') gesture.path[1] = { x: p[0], y: p[1] };
+      else if (gesture.path.length < 1000 && Math.hypot(p[0] - gesture.last[0], p[1] - gesture.last[1]) > 1) gesture.path.push({ x: p[0], y: p[1] });
     } else if (gesture.corners.size && Math.hypot(p[0] - gesture.start[0], p[1] - gesture.start[1]) >= 2) {
       const [startU, startV] = this.#unproject(gesture.start);
       let transform: (x: number, y: number) => Pair = (x, y) => [x + u - startU, y + v - startV];
@@ -576,8 +615,38 @@ export class UvTool {
 
   #up(event: PointerEvent) {
     if (event.pointerId !== this.#gesture?.pointer) return;
+    const { shape, path } = this.#gesture;
     this.#gesture = undefined;
+    if (shape && path) {
+      const [x, y] = this.#pointer(event);
+      if (shape === 'rectangle') path[1] = { x, y }; else path.push({ x, y });
+      const points = selectionPath(shape, path);
+      if (points.length >= 3) this.#selectArea(this.#areaUv(new SelectionArea(points)), event.shiftKey);
+      return;
+    }
     this.#update();
+  }
+
+  #areaUv(area: SelectionArea) {
+    const layout = this.#layout!, grouping = this.#groups!, surface = this.#surface!, kind = choice('kind');
+    const point = (i: number) => { const [x, y] = this.#project(read(layout.uv, i)); return { x, y }; };
+    const chosen = new Set<number>(), add = (ids: readonly number[]) => { for (const id of ids) chosen.add(id); };
+    if (kind === 'vertex') {
+      for (const [i, ids] of grouping.vertices) if (ids.some(i => this.#visible(i)) && area.contains(point(i))) add(ids);
+    } else if (kind === 'edge') {
+      for (const sides of grouping.sides.values()) for (const [a, b] of sides) if (this.#visible(a) && area.segment(point(a), point(b)).length) {
+        add(grouping.vertices.get(grouping.vertexOf(a))!);
+        add(grouping.vertices.get(grouping.vertexOf(b))!);
+      }
+    } else {
+      const ids = new Set<number>();
+      for (let i = 0; i < surface.points.length; i += 3) if (this.#visible(i) && area.overlaps([point(i), point(i + 1), point(i + 2)])) {
+        ids.add(kind === 'island' ? grouping.islandOf(i) : surface.faces[i / 3]);
+      }
+      if (kind === 'island') for (const id of ids) add(grouping.islands.get(id) ?? []);
+      else for (const i of this.#corners()) if (ids.has(surface.faces[Math.floor(i / 3)]) && this.#visible(i)) chosen.add(i);
+    }
+    return chosen;
   }
 
   #fit(selection: boolean) {
@@ -619,6 +688,7 @@ export class UvTool {
       const stats = [...this.#groups!.islands.values()].filter(list => !this.#selection.size || list.some(i => this.#selection.has(i)))
         .map(list => density(surface, layout.uv, list, size)).sort((a, b) => a - b);
       ui('diagnostics').textContent = `${this.#groups!.islands.size} islands · ${finding.outside} outside · ${finding.overlaps} overlapping · ${finding.flipped} flipped · ${finding.degenerate} degenerate` +
+        (this.#selection.size ? ` · ${this.#selection.size} selected corners` : '') +
         (stats.length ? ` · Density ${Math.round(stats[0])}–${Math.round(stats.at(-1)!)} px/unit` : '') +
         (this.#wireStride(layout) > 1 ? ' · Zoom in to see more UV edges.' : '');
       const state = this.#context!.state;
@@ -711,6 +781,8 @@ export class UvTool {
       ctx.stroke();
       ctx.fillRect(control.handle[0] - 5, control.handle[1] - 5, 10, 10);
     }
+    const { shape, path } = this.#gesture ?? {};
+    if (shape && path) drawSelection(ctx, selectionPath(shape, path));
   }
 
   #wireStride(layout: Layout) {

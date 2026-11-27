@@ -17,3 +17,4 @@
 | E12 | USR-01–USR-17 | Added offline relaunch, local texture assignment, compatibility reports, and end-to-end acceptance on both browser and Unity targets. [Report](Docs/E12_Report.md) |
 | V1+ | UV-12 | Added draft-based UV edge stitching with a fixed anchor side and guards for incompatible seams. [Report](Docs/UV_Stitch.md) |
 | Workspace | USR-01, VIEW-01–VIEW-08 | Added the resizable desktop layout, scene hierarchy, inspection display modes, guides, lighting, and original or snapshot comparison. [Report](Docs/Workspace_Report.md) |
+| V1 closure | HIST-06, §7.4, VIEW-08–VIEW-09, §8.4–8.5, §12.1, §12.7, §20.6 | Added durable history checkpoints, scoped export, area selection, object transforms, remappable keys, scalar texture editing, explicit resize and image-size preflight. [Report](Docs/V1_Report.md) |

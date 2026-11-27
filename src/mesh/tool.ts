@@ -2,6 +2,7 @@ import { BufferGeometry, Euler, Float32BufferAttribute, Group, LineBasicMaterial
   Object3D, Points, PointsMaterial, Quaternion, Raycaster, Vector2, Vector3, type Camera } from 'three';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import type { Viewer } from '../project/viewer';
+import type { ElementSelection } from '../project/selection';
 import type { ModelAdapter } from '../project/adapter';
 import type { MeshEdit } from './commands';
 import { connected, edgesOf, edgeKey, edgeVertices, usedVertices, verticesOf, type Face, type Kind, type MeshData, type Vec3 } from './data';
@@ -191,6 +192,18 @@ export class MeshTool {
         return distance(a.clone().addScaledVector(d, t));
       });
       this.#selection.edge = picked(this.#selection.edge, edgeKey(vertices[edge], vertices[(edge + 1) % vertices.length]), event.shiftKey);
+    }
+    this.#selectionChanged();
+  }
+
+  selectRegion(hit: ElementSelection | undefined, toggle: boolean) {
+    const kind = this.#kind.value as Kind;
+    const merge = <T>(before: T[], hit: T[]) => toggle ? [...before.filter(id => !hit.includes(id)), ...hit.filter(id => !before.includes(id))] : hit;
+    if (kind === 'vertex') this.#selection.vertex = merge(this.#selection.vertex, [...hit?.vertices ?? []]);
+    else if (kind === 'face') this.#selection.face = merge(this.#selection.face, [...hit?.faces ?? []]);
+    else if (this.#data) {
+      const edges = edgesOf(this.#data);
+      this.#selection.edge = merge(this.#selection.edge, [...hit?.edges ?? []].filter(id => edges.has(id)));
     }
     this.#selectionChanged();
   }

@@ -48,6 +48,7 @@ export function sourceAppearance(catalog: TextureCatalog, state: WorkingState, m
   live?: { target: TextureTarget; canvas: HTMLCanvasElement }, unlit = false, object?: string) {
   const result = emptyAppearance();
   const fbx = new Map<Texture, Uint8Array<ArrayBuffer>>();
+  const auxiliary = new Map<string, { png: Uint8Array<ArrayBuffer>; semantic: string }>();
   const glb = new Map<HTMLCanvasElement, { blob: Blob; name?: string }>();
   const canvases = new Map<TextureImage, HTMLCanvasElement>();
   const encoded = new Map<TextureImage, Uint8Array<ArrayBuffer>>();
@@ -61,13 +62,18 @@ export function sourceAppearance(catalog: TextureCatalog, state: WorkingState, m
     return png;
   };
   try {
-    for (const target of catalog.targets(state)) {
+    for (const target of catalog.editTargets(state)) {
       if (target.atlas || object !== undefined && target.binding.object !== object) continue;
       const edited = state.textures?.[target.key]?.image;
+      const { binding } = target, semantic = binding.semantic;
+      if (semantic && (unlit || !edited && live?.target.key !== target.key)) continue;
+      if (semantic === 'roughness' || semantic === 'metallic') {
+        if (mode === 'fbx' && edited && binding.sourceName && !target.baked) auxiliary.set(binding.sourceName, { png: encode(edited), semantic });
+        continue;
+      }
       const image = edited ?? catalog.transferredImage(target);
       let canvas = live?.target.key === target.key ? live.canvas : undefined;
       if (!image && !canvas && !unlit) continue;
-      const { binding } = target;
       if (!canvas && image && mode !== 'fbx') {
         canvas = canvases.get(image);
         if (!canvas) {
@@ -78,15 +84,23 @@ export function sourceAppearance(catalog: TextureCatalog, state: WorkingState, m
       const texture = canvas ? mappedTexture(binding.texture, canvas) : image ? binding.texture.clone() : binding.texture;
       if (texture !== binding.texture) result.textures.push(texture);
       if (target.transfer) transferSampling(texture, target.transfer.channel);
+      if (semantic) texture.colorSpace = NoColorSpace;
       if (mode === 'fbx' && image) fbx.set(texture, (!edited && target.transfer?.bake.maps.find(map => map.slot === 'map')?.png) || encode(image));
       if (mode === 'glb' && image && canvas) {
         texture.userData = { ...texture.userData, mimeType: 'image/png' };
         const png = !edited ? target.transfer?.bake.maps.find(map => map.slot === 'map')?.png : undefined;
         if (!glb.has(canvas)) glb.set(canvas, { blob: new Blob([png ?? encode(image)], { type: 'image/png' }), name: binding.sourceName });
       }
-      const material = unlit ? unlitColor(binding.material, texture) : binding.material.clone();
-      material.map = texture;
-      if (target.transfer && !unlit) {
+      let replacement = materialsByMesh.get(binding.mesh);
+      if (!replacement) {
+        replacement = Array.isArray(binding.mesh.material) ? [...binding.mesh.material] : [binding.mesh.material];
+        materialsByMesh.set(binding.mesh, replacement);
+      }
+      const material = unlit ? unlitColor(binding.material, texture) : replacement[binding.slot].clone();
+      const materialSlots = material as unknown as Record<string, Texture | null>;
+      const names = semantic === 'metalRough' ? ['roughnessMap', 'metalnessMap'] : [semantic ?? 'map'];
+      for (const name of names) materialSlots[name] = texture;
+      if (!semantic && target.transfer && !unlit) {
         const slots = material as unknown as Record<string, Texture | null>;
         for (const entry of target.transfer.bake.maps) {
           if (entry.slot === 'map') continue;
@@ -108,18 +122,13 @@ export function sourceAppearance(catalog: TextureCatalog, state: WorkingState, m
         }
       }
       material.needsUpdate = true;
-      let replacement = materialsByMesh.get(binding.mesh);
-      if (!replacement) {
-        replacement = Array.isArray(binding.mesh.material) ? [...binding.mesh.material] : [binding.mesh.material];
-        materialsByMesh.set(binding.mesh, replacement);
-      }
       replacement[binding.slot] = material;
       result.materials.push(material);
     }
     for (const [mesh, replacement] of materialsByMesh) {
       result.views.push({ mesh, material: Array.isArray(mesh.material) ? replacement : replacement[0] });
     }
-    return { appearance: result, fbx, glb };
+    return { appearance: result, fbx, glb, auxiliary };
   } catch (error) {
     disposeAppearance(result);
     throw error;

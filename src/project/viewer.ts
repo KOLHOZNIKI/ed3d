@@ -41,7 +41,8 @@ export class Viewer {
   #referenceGrid = new GridHelper(10, 20, 0x526c80, 0x2b4051);
   #referenceAxes = new AxesHelper(1);
   #referenceBounds = new Box3Helper(new Box3(), 0x708fa2);
-  #isolated?: Object3D;
+  #isolated?: ReadonlySet<Object3D>;
+  #areaSelecting = false;
   #model?: Object3D;
   #camera?: PerspectiveCamera | OrthographicCamera;
   #orbit?: OrbitControls;
@@ -52,6 +53,7 @@ export class Viewer {
   #outline = new Box3Helper(new Box3(), 0x2ad9ed);
   #floor = new GridHelper(10, 20, 0x526c80, 0x2b4051);
   #axes = new AxesHelper(1);
+  #cursor = new AxesHelper(.1);
   #bounds = new Box3Helper(new Box3(), 0x708fa2);
   #ambient = new AmbientLight(0xffffff, 1.5);
   #keyLight = new DirectionalLight(0xffffff, 2);
@@ -86,8 +88,8 @@ export class Viewer {
     this.#keyLight.position.set(3, 5, 4);
     this.#referenceKey.position.copy(this.#keyLight.position);
     this.#referenceScene.add(this.#referenceAmbient, this.#referenceKey, this.#referenceGrid, this.#referenceAxes, this.#referenceBounds);
-    this.scene.add(this.#ambient, this.#keyLight, this.#floor, this.#axes, this.#bounds, this.#outline);
-    this.#bounds.visible = this.#axes.visible = this.#outline.visible = false;
+    this.scene.add(this.#ambient, this.#keyLight, this.#floor, this.#axes, this.#bounds, this.#outline, this.#cursor);
+    this.#bounds.visible = this.#axes.visible = this.#outline.visible = this.#cursor.visible = false;
     new ResizeObserver(() => this.resize()).observe(canvas);
     canvas.addEventListener('webglcontextlost', event => {
       event.preventDefault();
@@ -175,8 +177,18 @@ export class Viewer {
     this.render();
   }
 
-  isolate(object?: Object3D) {
-    this.#isolated = object;
+  isolate(objects?: readonly Object3D[]) {
+    this.#isolated = objects?.length ? new Set(objects) : undefined;
+    this.render();
+  }
+
+  areaSelection(enabled: boolean) { this.#areaSelecting = enabled; this.#configureOrbit(); }
+
+  showCursor(position?: Vector3) {
+    const visible = !!position?.toArray().every(Number.isFinite);
+    if (visible === this.#cursor.visible && (!visible || position!.equals(this.#cursor.position))) return;
+    this.#cursor.visible = visible;
+    if (visible) this.#cursor.position.copy(position!);
     this.render();
   }
 
@@ -190,6 +202,7 @@ export class Viewer {
     this.#floor.position.set(center.x, box.min.y, center.z);
     this.#axes.position.copy(this.#floor.position);
     this.#axes.scale.setScalar(diameter * .3);
+    this.#cursor.scale.setScalar(diameter * .4);
   }
 
   install(model: Object3D, appearance?: Appearance) {
@@ -221,7 +234,7 @@ export class Viewer {
     if (this.#appearance) disposeAppearance(this.#appearance);
     this.#appearance = undefined;
     this.setLive();
-    this.#outline.visible = false;
+    this.#outline.visible = this.#cursor.visible = false;
     this.#canvas.hidden = true;
     this.#renderer?.renderLists.dispose();
     this.#renderer?.clear();
@@ -262,7 +275,7 @@ export class Viewer {
   #configureOrbit() {
     if (!this.#orbit) return;
     this.#orbit.enabled = !this.#paintingStroke;
-    this.#orbit.mouseButtons.LEFT = this.#painting && !this.comparing ? null : MOUSE.ROTATE;
+    this.#orbit.mouseButtons.LEFT = (this.#painting || this.#areaSelecting) && !this.comparing ? null : MOUSE.ROTATE;
     this.#orbit.mouseButtons.MIDDLE = MOUSE.PAN;
     this.#orbit.mouseButtons.RIGHT = MOUSE.ROTATE;
     this.#orbit.enableRotate = true;
@@ -318,6 +331,15 @@ export class Viewer {
     this.#frameBox(box, this.#camera instanceof OrthographicCamera, direction);
   }
 
+  frameSelection(objects: readonly Object3D[], orthographic: boolean, direction: Vector3) {
+    const box = this.withPose(() => {
+      const result = new Box3();
+      for (const object of objects) result.expandByObject(object, !!(this.#pose || this.#manualPose));
+      return result;
+    });
+    this.#frameBox(box, orthographic, direction);
+  }
+
   #frameBox(box: Box3, orthographic: boolean, direction: Vector3) {
     if (box.isEmpty()) return;
     const center = box.getCenter(new Vector3()), radius = Math.max(box.getSize(new Vector3()).length() / 2, 0.001);
@@ -341,25 +363,30 @@ export class Viewer {
     this.render();
   }
 
-  select(object?: Object3D) {
-    this.#outline.visible = !!object && shown(object);
-    if (this.#outline.visible) this.withPose(() => this.#outline.box.setFromObject(object!, !!(this.#pose || this.#manualPose)));
+  select(objects: readonly Object3D[] = []) {
+    this.#outline.visible = objects.some(shown);
+    this.#outline.box.makeEmpty();
+    if (this.#outline.visible) this.withPose(() => {
+      for (const object of objects.filter(shown)) this.#outline.box.expandByObject(object, !!(this.#pose || this.#manualPose));
+    });
     this.render();
   }
 
-  pick(event: PointerEvent, meshes: Mesh[]) {
+  pick(event: PointerEvent, meshes: Mesh[]) { return this.hit(event, meshes)?.object; }
+
+  hit(event: PointerEvent, meshes: Mesh[]) {
     if (!this.#camera || this.comparing) return;
     const bounds = this.#canvas.getBoundingClientRect();
     const uv = new Vector2(2 * (event.clientX - bounds.left) / bounds.width - 1,
       1 - 2 * (event.clientY - bounds.top) / bounds.height);
     const ray = new Raycaster();
     ray.setFromCamera(uv, this.#camera);
-    return ray.intersectObjects(meshes.filter(mesh => shown(mesh) && this.#inIsolation(mesh)), false)[0]?.object;
+    return this.withPose(() => ray.intersectObjects(meshes.filter(mesh => shown(mesh) && this.inIsolation(mesh)), false)[0]);
   }
 
-  #inIsolation(object: Object3D) {
+  inIsolation(object: Object3D) {
     if (!this.#isolated) return true;
-    for (let node: Object3D | null = object; node; node = node.parent) if (node === this.#isolated) return true;
+    for (let node: Object3D | null = object; node; node = node.parent) if (this.#isolated.has(node)) return true;
     return false;
   }
 
@@ -375,7 +402,7 @@ export class Viewer {
     if (inspection) inspection.mesh.geometry = inspection.geometry;
     if (inspection || this.#isolated) {
       this.#model?.traverse(node => {
-        if (node instanceof Mesh && (inspection && node !== inspection.mesh || !this.#inIsolation(node))) {
+        if (node instanceof Mesh && (inspection && node !== inspection.mesh || !this.inIsolation(node))) {
           masked.push([node, node.layers.mask]);
           node.layers.mask = 0;
         }
@@ -497,11 +524,12 @@ export async function prepareAppearance(model: Model, catalog: TextureCatalog, s
   appearance.geometries.push(geometry);
   appearance.materials.push(material);
   const edited = state.textures?.[atlasColor]?.image;
+  const liveColor = live?.target.atlas && !live.target.binding.semantic ? live.canvas : undefined;
   try {
     for (const entry of model.textureBake.maps) {
       if (entry.slot !== 'map' && (entry.slot !== 'normalMap' || !(material instanceof MeshPhongMaterial))) continue;
-      if (entry.slot === 'map' && (edited || live?.target.atlas)) {
-        const texture = new Texture(live?.target.atlas ? live.canvas : sourceImage(edited!));
+      if (entry.slot === 'map' && (edited || liveColor)) {
+        const texture = new Texture(liveColor ?? sourceImage(edited!));
         texture.colorSpace = SRGBColorSpace;
         texture.needsUpdate = true;
         appearance.textures.push(texture);

@@ -443,11 +443,11 @@ static const ufbx_mesh *find_mesh(const ufbx_scene *scene, const char *name)
     return node ? node->mesh : NULL;
 }
 
-static bool shared_skeleton(const ufbx_scene *scene, const ufbx_mesh *const meshes[2])
+static bool shared_skeleton(const ufbx_scene *scene, const ufbx_mesh *const *meshes, size_t count)
 {
     const ufbx_node *bones[] = { ufbx_find_node(scene, "Pelvis"), ufbx_find_node(scene, "Spine"), ufbx_find_node(scene, "Chest") };
     if (scene->bones.count != 3 || !bones[0] || !bones[1] || !bones[2] || bones[1]->parent != bones[0] || bones[2]->parent != bones[1]) return false;
-    for (size_t i = 0; i < 2; i++) {
+    for (size_t i = 0; i < count; i++) {
         const ufbx_mesh *mesh = meshes[i];
         if (!mesh || mesh->instances.count != 1 || mesh->skin_deformers.count != 1) return false;
         const ufbx_skin_cluster_list clusters = mesh->skin_deformers.data[0]->clusters;
@@ -461,18 +461,18 @@ static bool shared_skeleton(const ufbx_scene *scene, const ufbx_mesh *const mesh
     return true;
 }
 
-static bool compare_shared_skin(const ufbx_scene *original, const ufbx_scene *exported)
+static bool compare_shared_skin(const ufbx_scene *original, const ufbx_scene *exported, size_t count)
 {
     const char *names[] = { "Body", "Clothing" };
     const size_t expected_vertices[] = { 40, 32 }, expected_triangles[] = { 76, 48 };
     const ufbx_mesh *source[] = { find_mesh(original, names[0]), find_mesh(original, names[1]) };
     const ufbx_mesh *output[] = { find_mesh(exported, names[0]), find_mesh(exported, names[1]) };
-    const bool source_shared = shared_skeleton(original, source), output_shared = shared_skeleton(exported, output);
+    const bool source_shared = shared_skeleton(original, source, 2), output_shared = shared_skeleton(exported, output, count);
     printf("{\"originalSharedSkeleton\":%s,\"exportedSharedSkeleton\":%s,\"originalBoneCount\":%zu,\"exportedBoneCount\":%zu,\"meshes\":[",
            source_shared ? "true" : "false", output_shared ? "true" : "false", original->bones.count, exported->bones.count);
     bool compatible = source_shared && output_shared && original->anim_stacks.count == 1 && exported->anim_stacks.count == 1;
     if (source_shared && output_shared) {
-        for (size_t i = 0; i < 2; i++) {
+        for (size_t i = 0; i < count; i++) {
             const ufbx_mesh *a = source[i], *b = output[i];
             const bool topology = same_connectivity(a, b) && a->num_vertices == expected_vertices[i] && a->num_triangles == expected_triangles[i];
             const bool weights = same_skin_weights(a, b);
@@ -907,12 +907,13 @@ int main(int argc, char **argv)
         ufbx_free_scene(scene);
         return matches ? 0 : 1;
     }
-    const bool shared = argc == 4 && strcmp(argv[3], "--shared-skin") == 0;
+    const bool selected = argc == 4 && strcmp(argv[3], "--selected-skin") == 0;
+    const bool shared = argc == 4 && (selected || strcmp(argv[3], "--shared-skin") == 0);
     const bool rig = argc == 4 && (!strcmp(argv[3], "--rig-moved") || !strcmp(argv[3], "--rig-renamed") || !strcmp(argv[3], "--rig-deleted"));
     const bool weight = argc == 4 && (!strcmp(argv[3], "--weight-stroke") || !strcmp(argv[3], "--weight-wide"));
     const bool stitch = argc == 4 && strcmp(argv[3], "--uv-stitch") == 0;
     if (argc != 3 && argc != 5 && !shared && !rig && !weight && !stitch) {
-        fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx [--shared-skin | --rig-moved | --rig-renamed | --rig-deleted | --weight-stroke | --weight-wide | --uv-stitch | control-point offset-y | --seams offset-y | --atlas source-corners.bin | --baked source-corners.bin | --smooth center | --grid center]\n");
+        fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx [--shared-skin | --selected-skin | --rig-moved | --rig-renamed | --rig-deleted | --weight-stroke | --weight-wide | --uv-stitch | control-point offset-y | --seams offset-y | --atlas source-corners.bin | --baked source-corners.bin | --smooth center | --grid center]\n");
         return 2;
     }
     const bool baked = argc == 5 && strcmp(argv[3], "--baked") == 0;
@@ -933,7 +934,7 @@ int main(int argc, char **argv)
         }
     }
     ufbx_scene *original = load(argv[1], shared || rig ? 2 : 1);
-    ufbx_scene *exported = load(argv[2], shared || rig ? 2 : 1);
+    ufbx_scene *exported = load(argv[2], (shared && !selected) || rig ? 2 : 1);
     if (weight) {
         const bool matches = compare_weight_edit(original, exported, !strcmp(argv[3], "--weight-wide"));
         ufbx_free_scene(exported);
@@ -941,7 +942,7 @@ int main(int argc, char **argv)
         return matches ? 0 : 1;
     }
     if (shared || rig) {
-        const bool matches = shared ? compare_shared_skin(original, exported) : compare_edited_rig(original, exported, argv[3]);
+        const bool matches = shared ? compare_shared_skin(original, exported, selected ? 1 : 2) : compare_edited_rig(original, exported, argv[3]);
         ufbx_free_scene(exported);
         ufbx_free_scene(original);
         return matches ? 0 : 1;

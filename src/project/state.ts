@@ -36,6 +36,7 @@ export interface ExtractedAsset {
 
 export interface WorkingState {
   readonly objects: ObjectOverrides;
+  readonly objectTransforms?: import('./object-transform').ObjectTransforms;
   readonly atlas?: AtlasState;
   readonly bake?: TextureBake;
   readonly paint?: TexturePaint;

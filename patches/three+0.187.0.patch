@@ -38,7 +38,20 @@ index fc155a4..2d9acb1 100644
  		}
  
  		return images;
-@@ -1119,27 +1128,19 @@ class FBXTreeParser {
+@@ -339,6 +348,12 @@ class FBXTreeParser {
+ 		const fileName = videoNode.RelativeFilename || videoNode.Filename;
+ 		const extension = fileName.slice( fileName.lastIndexOf( '.' ) + 1 ).toLowerCase();
+ 
++		if ( this.manager.assetFixerEmbeddedImage ) {
++
++			return this.manager.assetFixerEmbeddedImage( content, fileName );
++
++		}
++
+ 		let type;
+ 
+ 		switch ( extension ) {
+@@ -1119,27 +1134,19 @@ class FBXTreeParser {
  
  					if ( rawBone.ID === parent.ID ) {
  

@@ -32,6 +32,7 @@ export interface Command<T> {
 }
 
 interface Version<T> { label: string; state: T }
+export interface HistoryCheckpoint<T> { revision: number; state: T; historyBudget: number }
 
 export class AssetDocument<T extends object> {
   readonly id: string;
@@ -47,11 +48,13 @@ export class AssetDocument<T extends object> {
   #saved?: WeakRef<T>;
   #undo: Version<T>[] = [];
   #redo: Version<T>[] = [];
+  #checkpointPending = false;
   #retained: (state: T) => Iterable<ArrayBuffer>;
 
   constructor(data: { id: string; name: string; revision: number; originals: readonly OriginalFile[]; scene: readonly SceneEntry[];
     topology: ReadonlyMap<string, Topology>; historyBudget: number; state: T; textureAssignments?: TextureAssignments },
-    retained: (state: T) => Iterable<ArrayBuffer>) {
+    retained: (state: T) => Iterable<ArrayBuffer>,
+    readonly checkpoint?: (document: AssetDocument<T>, snapshot: HistoryCheckpoint<T>) => Promise<void>) {
     this.id = data.id;
     this.name = data.name;
     this.originals = data.originals;
@@ -81,21 +84,16 @@ export class AssetDocument<T extends object> {
   execute(command: Command<T>) {
     this.assertRevision(command.baseRevision);
     if (command.state === this.#state) return;
-    this.#undo.push({ label: command.label, state: this.#state });
-    this.#redo.length = 0;
-    this.#state = command.state;
-    this.#revision++;
-    this.#trim();
+    return this.#advance(command.state, this.#historyBudget, [...this.#undo, { label: command.label, state: this.#state }], []);
   }
 
   navigate(direction: 'undo' | 'redo') {
-    const [from, to] = direction === 'undo' ? [this.#undo, this.#redo] : [this.#redo, this.#undo];
+    const undo = this.#undo.slice(), redo = this.#redo.slice();
+    const [from, to] = direction === 'undo' ? [undo, redo] : [redo, undo];
     const target = from.pop();
     if (!target) return;
     to.push({ label: target.label, state: this.#state });
-    this.#state = target.state;
-    this.#revision++;
-    this.#trim();
+    return this.#advance(target.state, this.#historyBudget, undo, redo);
   }
 
   markSaved() {
@@ -104,25 +102,45 @@ export class AssetDocument<T extends object> {
   }
   markRecovered() { this.#saved = undefined; }
 
-  configureHistory(bytes: number): boolean {
+  configureHistory(bytes: number): boolean | Promise<boolean> {
     if (!Number.isSafeInteger(bytes) || bytes < minBudget || bytes > maxBudget) throw new Error('Choose a history budget from 1 to 512 MiB.');
     if (bytes === this.#historyBudget) return false;
-    this.#historyBudget = bytes;
-    this.#revision++;
-    this.#trim();
-    return true;
+    const result = this.#advance(this.#state, bytes, this.#undo.slice(), this.#redo.slice());
+    return result ? result.then(() => true) : true;
   }
 
-  #trim() {
-    const active = new Set(this.#retained(this.#state));
+  #advance(state: T, historyBudget: number, undo: Version<T>[], redo: Version<T>[]) {
+    if (this.#checkpointPending) throw new Error('Wait for the history checkpoint to finish.');
+    const revision = this.#revision;
+    const commit = () => {
+      this.assertRevision(revision);
+      this.#state = state;
+      this.#historyBudget = historyBudget;
+      this.#undo = undo;
+      this.#redo = redo;
+      this.#revision++;
+    };
+    const truncated = this.#trim(state, historyBudget, [undo, redo]);
+    // Keep the committed history intact until the replacement checkpoint is durable.
+    if (truncated && this.checkpoint) {
+      this.#checkpointPending = true;
+      return this.checkpoint(this, { state, historyBudget, revision: revision + 1 }).then(commit).finally(() => { this.#checkpointPending = false; });
+    }
+    commit();
+  }
+
+  #trim(state: T, budget: number, stacks: Version<T>[][]) {
+    const active = new Set(this.#retained(state));
     let historyBytes = 0;
     let count = 0;
-    for (const stack of [this.#undo, this.#redo]) {
+    let truncated = false;
+    for (const stack of stacks) {
       for (let i = stack.length - 1; i >= 0; i--) {
         const added = new Set([...this.#retained(stack[i].state)].filter(bytes => !active.has(bytes)));
         const size = [...added].reduce((sum, bytes) => sum + bytes.byteLength, 0);
-        if (historyBytes + size > this.#historyBudget || count === 512) {
+        if (historyBytes + size > budget || count === 512) {
           stack.splice(0, i + 1);
+          truncated = true;
           break;
         }
         for (const bytes of added) active.add(bytes);
@@ -130,5 +148,6 @@ export class AssetDocument<T extends object> {
         count++;
       }
     }
+    return truncated;
   }
 }

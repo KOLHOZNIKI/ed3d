@@ -34,21 +34,20 @@ public static class SharedSkinProbe
         public readonly AnimationClip clip;
         public readonly bool sharedSkeleton;
 
-        public Model(string directory)
+        public Model(string directory, int count)
         {
             var path = Directory.GetFiles(directory, "*.fbx").Single().Replace('\\', '/');
             root = UnityEngine.Object.Instantiate(AssetDatabase.LoadAssetAtPath<GameObject>(path));
             try {
                 var renderers = root.GetComponentsInChildren<SkinnedMeshRenderer>();
-                if (renderers.Length != MeshNames.Length) throw new InvalidOperationException($"Expected two skinned meshes in {path}.");
-                meshes = MeshNames.Select(name => renderers.Single(renderer => renderer.name == name)).ToArray();
+                if (renderers.Length != count) throw new InvalidOperationException($"Expected {count} skinned meshes in {path}.");
+                meshes = MeshNames.Take(count).Select(name => renderers.Single(renderer => renderer.name == name)).ToArray();
                 clip = AssetDatabase.LoadAllAssetsAtPath(path).OfType<AnimationClip>()
                     .Single(take => !take.name.StartsWith("__preview__", StringComparison.Ordinal));
                 var transforms = root.GetComponentsInChildren<Transform>();
                 var bones = BoneNames.Select(name => transforms.SingleOrDefault(bone => bone.name == name)).ToArray();
                 sharedSkeleton = bones.All(bone => bone != null) && bones[1].parent == bones[0] && bones[2].parent == bones[1] &&
-                    meshes.All(mesh => mesh.bones.Length == bones.Length && bones.All(mesh.bones.Contains)) &&
-                    meshes[0].rootBone == bones[0] && meshes[1].rootBone == bones[0];
+                    meshes.All(mesh => mesh.bones.Length == bones.Length && bones.All(mesh.bones.Contains) && mesh.rootBone == bones[0]);
             } catch {
                 Dispose();
                 throw;
@@ -58,22 +57,26 @@ public static class SharedSkinProbe
         public void Dispose() => UnityEngine.Object.DestroyImmediate(root);
     }
 
-    public static void Run()
+    public static void Run() => Verify(MeshNames.Length);
+
+    public static void RunSelection() => Verify(1);
+
+    static void Verify(int count)
     {
-        using (var original = new Model("Assets/Fixtures/shared-skin/original"))
-        using (var exported = new Model("Assets/Fixtures/shared-skin/exported")) {
+        using (var original = new Model("Assets/Fixtures/shared-skin/original", MeshNames.Length))
+        using (var exported = new Model("Assets/Fixtures/shared-skin/exported", count)) {
             var report = new Report {
                 unityVersion = Application.unityVersion, clip = original.clip.name,
                 originalSharedSkeleton = original.sharedSkeleton, exportedSharedSkeleton = exported.sharedSkeleton,
                 originalClipSeconds = original.clip.length, exportedClipSeconds = exported.clip.length,
             };
-            report.meshes = Enumerable.Range(0, MeshNames.Length).Select(i => CompareMesh(original, exported, i)).ToArray();
+            report.meshes = Enumerable.Range(0, count).Select(i => CompareMesh(original, exported, i)).ToArray();
             report.compatible = report.originalSharedSkeleton && report.exportedSharedSkeleton && report.clip == "SharedTorsoBend" &&
                 original.clip.name == exported.clip.name && Mathf.Abs(report.originalClipSeconds - 1f) <= 1e-5f &&
                 Mathf.Abs(report.originalClipSeconds - report.exportedClipSeconds) <= 1e-5f && report.meshes.All(mesh => mesh.compatible);
             File.WriteAllText("shared-skin-report.json", JsonUtility.ToJson(report, true));
             if (!report.compatible) throw new InvalidOperationException("F10 shared skin verification failed. See shared-skin-report.json.");
-            Debug.Log("Verified F10 body and clothing on the shared skeleton. See shared-skin-report.json.");
+            Debug.Log($"Verified {count} F10 meshes and the retained skeleton. See shared-skin-report.json.");
         }
     }
 

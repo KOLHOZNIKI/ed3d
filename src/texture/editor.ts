@@ -1,8 +1,9 @@
 import type { BufferGeometry } from 'three';
-import { decodeImage, drawImage, drawTile, readPixel, type Rgba, type TextureImage } from './image';
+import { decodeImage, drawImage, drawTile, readPixel, resizeImage, type Rgba, type TextureImage } from './image';
 import { TextureStroke, type BrushSettings, type Point, type Region } from './stroke';
 import { uvOverlay } from './overlay';
-import type { TextureTarget } from './bindings';
+import { scalarChannels, type TextureTarget } from './bindings';
+import { shortcut } from '../project/shortcuts';
 
 interface Session {
   targets: TextureTarget[];
@@ -55,7 +56,7 @@ export class TextureEditor {
   #aligned?: Point;
   #sharedAllowed = new Set<string>();
   #locked = false;
-  #spacePan = false;
+  #spacePan?: string;
   #actions: Actions;
 
   constructor(actions: Actions) {
@@ -68,9 +69,10 @@ export class TextureEditor {
       if (!this.#target || this.#locked) return;
       this.#sharedAllowed.add(this.#target.key);
       this.#refresh();
-      this.#say('Edits update each binding of this shared Base Color map.');
+      this.#say('Edits update each binding of this shared map.');
     });
-    byId('copy').addEventListener('click', () => void this.#apply('Copy Base Color binding', this.#image, true));
+    byId('copy').addEventListener('click', () => void this.#apply(this.#target?.binding.semantic ? 'Copy texture binding' : 'Copy Base Color binding', this.#image, true));
+    byId('resize').addEventListener('click', () => void this.#resize());
     byId('fit').addEventListener('click', () => this.fit());
     byId('focus').addEventListener('click', () => this.#focusUvs());
     byId('actual').addEventListener('click', () => this.#zoomAt(1));
@@ -113,13 +115,14 @@ export class TextureEditor {
       this.#zoomAt(this.#zoom * (event.deltaY < 0 ? 1.25 : .8), this.#screen(event));
     }, { passive: false });
     this.#view.addEventListener('keydown', event => {
-      if (event.key === 'Escape') { this.cancel(); this.#region = undefined; this.#refresh(); this.#paintOverlay(); }
-      if (this.#locked || event.ctrlKey || event.metaKey || event.altKey) return;
-      if (event.code === 'Space') {
+      const action = shortcut(event);
+      if (action === 'cancel') { this.cancel(); this.#region = undefined; this.#refresh(); this.#paintOverlay(); }
+      if (this.#locked) return;
+      if (action === 'space') {
         event.preventDefault();
-        this.#spacePan = true;
+        this.#spacePan = event.code;
       }
-      const tool = ({ b: 'brush', c: 'stamp', i: 'eyedropper' } as Record<string, string>)[event.key.toLowerCase()];
+      const tool = action && ['brush', 'stamp', 'eyedropper'].includes(action) ? action : undefined;
       if (tool && !this.#gesture) {
         event.preventDefault();
         byId<HTMLSelectElement>('tool').value = tool;
@@ -127,8 +130,8 @@ export class TextureEditor {
         this.#paintOverlay();
       }
     });
-    this.#view.addEventListener('keyup', event => { if (event.code === 'Space') this.#spacePan = false; });
-    this.#view.addEventListener('blur', () => { this.#spacePan = false; });
+    this.#view.addEventListener('keyup', event => { if (event.code === this.#spacePan) this.#spacePan = undefined; });
+    this.#view.addEventListener('blur', () => { this.#spacePan = undefined; });
     new ResizeObserver(() => {
       if (this.panel.hidden) return;
       if (this.#fitMode) this.fit();
@@ -140,7 +143,7 @@ export class TextureEditor {
 
   close() {
     this.cancel();
-    this.#spacePan = false;
+    this.#spacePan = undefined;
     this.panel.hidden = true;
     this.#session = this.#target = this.#image = this.#atlas = this.#paths = this.#scaledPaths = this.#geometry = undefined;
     this.#region = this.#source = this.#aligned = undefined;
@@ -198,6 +201,11 @@ export class TextureEditor {
     if (target) this.#chooser.value = target.binding.id;
     if (changed) {
       this.#target = target;
+      const semantic = target?.binding.semantic;
+      byId('scalar-tool').hidden = !semantic;
+      byId('color').hidden = byId('color-label').hidden = byId('alpha-tools').hidden = !!semantic;
+      const channels = semantic ? scalarChannels[semantic] : [];
+      byId<HTMLSelectElement>('channel').replaceChildren(...channels.map(({ label, channel }) => new Option(label, String(channel))));
       this.#image = this.#paths = this.#scaledPaths = undefined;
       this.#region = this.#source = this.#aligned = undefined;
       this.#fitMode = true;
@@ -216,6 +224,8 @@ export class TextureEditor {
           this.#region = this.#source = this.#aligned = undefined;
           this.picture.width = image.width;
           this.picture.height = image.height;
+          byId<HTMLInputElement>('width').value = String(image.width);
+          byId<HTMLInputElement>('height').value = String(image.height);
         }
         drawImage(this.picture.getContext('2d')!, image);
       }
@@ -250,12 +260,15 @@ export class TextureEditor {
     byId<HTMLButtonElement>('export').disabled = !ready;
     byId<HTMLButtonElement>('focus').disabled = !ready || !this.#paths?.bounds;
     byId<HTMLInputElement>('import').disabled = !ready || !this.#canWrite();
+    byId<HTMLButtonElement>('resize').disabled = !ready || !this.#canWrite();
     byId<HTMLInputElement>('alpha-value').disabled = !checked('alpha');
+    const semantic = target?.binding.semantic;
+    const name = semantic ? scalarChannels[semantic].map(channel => channel.label).join(' / ') : 'Base Color';
     byId('info').textContent = this.#image && target
-      ? `${this.#image.width} × ${this.#image.height} · RGBA8 · Base Color · ${target.atlas ? 'Baked atlas' : `Sampling UV${target.transfer?.channel ?? target.binding.texture.channel}`}` +
+      ? `${this.#image.width} × ${this.#image.height} · RGBA8 · ${name} · ${target.atlas ? 'Baked atlas' : `Sampling UV${target.transfer?.channel ?? target.binding.texture.channel}`}` +
         (target.shared.length > 1 ? ` · Shared by ${target.shared.length} bindings` : '') +
         (this.#paths?.overlaps ? ' · Shared UVs detected' : '')
-      : target ? 'Loading Base Color…' : 'No editable Base Color map on this model.';
+      : target ? 'Loading map…' : 'No editable material maps on this model.';
   }
 
   async #replace(file: File) {
@@ -270,7 +283,18 @@ export class TextureEditor {
         throw new Error('A replacement for the baked atlas must use its current dimensions.');
       }
       this.#source = this.#aligned = undefined;
-      await this.#apply('Replace Base Color', image);
+      await this.#apply(target.binding.semantic ? 'Replace texture' : 'Replace Base Color', image);
+    } catch (error) {
+      this.#say(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async #resize() {
+    if (!this.#image || !this.#canWrite()) return;
+    try {
+      const width = byId<HTMLInputElement>('width').valueAsNumber, height = byId<HTMLInputElement>('height').valueAsNumber;
+      const filter = value('filter') === 'nearest' ? 'nearest' : 'bilinear';
+      await this.#apply(`Resize texture to ${width} × ${height} (${filter})`, resizeImage(this.#image, width, height, filter));
     } catch (error) {
       this.#say(error instanceof Error ? error.message : String(error));
     }
@@ -336,10 +360,16 @@ export class TextureEditor {
 
   #brush(tool: BrushSettings['tool'], sourceOffset?: Point): BrushSettings {
     const rgb = parseInt(value('color').slice(1), 16);
-    return { tool, color: [rgb >> 16, (rgb >> 8) & 255, rgb & 255, number('alpha-value', 0, 255, 255)],
+    const channel = this.#channel(), v = number('scalar', 0, 255, 128);
+    return { tool, color: channel === undefined ? [rgb >> 16, (rgb >> 8) & 255, rgb & 255, number('alpha-value', 0, 255, 255)] : [v, v, v, 255],
       opacity: number('opacity', 0, 100, 100) / 100, hardness: number('hardness', 0, 100, 75) / 100,
-      size: Math.round(number('size', 1, 512, 24)), square: value('shape') === 'Square', alpha: checked('alpha'),
+      size: Math.round(number('size', 1, 512, 24)), square: value('shape') === 'Square', alpha: channel === undefined && checked('alpha'), channel,
       region: this.#region, sourceOffset };
+  }
+
+  #channel() {
+    const semantic = this.#target?.binding.semantic;
+    return semantic && scalarChannels[semantic].find(option => String(option.channel) === value('channel'))?.channel;
   }
 
   #down(event: PointerEvent) {
@@ -358,6 +388,13 @@ export class TextureEditor {
     }
     if (!pan && tool === 'eyedropper') {
       const { x, y } = texel(point), rgba = readPixel(this.#image, x, y);
+      const channel = this.#channel();
+      if (channel !== undefined) {
+        const sample = rgba[channel === 'rgb' ? 0 : channel];
+        byId<HTMLInputElement>('scalar').value = String(sample);
+        this.#say(`Sampled ${sample} at ${x}, ${y}.`);
+        return;
+      }
       byId<HTMLInputElement>('color').value = `#${rgba.slice(0, 3).map(channel => channel.toString(16).padStart(2, '0')).join('')}`;
       byId<HTMLInputElement>('alpha-value').value = String(rgba[3]);
       this.#say(`Sampled RGBA ${rgba.join(', ')} at ${x}, ${y}.`);

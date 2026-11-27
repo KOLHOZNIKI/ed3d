@@ -13,6 +13,7 @@ import { readAlphaProfile, type AlphaProfile } from './alpha-profile';
 import { reportText, type ExportReport } from '../diagnostics/report';
 import { disposeModel } from '../project/resources';
 import type { TextureAssignments } from '../project/document';
+import { textureHeader, textureImportBudget } from '../texture/image';
 
 const imagePattern = /\.(png|jpe?g)$/i;
 const emptyImage = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
@@ -41,6 +42,7 @@ export interface ImportedAsset {
   uvAtlas?: UvAtlasEdit;
   textureBake?: TextureBake;
   texturePaint?: TexturePaint;
+  auxiliaryEdits?: ReadonlyMap<string, { png: Uint8Array<ArrayBuffer>; semantic: string }>;
 }
 
 export class TextureAssignmentError extends Error {
@@ -78,18 +80,23 @@ export async function importAsset(input: readonly File[], assignments?: TextureA
   const embedded = new Set<string>();
   const broken = new Set<string>();
   const unresolved = new Set<string>();
-  const manager = new LoadingManager();
+  const checkTexture = textureImportBudget();
+  const manager = Object.assign(new LoadingManager(), {
+    assetFixerEmbeddedImage(content: ArrayBuffer | string, name: string) {
+      const data = typeof content === 'string' ? Uint8Array.from(atob(content), char => char.charCodeAt(0)) : new Uint8Array(content);
+      checkTexture(data, name);
+      const url = URL.createObjectURL(new Blob([data], { type: textureHeader(data).type }));
+      embedded.add(url);
+      return url;
+    },
+  });
   let hasImages = false;
   manager.onStart = () => { hasImages = true; };
   const loaded = new Promise<void>(resolve => { manager.onLoad = resolve; });
   manager.onError = url => broken.add(imagePathsByUrl.get(url) ?? 'embedded image');
 
   manager.setURLModifier(request => {
-    if (request.startsWith(`blob:${location.origin}/`)) {
-      embedded.add(request);
-      return request;
-    }
-    if (/^data:image\/(png|jpeg|webp|bmp);base64,/i.test(request)) return request;
+    if (embedded.has(request)) return request;
     const path = assignments && Object.hasOwn(assignments, request)
       ? assignments[request] : resolveImage(request, modelPath, images);
     if (!path || !images.has(path)) {
@@ -99,6 +106,7 @@ export async function importAsset(input: readonly File[], assignments?: TextureA
     const existing = urls.get(path);
     if (existing) return existing;
     const mime = path.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
+    checkTexture(images.get(path)!, path, mime);
     const url = URL.createObjectURL(new Blob([images.get(path)!], { type: mime }));
     urls.set(path, url);
     imagePathsByUrl.set(url, path);
@@ -234,14 +242,21 @@ export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMa
   await Promise.all(pending);
 
   const unassigned = [];
-  const auxiliaryMaps = [];
+  const auxiliaryMaps: { semantic: string; file: string; source: string; colorSpace: string; channel: string }[] = [];
   for (const [source, bytes] of asset.images) {
     if (assigned.has(source)) continue;
     const baked = !bake?.generated && bake?.maps.find(map => map.source === source);
+    const edit = asset.auxiliaryEdits?.get(source);
     if (baked) {
       const file = `unassigned/${baked.slot}.png`;
       files.set(file, baked.png);
       auxiliaryMaps.push({ semantic: baked.slot, file, source, colorSpace: 'linear', channel: 'uv0' });
+      continue;
+    }
+    if (edit) {
+      const file = `maps/${auxiliaryMaps.length + 1}-${edit.semantic}.png`;
+      files.set(file, edit.png);
+      auxiliaryMaps.push({ semantic: edit.semantic, file, source, colorSpace: 'linear', channel: 'uv0' });
       continue;
     }
     const file = `unassigned/${source}`;
@@ -286,7 +301,7 @@ export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMa
       padded: bake.padded, boundaryOnlyTriangles: bake.boundaryOnlyTriangles, auxiliaryMaps, projection: bake.projection, direct: bake.direct,
     },
     texturePaint: paint && { semantic: 'BaseColor', channel: 'uv0', strokes: paint.strokes, lastStrokeTexels: paint.lastStrokeTexels },
-    textures: linked, unassignedTextures: unassigned,
+    textures: linked, unassignedTextures: unassigned, auxiliaryMaps,
     warnings: [
       'FBX uses the documented Unity-compatible material and animation profile.',
       ...(unassigned.length ? ['Unassigned textures require manual assignment in Unity.'] : []),
