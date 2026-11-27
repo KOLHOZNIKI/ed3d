@@ -54,6 +54,8 @@ Enable **Soft Selection** for Move, Rotate or Scale. Enter a radius in object-lo
 
 In **Mesh Edit**, choose **Smooth Selection** and set the strength and iteration count. **Fix boundary** is enabled by default and keeps the perimeter of the selected region in place. The preview reports how many vertices move and how many stay pinned. [Smooth Selection workflow and checks](Docs/V1_Plus.md#smooth-selection)
 
+Use **Flatten Selection** to project the selected vertices onto a plane. Choose **Best Fit**, an object-local axis plane, or **Custom** with a normal and signed offset from the object origin. Edge and face selections use their vertices. [Flatten Selection workflow and checks](Docs/V1_Plus.md#flatten-selection)
+
 Open **Repair** to inspect boundaries on the selected object. Mark intentional openings **Keep Open**. Choose **Planar Fill**, **Fan Fill**, or **Manual Face** for selected boundaries. **Auto Fill** previews a batch with edge, diameter, and planarity limits. Check the wireframe and the reason for each skipped contour before applying. The resulting faces can be selected for mesh editing or 3D Paint.
 
 Use **Smooth Fill** for a non-planar patch with a fixed rim. Set refinement passes and fairing iterations. **Grid Fill** creates quads between four automatically detected or entered corner vertex IDs. Opposite sides need the same segment counts. **Bridge** joins two boundaries or equal-length spans. The default pairing minimizes distance. Use offsets, twist, and segments to adjust the preview. **Edit new UVs** opens the UV Editor with the added faces selected.

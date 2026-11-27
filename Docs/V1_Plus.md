@@ -6,7 +6,7 @@ The specification lists the following extensions after mandatory V1. The order i
 | --- | --- |
 | Soft Selection with adjustable radius and falloff | Verified below |
 | Smooth Selection with fixed boundaries | [Verified](#smooth-selection) |
-| Flatten Selection to a selected or averaged plane | Planned |
+| Flatten Selection to a selected or averaged plane | [Verified](#flatten-selection) |
 | Simple Extrude for a boundary or region | Planned |
 | Subdivide a selection with compatible adjacent faces | Planned |
 | Mirrored movement with a matching tolerance | Planned |
@@ -67,3 +67,27 @@ python -B tools/smooth-selection-unity.py 2022.3.62f2 6000.3.9f1
 ```
 
 Run both generated Unity projects in batch mode with `-executeMethod FbxProbe.Run` and check `e00-report.json`. In `test-results/smooth-selection/`, use the [ufbx inspector](E00_FBX_Round_Trip.md#reproduce-on-windows) to compare `static-original.fbx` with `static.fbx` and `static-reopened.fbx`, and `skinned-original.fbx` with `skinned.fbx` and `skinned-reopened.fbx`. Pass control point `12` and Y offset `-0.375` for each edit. Check `maxDeltaOutsideControlPoint` in the position edit report. Compare the `-undo.fbx` and `static-unpinned.fbx` files without edit arguments to see their changed point counts.
+
+## Flatten Selection
+
+**Mesh Edit → Flatten Selection** projects the logical vertices of a vertex, edge, or face selection orthogonally onto a plane. **Best Fit** minimizes the sum of squared perpendicular distances using all selected vertices with equal weight. The fitted plane goes through their centroid. **XY**, **XZ** and **YZ** use an object-local axis normal. **Custom** uses an entered normal. For a specified plane, the signed offset is measured in object-local units along the normalized normal from the object origin.
+
+The edit validates triangles affected by the projected positions and updates their normal and tangent frames. Vertices outside the selection keep their coordinates. Best Fit needs three or more non-collinear points with a well-defined plane. An ambiguous fit can be resolved by specifying the plane. Preview, Undo/Redo and offline replay use the normal Mesh Edit workflow. Projects with flattening commands or preferences use schema 17.
+
+### Verification
+
+- Chrome applied an XZ plane at `Y = 0.25 m` to two edge vertices. Both were on the plane exactly. The other 23 points retained their coordinates. The test also refused collinear vertices for Best Fit, a zero custom normal and a projection that would collapse a triangle.
+- The custom tilted plane moved the nine selected points on the static grid. The maximum perpendicular distance measured with ufbx was `2.23e-16 m`. Best Fit projected nine points of the tilted skinned grid within `1.33e-8 m` of the analytic plane. The other 16 control points in each case kept their exact coordinates. Undo restored all positions. Redo and offline reopening reproduced both edits.
+- The exports kept polygon connectivity, corner UVs, texture bytes and skin weights. Unity 2022.3.62f2 and 6000.3.9f1 both imported the static and animated FBX against analytically projected reference files. The largest vertex discrepancy in Unity was `5.96e-8 m`. Across 21 clip samples, the maximum deformation error was `1.20e-7 m` in Unity and `3.33e-8 m` in ufbx. Release and Debug built, and the E01, E04, V1, Soft Selection and Smooth Selection browser regressions passed.
+
+### Reproduce
+
+```powershell
+$chrome = 'C:/Program Files/Google/Chrome/Application/chrome.exe'
+npm.cmd run build
+node tools/e03-fixture.mjs
+node tools/flatten-selection-browser.mjs $chrome
+python -B tools/flatten-selection-verify.py 2022.3.62f2 6000.3.9f1
+```
+
+Before running the Python verification, build the [ufbx inspector](E00_FBX_Round_Trip.md#reproduce-on-windows) and place `inspect_fbx.exe` under `test-results/flatten-selection/`. The verifier checks the exported control points and prepares both Unity projects. Run them in batch mode with `-executeMethod FbxProbe.Run`. Reports and FBX exports are under `test-results/flatten-selection/`.

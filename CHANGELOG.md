@@ -21,3 +21,4 @@
 | V1 acceptance | CORE-07, PROJECT-03, PAINT2D-05, SC-06, AT-02, AT-27, §6.5, §7.4 | Added topology replacements, persisted pins and operation settings, 2D surface masks, cancellable job metadata, and the all-PNG FBX output profile. [Report](Docs/V1_Report.md) |
 | V1+ | §9.2 | Added Soft Selection to Mesh Edit with edge-distance falloff, transform previews, Undo and offline archive replay. [Report](Docs/V1_Plus.md) |
 | V1+ | §9.2 | Added Smooth Selection with adjustable strength and iterations, fixed boundary vertices, and verified static and skinned FBX exports. [Report](Docs/V1_Plus.md#smooth-selection) |
+| V1+ | §9.2 | Added Flatten Selection with best-fit, axis-aligned and custom planes and verified static and skinned FBX exports. [Report](Docs/V1_Plus.md#flatten-selection) |

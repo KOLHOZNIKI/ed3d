@@ -488,6 +488,7 @@
                 <select id="mesh-operation">
                   <option value="move">Move</option><option value="rotate">Rotate</option><option value="scale">Scale</option>
                   <option value="smoothSelection">Smooth Selection</option>
+                  <option value="flattenSelection">Flatten Selection</option>
                   <option value="create">Create Face</option><option value="splitEdge">Split Edge</option><option value="splitFace">Split Face</option>
                   <option value="weld">Weld</option><option value="flipEdge">Flip Edge</option><option value="dissolve">Dissolve Edge</option>
                   <option value="flipNormals">Flip Normals</option><option value="recalculate">Recalculate Normals</option>
@@ -510,6 +511,16 @@
                 <label for="mesh-smooth-strength">Strength</label><input id="mesh-smooth-strength" type="number" min="0" max="1" step="0.05" value="0.5" />
                 <label for="mesh-smooth-iterations">Iterations</label><input id="mesh-smooth-iterations" type="number" min="1" max="50" step="1" value="1" />
                 <label><input id="mesh-smooth-boundary" type="checkbox" checked /> Fix boundary</label>
+              </div>
+              <div class="actions" id="mesh-flatten" hidden>
+                <label for="mesh-flatten-plane">Plane</label>
+                <select id="mesh-flatten-plane"><option value="bestFit">Best Fit</option><option value="z">XY</option><option value="y">XZ</option><option value="x">YZ</option><option value="custom">Custom</option></select>
+                <label id="mesh-flatten-offset-field" hidden>Offset from origin <input id="mesh-flatten-offset" type="number" step="any" value="0" /></label>
+                <span class="actions" id="mesh-flatten-custom" hidden>
+                  <label for="mesh-flatten-nx">Normal X</label><input id="mesh-flatten-nx" type="number" step="any" value="0" />
+                  <label for="mesh-flatten-ny">Normal Y</label><input id="mesh-flatten-ny" type="number" step="any" value="1" />
+                  <label for="mesh-flatten-nz">Normal Z</label><input id="mesh-flatten-nz" type="number" step="any" value="0" />
+                </span>
               </div>
               <div class="actions" id="mesh-create" hidden>
                 <label for="mesh-material">Material</label><select id="mesh-material"></select>

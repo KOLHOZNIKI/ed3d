@@ -129,3 +129,31 @@ const gridAxis = new Vector3(1, 0, 0);
 smoothRig.animations = [new AnimationClip('GridBend', 1, [new QuaternionKeyframeTrack('GridHinge.quaternion', [0, .5, 1],
   [0, .5, 0].flatMap(angle => new Quaternion().setFromAxisAngle(gridAxis, angle).toArray()))])];
 await exportFixture('smooth_selection_skinned', smoothRig);
+
+const flattenRegion = [6, 7, 8, 11, 12, 13, 16, 17, 18];
+function projectedGrid(source, normal, offset) {
+  const result = source.clone(), positions = result.getAttribute('position');
+  const [nx, ny, nz] = normal;
+  for (const id of flattenRegion) {
+    const x = positions.getX(id), y = positions.getY(id), z = positions.getZ(id);
+    const distance = x * nx + y * ny + z * nz - offset;
+    positions.setXYZ(id, x - distance * nx, y - distance * ny, z - distance * nz);
+  }
+  result.computeVertexNormals();
+  return result;
+}
+const angled = [1, 3, 1].map(value => value / Math.sqrt(11));
+smoothStatic.geometry = projectedGrid(grid, angled, .75);
+await exportFixture('flatten_reference_custom', smoothStatic.parent);
+
+const tilted = smoothGeometry.clone(), tiltedPositions = tilted.getAttribute('position');
+for (let i = 0; i < tiltedPositions.count; i++) {
+  const x = tiltedPositions.getX(i), y = tiltedPositions.getY(i);
+  tiltedPositions.setXYZ(i, .6 * x - .8 * y, .8 * x + .6 * y, tiltedPositions.getZ(i));
+}
+tilted.computeVertexNormals();
+smoothSkin.geometry = tilted;
+await exportFixture('flatten_selection_skinned', smoothRig);
+// A rigid rotation preserves the fitted plane of the symmetric raised-center grid.
+smoothSkin.geometry = projectedGrid(tilted, [-.8, .6, 0], .5 / flattenRegion.length);
+await exportFixture('flatten_reference_best', smoothRig);

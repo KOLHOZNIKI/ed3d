@@ -1056,6 +1056,18 @@ static bool e05_mesh_report(char **paths)
 
 int main(int argc, char **argv)
 {
+    if (argc == 3 && strcmp(argv[1], "--points") == 0) {
+        ufbx_scene *scene = load(argv[2], 1);
+        const ufbx_mesh *mesh = scene->meshes.data[0];
+        putchar('[');
+        for (size_t i = 0; i < mesh->num_vertices; i++) {
+            const ufbx_vec3 p = mesh->vertices.data[i];
+            printf("%s[%.17g,%.17g,%.17g]", i ? "," : "", p.x, p.y, p.z);
+        }
+        puts("]");
+        ufbx_free_scene(scene);
+        return 0;
+    }
     if (argc == 10 && !strcmp(argv[1], "--e04")) return e04_mesh_report(argv + 2) ? 0 : 1;
     if (argc == 6 && !strcmp(argv[1], "--e05")) return e05_mesh_report(argv + 2) ? 0 : 1;
     if (argc == 3 && strcmp(argv[1], "--f12-source") == 0) {

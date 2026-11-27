@@ -9,6 +9,7 @@ import { applyUvLayout } from '../uv/mesh-layout';
 import { applyWeightEdits } from '../weights/data';
 import { softWeights } from './soft-selection';
 import { smoothSelection } from './smooth-selection';
+import { flattenSelection } from './flatten-selection';
 
 type VertexSource = readonly [vertex: number, factor: number];
 // Missing replacement entries keep their stable ID. Empty lists remove it from the source object.
@@ -81,6 +82,10 @@ export function applyMeshEdit(mesh: MeshData, edit: MeshEdit): MeshResult {
       const vertices = edit.vertices ? pickVertices(mesh, edit.vertices) : new Set(mesh.faces.filter(face => faces!.has(face.id)).flatMap(verticesOf));
       const { positions, changed, pinned } = smoothSelection(mesh, vertices, faces, edit.settings);
       return { mesh: deform(mesh, positions, changed), smoothing: { pinned, changed: changed.size } };
+    }
+    case 'flattenSelection': {
+      const { positions, changed } = flattenSelection(mesh, pickVertices(mesh, edit.vertices), edit.plane);
+      return { mesh: deform(mesh, positions, changed) };
     }
     case 'delete': case 'separate': {
       const faces = pickFaces(mesh, edit.faces);

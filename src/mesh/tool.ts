@@ -55,7 +55,7 @@ export class MeshTool {
       this.#syncFields();
     });
     for (const name of [...xyz, 'axis', 'pivot', 'material', 'project', 'weld-mode', 'tolerance', 'fraction', 'soft', 'soft-radius', 'soft-falloff',
-      'smooth-strength', 'smooth-iterations', 'smooth-boundary']) {
+      'smooth-strength', 'smooth-iterations', 'smooth-boundary', 'flatten-plane', 'flatten-offset', 'flatten-nx', 'flatten-ny', 'flatten-nz']) {
       ui(name).addEventListener('input', () => this.#cancel());
     }
     ui('connected').addEventListener('click', () => this.#selectConnected());
@@ -224,6 +224,7 @@ export class MeshTool {
         [0, 1, 2].some(k => data.positions[3 * vertex + k] !== geometry.mesh.positions[3 * vertex + k]))).length;
       const warning = edit.type === 'create' && !edit.project ? ' New face requires UV unwrapping.' : '';
       const detail = geometry.smoothing ? ` · ${geometry.smoothing.changed} moved · ${geometry.smoothing.pinned.size} pinned boundary vertices`
+        : edit.type === 'flattenSelection' ? ` · ${edit.vertices.length} vertices on the ${edit.plane.mode === 'bestFit' ? 'best-fit' : 'specified'} plane`
         : edit.type === 'softTransform' && geometry.influence ? ` · ${geometry.influence.size - edit.vertices.length} neighboring vertices in radius` : '';
       this.#say(`Preview · ${affected} existing faces affected · ${data.faces.length} → ${after} faces${geometry.piece ? ` + ${geometry.piece.faces.length} in the new object` : ''}${detail}.${warning}`);
     } catch (error) { this.#say(error instanceof Error ? error.message : String(error)); }
@@ -278,6 +279,12 @@ export class MeshTool {
         return this.#kind.value === 'face' ? { type, object, settings, faces: [...this.#selection.face] }
           : { type, object, settings, vertices: this.#selectedVertices() };
       }
+      case 'flattenSelection': {
+        const vertices = this.#selectedVertices(), plane = choice('flatten-plane');
+        if (plane === 'bestFit') return { type, object, vertices, plane: { mode: 'bestFit' } };
+        const normal = (plane === 'custom' ? xyz.map(axis => number(`flatten-n${axis}`)) : xyz.map(axis => Number(axis === plane))) as unknown as Vec3;
+        return { type, object, vertices, plane: { mode: 'specified', normal, offset: number('flatten-offset') } };
+      }
       case 'create':
         if (vertices.length < 3) throw new Error('Select three or more vertices in contour order.');
         return { type, object, vertices: [...vertices], material: Number(choice('material')), project: toggle('project') };
@@ -307,7 +314,9 @@ export class MeshTool {
 
   #syncFields() {
     const type = choice('operation') as MeshEdit['type'];
+    const plane = choice('flatten-plane');
     const fields = { transform: transforms.has(type), 'soft-options': toggle('soft'), smooth: type === 'smoothSelection',
+      flatten: type === 'flattenSelection', 'flatten-custom': plane === 'custom', 'flatten-offset-field': plane !== 'bestFit',
       create: type === 'create', weld: type === 'weld', split: type === 'splitEdge' };
     for (const [id, show] of Object.entries(fields)) ui(id).hidden = !show;
     const ok = !!this.#data && !this.#locked;

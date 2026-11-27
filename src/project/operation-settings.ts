@@ -2,6 +2,7 @@ export const settingIds = [
   'fbx-texture-files',
   'mesh-soft', 'mesh-soft-radius', 'mesh-soft-falloff',
   'mesh-smooth-strength', 'mesh-smooth-iterations', 'mesh-smooth-boundary',
+  'mesh-flatten-plane', 'mesh-flatten-offset', 'mesh-flatten-nx', 'mesh-flatten-ny', 'mesh-flatten-nz',
   'texture-tool', 'texture-color', 'texture-size', 'texture-opacity', 'texture-hardness', 'texture-shape', 'texture-stamp',
   'texture-alpha', 'texture-alpha-value', 'texture-filter',
   'paint-mode', 'paint-color', 'paint-opacity', 'paint-hardness',
