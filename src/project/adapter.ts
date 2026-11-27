@@ -50,14 +50,14 @@ export class ModelAdapter {
   workingTopology(id: string) { return this.mesh.render.get(id)?.render.topology ?? this.topology.get(id); }
 
   materialize(state: WorkingState): Model {
-    if (state.meshEdits?.length && state.atlas) throw new Error('Discard the generated atlas before editing the source topology.');
     if (this.model.format === 'glb') {
       if (state.atlas || state.bake || state.paint) throw new Error('The project contains FBX working data for a GLB source.');
       this.mesh.materialize(state.meshEdits);
       return this.mesh.active ? { ...this.model, stats: sceneStats(this.model.scene, 'GLB'), skins: this.mesh.glbSkins() } : this.model;
     }
     this.mesh.materialize(state.meshEdits);
-    if (state.atlas !== this.#atlasState) {
+    const node = state.atlas && this.model.scene.getObjectByProperty('isMesh', true);
+    if (state.atlas !== this.#atlasState || node instanceof Mesh && this.#atlas?.inputGeometry !== node.geometry) {
       const atlas = state.atlas && restoreAtlas(this.model, state.atlas);
       this.#atlas?.geometry.dispose();
       this.#atlas = atlas;
@@ -130,12 +130,12 @@ function topologyFor(model: Model, geometry: BufferGeometry): Topology {
 export function captureAtlas(atlas: UvAtlasEdit): AtlasState {
   const uv = atlas.geometry.getAttribute(atlas.channel);
   return { indices: Uint32Array.from(atlas.geometry.index!.array), uv: Float32Array.from(uv.array),
-    sourceCorners: atlas.sourceCorners, faceComponents: atlas.faceComponents, metrics: atlas.metrics };
+    sourceCorners: atlas.sourceCorners, faceComponents: atlas.faceComponents, metrics: atlas.metrics, seams: atlas.seams };
 }
 
 function restoreAtlas(asset: ImportedAsset, state: AtlasState): UvAtlasEdit {
   const object = asset.scene.getObjectByProperty('isMesh', true);
-  if (!(object instanceof Mesh) || asset.stats.meshes !== 1) throw new Error('The saved atlas requires one source mesh.');
+  if (!(object instanceof Mesh) || sceneStats(asset.scene, 'FBX').meshes !== 1) throw new Error('The saved atlas requires one source mesh.');
   const original = object.geometry, source = sourceMesh(original);
   const { indices, uv, sourceCorners, faceComponents, metrics } = state;
   const vertices = uv.length / 2;
@@ -158,6 +158,7 @@ function restoreAtlas(asset: ImportedAsset, state: AtlasState): UvAtlasEdit {
   geometry.setIndex(new BufferAttribute(indices, 1));
   geometry.setAttribute('uv1', new BufferAttribute(uv, 2));
   for (const [name, attribute] of Object.entries(original.attributes)) {
+    if (name === 'uv1') continue;
     if (!(attribute instanceof BufferAttribute)) throw new Error(`Unsupported saved atlas attribute: ${name}.`);
     const size = attribute.itemSize;
     const ArrayType = attribute.array.constructor as new (length: number) => TypedArray;
@@ -173,5 +174,5 @@ function restoreAtlas(asset: ImportedAsset, state: AtlasState): UvAtlasEdit {
     geometry.setAttribute(name, new BufferAttribute(values, size, attribute.normalized));
   }
   for (const group of original.groups) geometry.addGroup(group.start, group.count, group.materialIndex);
-  return { inputGeometry: original, geometry, sourceCorners, faceComponents, channel: 'uv1', metrics };
+  return { inputGeometry: original, geometry, sourceCorners, faceComponents, channel: 'uv1', metrics, seams: state.seams };
 }

@@ -11,6 +11,7 @@ export interface UvAtlasEdit {
   sourceCorners: Uint32Array<ArrayBuffer>;
   faceComponents: Uint32Array<ArrayBuffer>;
   channel: 'uv1';
+  seams?: readonly string[];
   metrics: {
     width: number; height: number; charts: number; separatedFaces: number; milliseconds: number;
     controlPoints: number; chartVertices: number; renderVertices: number; splitControlPoints: number;
@@ -39,7 +40,7 @@ export async function unwrapAsset(asset: ImportedAsset, signal?: AbortSignal): P
   return { ...asset, uvAtlas: remap(geometry, source, controlPoints, atlas) };
 }
 
-async function generateAtlas(input: AtlasInput, signal?: AbortSignal): Promise<AtlasOutput> {
+export async function generateAtlas(input: AtlasInput, signal?: AbortSignal): Promise<AtlasOutput> {
   const worker = new Worker(new URL('./xatlas-worker.ts', import.meta.url), { type: 'module' });
   return finishWorker(worker, input, [input.positions.buffer, input.indices.buffer, input.faceMaterialData.buffer], signal);
 }

@@ -35,6 +35,7 @@ public static class TextureBakeProbe
     {
         public string fixture, reference, pass;
         public int views, seamEdges, silhouetteDifferences;
+        public int paintCorePixels, paintGaps, newBlackPixels;
         public Error all = new Error(), seam = new Error(), interior = new Error();
     }
 
@@ -195,7 +196,11 @@ public static class TextureBakeProbe
         return seams;
     }
 
-    public static void Run()
+    public static void Run() => Run(false);
+
+    public static void RunPreservingPaint() => Run(true);
+
+    static void Run(bool paintedSource)
     {
         var shader = Shader.Find("Hidden/AssetFixer/TextureBakeProbe");
         if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null || shader == null || !shader.isSupported) {
@@ -244,6 +249,8 @@ public static class TextureBakeProbe
                             var afterPixels = Capture(baked, camera, pixels);
                             Compare(raw, beforePixels, afterPixels);
                             Compare(triangulated, refPixels, afterPixels);
+                            if (paintedSource && name == "static" && pass == "Lit")
+                                CountPaintCore(raw, beforePixels, afterPixels, target.width);
                             if (pass == "Lit") {
                                 Write(pixels, beforePixels, $"captures/{name}-{raw.views}-original.png");
                                 Write(pixels, afterPixels, $"captures/{name}-{raw.views}-baked.png");
@@ -268,9 +275,32 @@ public static class TextureBakeProbe
         if (results.Count == 0) throw new InvalidOperationException("No rebake fixtures were compared.");
         foreach (var result in results.Where(result => result.pass == "Lit")) {
             if (result.seam.mae > 1.5f / 255f || result.seam.p95 > 5f / 255f ||
-                (result.fixture == "static" && result.seam.max > 12f / 255f)) {
-                throw new InvalidOperationException($"Visible seam error exceeded the E00 fixture budget in {result.fixture} versus {result.reference}.");
+                (!paintedSource && result.fixture == "static" && result.seam.max > 12f / 255f)) {
+                throw new InvalidOperationException($"Visible seam error exceeded the fixture budget in {result.fixture} versus {result.reference}.");
             }
+            if (paintedSource && result.fixture == "static" && result.reference == "original" &&
+                (result.paintCorePixels < 5000 || result.paintGaps != 0 || result.newBlackPixels != 0 || result.silhouetteDifferences != 0))
+                throw new InvalidOperationException("The rebake lost paint coverage or introduced black pixels on the plate.");
+        }
+    }
+
+    static void CountPaintCore(Result result, Color32[] source, Color32[] baked, int width)
+    {
+        bool Cyan(Color32 color, int redLimit, int greenLimit, int margin) =>
+            color.r < redLimit && color.g > greenLimit && color.r + margin < color.g && color.r + margin < color.b;
+        for (int y = 2; y < source.Length / width - 2; y++) for (int x = 2; x < width - 2; x++) {
+            int i = y * width + x;
+            var before = source[i];
+            var after = baked[i];
+            if (before.a > 0 && after.a > 0 && Math.Max(before.r, Math.Max(before.g, before.b)) > 50 &&
+                Math.Max(after.r, Math.Max(after.g, after.b)) < 6) result.newBlackPixels++;
+            if (!Cyan(before, 45, 100, 65)) continue;
+            bool core = true;
+            for (int dy = -2; dy <= 2 && core; dy++) for (int dx = -2; dx <= 2 && core; dx++)
+                core = Cyan(source[i + dy * width + dx], 45, 100, 65);
+            if (!core) continue;
+            result.paintCorePixels++;
+            if (!Cyan(after, 75, 78, 40)) result.paintGaps++;
         }
     }
 

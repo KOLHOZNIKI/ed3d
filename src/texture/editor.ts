@@ -236,7 +236,7 @@ export class TextureEditor {
     byId<HTMLInputElement>('import').disabled = !ready || !this.#canWrite();
     byId<HTMLInputElement>('alpha-value').disabled = !checked('alpha');
     byId('info').textContent = this.#image && target
-      ? `${this.#image.width} × ${this.#image.height} · RGBA8 · Base Color · ${target.atlas ? 'Baked atlas' : `Sampling UV${target.binding.texture.channel}`}` +
+      ? `${this.#image.width} × ${this.#image.height} · RGBA8 · Base Color · ${target.atlas ? 'Baked atlas' : `Sampling UV${target.transfer?.channel ?? target.binding.texture.channel}`}` +
         (target.shared.length > 1 ? ` · Shared by ${target.shared.length} bindings` : '') +
         (this.#paths?.overlaps ? ' · Shared UVs detected' : '')
       : target ? 'Loading Base Color…' : 'No editable Base Color map on this model.';

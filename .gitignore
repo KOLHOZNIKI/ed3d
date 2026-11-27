@@ -25,6 +25,7 @@ dist-ssr/
 coverage/
 playwright-report/
 test-results/
+__pycache__/
 
 # Local IDE and OS files
 .idea/

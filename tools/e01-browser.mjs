@@ -179,7 +179,7 @@ try {
   const path = await work.save('#save-project', 'static.assetfixer');
   const independent = await work.save('#save-copy', 'independent.assetfixer');
   const source = await unpack(path), copy = await unpack(independent);
-  assert.equal(source.manifest.schemaVersion, 5);
+  assert.equal(source.manifest.schemaVersion, 6);
   assert.equal(source.manifest.settings.historyBudget, 128 * 1024 * 1024);
   assert.notEqual(copy.manifest.id, source.manifest.id);
   assert.deepEqual(copy.manifest.working, source.manifest.working);
@@ -233,7 +233,7 @@ try {
     delete data.working.textures;
   }), /Project restored/);
   const migrated = await unpack(await work.save('#save-project', 'migrated.assetfixer'));
-  assert.equal(migrated.manifest.schemaVersion, 5);
+  assert.equal(migrated.manifest.schemaVersion, 6);
   assert.equal(migrated.manifest.settings.historyBudget, 256 * 1024 * 1024);
   await work.open(path, /Project restored/);
   const restored = await work.save('#export', 'static-restored.zip');

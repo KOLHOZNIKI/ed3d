@@ -31,6 +31,7 @@ export class MeshSession {
   get pieces() { return this.#pieces; }
   get render() { return this.#renders; }
   get active() { return this.#commands.length > 0; }
+  originalGeometry(id: string) { return this.#sources.get(id)?.geometry; }
   get pendingUv() {
     let count = 0;
     for (const { mesh } of this.#states.values()) for (const face of mesh.faces) if (face.needsUv) count++;

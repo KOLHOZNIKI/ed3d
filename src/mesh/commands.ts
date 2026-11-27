@@ -10,11 +10,12 @@ export type MeshEdit = { object: string } & (
   { type: 'splitEdge'; edge: string; fraction: number } |
   { type: 'splitFace'; face: number; diagonal: number[] } |
   { type: 'dissolve' | 'flipEdge'; edge: string } |
-  { type: 'repair'; patches: Fill[] }
+  { type: 'repair'; patches: Fill[] } |
+  { type: 'uv'; channel: number; coordinates: number[]; seams: string[]; suppliesTexture?: true }
 );
 
 const names = new Set(['move', 'rotate', 'scale', 'delete', 'recalculate', 'flipNormals', 'separate',
-  'create', 'weld', 'splitEdge', 'splitFace', 'dissolve', 'flipEdge', 'repair']);
+  'create', 'weld', 'splitEdge', 'splitFace', 'dissolve', 'flipEdge', 'repair', 'uv']);
 const encoder = new TextEncoder(), decoder = new TextDecoder('utf-8', { fatal: true });
 const id = (value: unknown) => typeof value === 'string' && /^object-(0|[1-9]\d{0,7})$/.test(value);
 const index = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= 0x7fffffff;
@@ -53,6 +54,11 @@ export function decodeEdit(data: Uint8Array) {
     case 'repair':
       valid = Array.isArray(o.patches) && !!o.patches.length && o.patches.every(isFill) &&
         new Set(o.patches.map(fill => fill.id)).size === o.patches.length; break;
+    case 'uv':
+      valid = index(o.channel) && Number(o.channel) <= 3 && Array.isArray(o.coordinates) && !!o.coordinates.length &&
+        o.coordinates.every(value => typeof value === 'number' && Number.isFinite(Math.fround(value))) &&
+        (o.suppliesTexture === undefined || o.suppliesTexture === true) &&
+        Array.isArray(o.seams) && o.seams.every(edge) && new Set(o.seams).size === o.seams.length; break;
     default:
       valid = edge(o.edge);
   }

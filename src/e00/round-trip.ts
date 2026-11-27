@@ -164,7 +164,7 @@ export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMa
         entry.texture.center.set(0, 0);
         entry.texture.rotation = 0;
         entry.texture.matrix.identity();
-        if (asset.alphaProfile) entry.texture.wrapS = entry.texture.wrapT = ClampToEdgeWrapping;
+        if (asset.alphaProfile || bake?.direct) entry.texture.wrapS = entry.texture.wrapT = ClampToEdgeWrapping;
         files.set(file, entry.slotName === 'map' && paint ? paint.png : baked.png);
         linked.push({ semantic, file, source: bake!.generated ? null : baked.source, rebaked: true });
         if (!bake!.generated) assigned.add(baked.source);
@@ -242,10 +242,10 @@ export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMa
     repair: repair && { ...repair.metadata, sourceCornerMap: cornerMap },
     uvAtlas: atlas && { channel: bake || !hadSourceUv ? 'uv0' : atlas.channel, sourceCornerMap: cornerMap, ...atlas.metrics },
     textureBake: bake && {
-      source: bake.generated ? 'Generated Base Color' : bake.projection?.sourceName ?? 'Original import',
+      source: bake.direct?.sourceName ?? (bake.generated ? 'Generated Base Color' : bake.projection?.sourceName ?? 'Original import'),
       layout: 'uv1', exportedLayout: 'uv0', originalLayout: hadSourceUv ? 'uv1' : undefined,
       width: bake.width, height: bake.height, padding: bake.padding, covered: bake.covered,
-      padded: bake.padded, boundaryOnlyTriangles: bake.boundaryOnlyTriangles, auxiliaryMaps, projection: bake.projection,
+      padded: bake.padded, boundaryOnlyTriangles: bake.boundaryOnlyTriangles, auxiliaryMaps, projection: bake.projection, direct: bake.direct,
     },
     texturePaint: paint && { semantic: 'BaseColor', channel: 'uv0', strokes: paint.strokes, lastStrokeTexels: paint.lastStrokeTexels },
     textures: linked, unassignedTextures: unassigned,

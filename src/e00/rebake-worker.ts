@@ -17,6 +17,8 @@ export interface BakeMap {
   wrapS?: 'repeat' | 'clamp' | 'mirror';
   wrapT?: 'repeat' | 'clamp' | 'mirror';
   preserveAlpha?: boolean;
+  topDown?: boolean;
+  uv?: Float32Array<ArrayBuffer>;
 }
 
 export interface BakeInput {
@@ -29,6 +31,7 @@ export interface BakeInput {
   targetUv: Float32Array<ArrayBuffer>;
   maps: BakeMap[];
   projection?: ProjectionInput;
+  direct?: { sourceName: string; filter: 'nearest' | 'linear'; topDown: boolean; missing?: Uint8Array<ArrayBuffer> };
 }
 
 export type BakeOutput = TextureBake;
@@ -36,7 +39,7 @@ export type BakeOutput = TextureBake;
 self.onmessage = async ({ data }: MessageEvent<BakeInput>) => {
   try {
     const output = await bake(data);
-    self.postMessage(output, { transfer: output.maps.map(map => map.png.buffer) });
+    self.postMessage(output, { transfer: [...output.maps.map(map => map.png.buffer), ...(output.coverage ? [output.coverage.buffer] : [])] });
   } catch (error) {
     self.postMessage({ error: error instanceof Error ? error.message : String(error) });
   }
@@ -55,14 +58,28 @@ const lerpAttribute = (attr: Float32Array, stride: number, i: number, j: number,
   a * attr[i * stride + j] + b * attr[(i + 1) * stride + j] + c * attr[(i + 2) * stride + j];
 
 async function bake(input: BakeInput): Promise<BakeOutput> {
-  const { width, height, normals, position, targetUv, sourceUv, padding } = input;
-  const { faces, wb, wc, covered, boundaryOnlyTriangles, overlaps } = rasterize(width, height, targetUv);
+  const { width, height, normals, position, targetUv, sourceUv, padding, direct } = input;
+  const rasterUv = direct?.topDown ? targetUv.map((value, i) => i % 2 ? 1 - value : value) : targetUv;
+  const { faces, wb, wc, covered, boundaryOnlyTriangles, overlaps } = rasterize(width, height, rasterUv);
   if (overlaps.size) throw new Error('The target atlas has conflicting triangle coverage.');
   if (!covered) throw new Error('The atlas has no covered texels.');
+  let directMisses = 0, coverage: Uint8Array<ArrayBuffer> | undefined;
+  if (direct) {
+    const mask = new Uint8Array(width * height * 4);
+    for (let p = 0; p < faces.length; p++) {
+      if (!faces[p]) continue;
+      const missing = !!direct.missing?.[faces[p] - 1];
+      if (missing) directMisses++;
+      mask.set(missing ? [245, 65, 189, 255] : [48, 189, 161, 255], p * 4);
+    }
+    coverage = new Uint8Array(encode({ width, height, data: mask, channels: 4 }));
+  }
+  // Keep every chart's nearest-source gutter populated for mip levels whose
+  // filter footprint extends past the requested chart spacing.
   const padded = paddingSources(faces, width);
-  const hasNormals = input.maps.some(map => map.mode === 'normal');
-  const sourceTangent = hasNormals ? generateTangents(position, normals, sourceUv) : null;
-  const targetTangent = hasNormals ? generateTangents(position, normals, targetUv) : null;
+  const normalMap = input.maps.find(map => map.mode === 'normal');
+  const sourceTangent = normalMap ? generateTangents(position, normals, normalMap.uv ?? sourceUv) : null;
+  const targetTangent = normalMap ? generateTangents(position, normals, targetUv) : null;
   const n = new Vector3(), ts = new Vector3(), tt = new Vector3(), cross = new Vector3();
   const color = [0, 0, 0, 0];
   const projection = input.projection && projectTextureCoordinates(input.projection, position, normals, sourceUv);
@@ -73,12 +90,21 @@ async function bake(input: BakeInput): Promise<BakeOutput> {
   const context = canvas.getContext('2d')!;
   const maps: BakeOutput['maps'] = [];
   for (const map of input.maps) {
+    const uv = map.uv ?? sourceUv;
     const image = context.createImageData(width, height);
     const pixels = image.data;
+    const neutral = map.slot === 'map' ? [128, 128, 128, 255] :
+      map.mode === 'normal' ? [128, 128, 255, 255] :
+      map.slot === 'metalRough' ? [255, 255, 0, 255] :
+      map.slot === 'emissiveMap' || map.slot === 'metallic' ? [0, 0, 0, 255] : [255, 255, 255, 255];
     for (let pixel = 0; pixel < faces.length; pixel++) {
       const face = faces[pixel];
       pixels[pixel * 4 + 3] = map.preserveAlpha ? 0 : 255;
       if (face <= 0) continue;
+      if (direct?.missing?.[face - 1]) {
+        pixels.set(neutral, pixel * 4);
+        continue;
+      }
       const i = (face - 1) * 3;
       const b = wb[pixel], c = wc[pixel], a = 1 - b - c;
       if (projection) {
@@ -89,7 +115,7 @@ async function bake(input: BakeInput): Promise<BakeOutput> {
         }
         sample(map, projectedUv[0], projectedUv[1], color);
       } else {
-        sample(map, lerpAttribute(sourceUv, 2, i, 0, a, b, c), lerpAttribute(sourceUv, 2, i, 1, a, b, c), color);
+        sample(map, lerpAttribute(uv, 2, i, 0, a, b, c), lerpAttribute(uv, 2, i, 1, a, b, c), color, direct?.filter === 'nearest');
       }
       if (map.mode === 'normal' && sourceTangent && targetTangent) {
         const basis = (attr: Float32Array, stride: number, out: Vector3) => out.set(
@@ -98,7 +124,9 @@ async function bake(input: BakeInput): Promise<BakeOutput> {
         basis(normals, 3, n).normalize();
         basis(sourceTangent, 4, ts).addScaledVector(n, -ts.dot(n)).normalize();
         basis(targetTangent, 4, tt).addScaledVector(n, -tt.dot(n)).normalize();
-        const sourceSign = sourceTangent[i * 4 + 3], targetSign = targetTangent[i * 4 + 3];
+        // glTF uses the opposite tangent sign convention from MikkTSpace.
+        const convention = direct?.topDown ? -1 : 1;
+        const sourceSign = convention * sourceTangent[i * 4 + 3], targetSign = convention * targetTangent[i * 4 + 3];
         if (n.lengthSq() < 0.99 || ts.lengthSq() < 0.99 || tt.lengthSq() < 0.99 ||
             Math.abs(sourceSign) !== 1 || Math.abs(targetSign) !== 1) {
           throw new Error(`A normal map requires valid source and target tangents on face ${face}.`);
@@ -128,17 +156,23 @@ async function bake(input: BakeInput): Promise<BakeOutput> {
     }
     maps.push({ slot: map.slot, source: map.source, png });
   }
-  return { width, height, padding, covered, padded, boundaryOnlyTriangles, maps,
+  return { width, height, padding, covered, padded, boundaryOnlyTriangles, maps, coverage,
+    direct: direct && { sourceName: direct.sourceName, filter: direct.filter, misses: directMisses },
     projection: input.projection && { sourceName: input.projection.sourceName, misses, maxDistance: input.projection.maxDistance,
       eligibleSources: input.projection.eligibleSources } };
 }
 
-function sample({ width, height, pixels, mode, uvTransform, wrapS, wrapT }: BakeMap, u: number, v: number, out: number[]) {
+function sample({ width, height, pixels, mode, uvTransform, wrapS, wrapT, topDown }: BakeMap, u: number, v: number, out: number[], nearest = false) {
   if (uvTransform) {
     const [a, b, c, d, e, f] = uvTransform;
     [u, v] = [a * u + b * v + c, d * u + e * v + f];
   }
-  const x = u * width - 0.5, y = (1 - v) * height - 0.5;
+  const x = u * width - 0.5, y = (topDown ? v : 1 - v) * height - 0.5;
+  if (nearest) {
+    const i = 4 * (wrapIndex(Math.floor(y + .5), height, wrapT) * width + wrapIndex(Math.floor(x + .5), width, wrapS));
+    for (let k = 0; k < 4; k++) out[k] = pixels[i + k];
+    return;
+  }
   const ix = Math.floor(x), iy = Math.floor(y);
   const x0 = wrapIndex(ix, width, wrapS), x1 = wrapIndex(ix + 1, width, wrapS);
   const y0 = wrapIndex(iy, height, wrapT), y1 = wrapIndex(iy + 1, height, wrapT);

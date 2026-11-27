@@ -51,6 +51,13 @@
       .contours th, .contours td { padding: .35rem .4rem; text-align: left; border-bottom: 1px solid #80808042; }
       .contours th { white-space: nowrap; }
       #repair-info { font-size: .875rem; margin: .5rem 0 0; }
+      main:has(#uv-tools:not([hidden])) { max-width: 84rem; }
+      .work-area:has(#uv-tools:not([hidden])) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 1rem; align-items: start; }
+      #uv-tools { min-width: 0; }
+      #uv-tools input[type=number] { width: 5rem; }
+      #uv-canvas { width: 100%; aspect-ratio: 1.38; touch-action: none; display: block; margin: .65rem 0; }
+      #uv-info, #uv-diagnostics { font-size: .875rem; margin: .5rem 0; }
+      @media (max-width: 900px) { .work-area:has(#uv-tools:not([hidden])) { grid-template-columns: minmax(0,1fr); } }
 
       main:has(#texture-panel:not([hidden])) { max-width: 83rem; }
       .work-area:has(#texture-panel:not([hidden])) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.08fr); gap: 1rem; align-items: start; }
@@ -102,6 +109,7 @@
         <button id="paint" type="button" aria-pressed="false" disabled>3D Paint</button>
         <button id="mesh-mode" type="button" aria-pressed="false" disabled>Mesh Edit</button>
         <button id="repair-mode" type="button" aria-pressed="false" disabled>Repair</button>
+        <button id="uv-mode" type="button" aria-pressed="false" disabled>UV Editor</button>
         <button id="undo-stroke" type="button" disabled>Undo</button>
         <button id="redo" type="button" disabled>Redo</button>
         <button id="toggle-texture" type="button" aria-expanded="false" disabled>Texture editor</button>
@@ -255,6 +263,54 @@
         <p id="selection-details"></p>
       </fieldset>
       </div>
+      <fieldset id="uv-tools" hidden>
+        <legend>UV Editor</legend>
+        <div class="actions">
+          <label for="uv-material">Material</label><select id="uv-material"></select>
+          <label for="uv-map">Map</label><select id="uv-map"></select>
+          <label for="uv-channel">Channel</label><select id="uv-channel"></select>
+          <label for="uv-background">Background</label><select id="uv-background"><option value="texture">Texture</option><option value="checker">Checker</option><option value="solid">Solid</option><option value="coverage">Coverage</option></select>
+          <label for="uv-kind">Select</label><select id="uv-kind"><option value="vertex">UV vertex</option><option value="edge">Edge</option><option value="face">Face</option><option value="island">Island</option></select>
+        </div>
+        <canvas id="uv-canvas" width="768" height="556" tabindex="0" aria-label="UV grid and islands"></canvas>
+        <div class="actions">
+          <button id="uv-fit" type="button">Fit all</button><button id="uv-fit-selection" type="button">Fit selection</button>
+          <button id="uv-select-all" type="button">Select all</button>
+          <button id="uv-clear-selection" type="button">Clear selection</button>
+          <span id="uv-coordinate"></span>
+        </div>
+        <p id="uv-diagnostics"></p>
+        <div class="actions">
+          <label for="uv-operation">Operation</label>
+          <select id="uv-operation">
+            <option value="move">Move</option><option value="rotate">Rotate</option><option value="scale">Scale</option>
+            <option value="alignU">Align U</option><option value="alignV">Align V</option>
+            <option value="pixel">Snap to pixels</option><option value="vertex">Snap to nearest vertex</option><option value="boundary">Snap to tile edge</option>
+            <option value="cut">Mark seam</option><option value="uncut">Clear seam</option><option value="planar">Planar projection</option>
+          </select>
+          <label for="uv-u" id="uv-u-label">U</label><input id="uv-u" type="number" value="0" step="any" />
+          <label for="uv-v" id="uv-v-label">V</label><input id="uv-v" type="number" value="0" step="any" />
+          <label for="uv-pivot">Pivot</label><select id="uv-pivot"><option value="selection">Selection center</option><option value="origin">Origin</option><option value="tile">Tile center</option></select>
+          <label for="uv-plane">Plane</label><select id="uv-plane"><option value="">Estimated plane</option><option value="xy">XY</option><option value="xz">XZ</option><option value="yz">YZ</option></select>
+          <button id="uv-run" type="button">Update draft</button>
+        </div>
+        <div class="actions">
+          <label for="uv-size">Atlas size</label><select id="uv-size"><option>256</option><option>512</option><option selected>1024</option><option>2048</option><option>4096</option></select>
+          <label for="uv-padding">Padding (px)</label><input id="uv-padding" type="number" value="4" min="0" max="64" />
+          <label><input id="uv-allow-rotate" type="checkbox" checked /> Allow rotation</label>
+          <label><input id="uv-equalize" type="checkbox" /> Equalize texel density</label>
+          <label><input id="uv-selected-only" type="checkbox" /> Selected only</label>
+          <button id="uv-pack" type="button">Pack islands</button><button id="uv-unwrap" type="button">Auto Unwrap</button>
+        </div>
+        <div class="actions">
+          <label for="uv-mode-select">Apply mode</label><select id="uv-mode-select"><option value="preserve">Preserve Appearance</option><option value="mapping">Change Mapping</option></select>
+          <label for="uv-source">Bake source</label><select id="uv-source"><option value="working">Working snapshot</option><option value="original">Original import</option></select>
+          <label for="uv-filter">Sampling</label><select id="uv-filter"><option value="linear">Bilinear</option><option value="nearest">Nearest</option></select>
+          <label><input id="uv-missing" type="checkbox" /> Neutral fill for repairs</label>
+          <button id="uv-apply" type="button">Rebake and Apply</button><button id="uv-cancel" type="button">Cancel draft</button>
+        </div>
+        <p id="uv-info" aria-live="polite"></p>
+      </fieldset>
       <section id="texture-panel" aria-label="Texture editor" hidden>
         <fieldset>
           <legend>Texture editor</legend>

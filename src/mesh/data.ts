@@ -21,6 +21,7 @@ export interface MeshData {
   readonly nextFace: number;
   readonly materialCount: number;
   readonly glb: boolean;
+  readonly uvSeams?: Readonly<Record<number, readonly string[]>>;
 }
 
 export type Kind = 'vertex' | 'edge' | 'face';

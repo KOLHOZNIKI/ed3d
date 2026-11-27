@@ -10,7 +10,7 @@ export function textureFaces(target: TextureTarget, atlas?: BufferGeometry): Map
   const result = new Map<number, UvTriangle>();
   if (!geometry) return result;
   const map = binding.texture;
-  const channel = target.atlas ? 1 : map.channel;
+  const channel = target.atlas ? 1 : target.transfer?.channel ?? map.channel;
   const uv = geometry.getAttribute(channel ? `uv${channel}` : 'uv');
   if (!uv) return result;
   if (map.matrixAutoUpdate) map.updateMatrix();
@@ -22,6 +22,7 @@ export function textureFaces(target: TextureTarget, atlas?: BufferGeometry): Map
     const vertex = index?.getX(corner) ?? corner;
     const u = uv.getX(vertex), v = uv.getY(vertex);
     if (target.atlas) return { x: u, y: 1 - v };
+    if (target.transfer) return { x: u, y: v };
     const y = m[1] * u + m[4] * v + m[7];
     return { x: m[0] * u + m[3] * v + m[6], y: map.flipY ? 1 - y : y };
   };

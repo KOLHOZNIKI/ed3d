@@ -1,7 +1,7 @@
 import { MeshBasicMaterial, type BufferGeometry, type Material, type Mesh, type Texture } from 'three';
-import { mappedTexture, sourceImage, type TextureCatalog, type TextureTarget } from './bindings';
+import { mappedTexture, sourceImage, transferSampling, type TextureCatalog, type TextureTarget } from './bindings';
 import type { WorkingState } from '../project/state';
-import { encodeImage, type TextureImage } from './image';
+import { decodePng, encodeImage, type TextureImage } from './image';
 
 export interface MeshView {
   mesh: Mesh;
@@ -62,7 +62,8 @@ export function sourceAppearance(catalog: TextureCatalog, state: WorkingState, m
   try {
     for (const target of catalog.targets(state)) {
       if (target.atlas) continue;
-      const image = state.textures?.[target.key]?.image;
+      const edited = state.textures?.[target.key]?.image;
+      const image = edited ?? catalog.transferredImage(target);
       let canvas = live?.target.key === target.key ? live.canvas : undefined;
       if (!image && !canvas && !unlit) continue;
       const { binding } = target;
@@ -75,13 +76,31 @@ export function sourceAppearance(catalog: TextureCatalog, state: WorkingState, m
       }
       const texture = canvas ? mappedTexture(binding.texture, canvas) : image ? binding.texture.clone() : binding.texture;
       if (texture !== binding.texture) result.textures.push(texture);
+      if (target.transfer) transferSampling(texture, target.transfer.channel);
       if (mode === 'fbx' && image) fbx.set(texture, encode(image));
       if (mode === 'glb' && image && canvas) {
         texture.userData = { ...texture.userData, mimeType: 'image/png' };
-        if (!glb.has(canvas)) glb.set(canvas, { blob: new Blob([encode(image)], { type: 'image/png' }), name: binding.sourceName });
+        const png = !edited ? target.transfer?.bake.maps.find(map => map.slot === 'map')?.png : undefined;
+        if (!glb.has(canvas)) glb.set(canvas, { blob: new Blob([png ?? encode(image)], { type: 'image/png' }), name: binding.sourceName });
       }
       const material = unlit ? unlitColor(binding.material, texture) : binding.material.clone();
       material.map = texture;
+      if (target.transfer && !unlit) {
+        const slots = material as unknown as Record<string, Texture | null>;
+        for (const entry of target.transfer.bake.maps) {
+          if (entry.slot === 'map') continue;
+          const names = entry.slot === 'metalRough' ? ['metalnessMap', 'roughnessMap'] : [entry.slot];
+          const source = slots[names[0]];
+          if (!source) throw new Error(`Missing GLB ${names[0]} binding for the UV transfer.`);
+          const canvas = sourceImage(decodePng(entry.png));
+          const texture = mappedTexture(source, canvas);
+          transferSampling(texture, target.transfer.channel);
+          texture.userData = { ...texture.userData, mimeType: 'image/png' };
+          result.textures.push(texture);
+          if (mode === 'glb') glb.set(canvas, { blob: new Blob([entry.png], { type: 'image/png' }), name: entry.source });
+          for (const name of names) slots[name] = texture;
+        }
+      }
       material.needsUpdate = true;
       let replacement = materialsByMesh.get(binding.mesh);
       if (!replacement) {

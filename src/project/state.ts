@@ -17,6 +17,12 @@ export interface AtlasState {
   readonly sourceCorners: Uint32Array<ArrayBuffer>;
   readonly faceComponents: Uint32Array<ArrayBuffer>;
   readonly metrics: UvAtlasEdit['metrics'];
+  readonly seams?: readonly string[];
+}
+
+export interface UvBake {
+  readonly channel: number;
+  readonly bake: TextureBake;
 }
 
 export interface WorkingState {
@@ -27,6 +33,7 @@ export interface WorkingState {
   readonly textures?: Readonly<Record<string, TextureEdit>>;
   readonly meshEdits?: readonly Uint8Array<ArrayBuffer>[];
   readonly keepOpen?: Readonly<Record<string, Readonly<Record<string, boolean>>>>;
+  readonly uvBakes?: Readonly<Record<string, UvBake>>;
 }
 
 export function* workingBuffers(state: WorkingState): Iterable<ArrayBuffer> {
@@ -37,6 +44,11 @@ export function* workingBuffers(state: WorkingState): Iterable<ArrayBuffer> {
     yield state.atlas.faceComponents.buffer;
   }
   for (const map of state.bake?.maps ?? []) yield map.png.buffer;
+  if (state.bake?.coverage) yield state.bake.coverage.buffer;
+  for (const { bake } of Object.values(state.uvBakes ?? {})) {
+    for (const map of bake.maps) yield map.png.buffer;
+    if (bake.coverage) yield bake.coverage.buffer;
+  }
   if (state.paint) yield state.paint.png.buffer;
   for (const edit of Object.values(state.textures ?? {})) for (const tile of edit.image.tiles) yield tile.buffer;
   for (const edit of state.meshEdits ?? []) yield edit.buffer;

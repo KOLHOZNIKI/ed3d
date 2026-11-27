@@ -1,10 +1,12 @@
 import createXAtlas from 'xatlas-wasm';
 import { bakeScale, chartPadding, rasterize } from './atlas-raster';
+import { inspectLayout } from '../uv/layout';
 
 export interface AtlasInput {
   positions: Float32Array<ArrayBuffer>;
   indices: Uint32Array<ArrayBuffer>;
   faceMaterialData: Uint32Array<ArrayBuffer>;
+  settings?: { size: number; padding: number; rotate: boolean };
 }
 
 export interface AtlasOutput {
@@ -38,7 +40,9 @@ async function generate(data: AtlasInput): Promise<AtlasOutput> {
     try {
       const error = atlas.addMesh(data);
       if (error !== 0) throw new Error(`xatlas rejected the indexed mesh (${error}).`);
-      atlas.generate({}, { resolution: 1024, padding: chartPadding });
+      const settings = data.settings;
+      atlas.generate({}, settings ? { resolution: settings.size, padding: settings.padding,
+        rotateCharts: settings.rotate, rotateChartsToAxis: settings.rotate } : { resolution: 1024, padding: chartPadding });
       const { width, height, chartCount } = atlas;
       if (atlas.atlasCount !== 1 || !width || !height || !chartCount) throw new Error('xatlas did not create a single nonempty atlas.');
       const mesh = atlas.getMesh(0);
@@ -56,7 +60,10 @@ async function generate(data: AtlasInput): Promise<AtlasOutput> {
       });
       const corners = new Float32Array(indices.length * 2);
       indices.forEach((index, i) => corners.set(uv.subarray(index * 2, index * 2 + 2), i * 2));
-      const { overlaps } = rasterize(width * bakeScale, height * bakeScale, corners);
+      const { overlaps } = rasterize(settings ? settings.size : width * bakeScale, settings ? settings.size : height * bakeScale, corners);
+      if (settings) {
+        for (const face of inspectLayout(corners, false).conflicts) overlaps.add(face);
+      }
       if (!overlaps.size) return {
         width, height, charts: chartCount, separatedFaces: nextMaterial - firstUniqueMaterial,
         xrefs, indices, uv, milliseconds: performance.now() - start,

@@ -5,9 +5,11 @@ import { faceNormal, polygon, vector } from './polygon';
 import { recalculate, tangentFrame } from './normals';
 import { applyRepairs } from '../repair/fill';
 import { validatePatch } from '../repair/intersections';
+import { applyUvLayout } from '../uv/mesh-layout';
 
 export function applyMeshEdit(mesh: MeshData, edit: MeshEdit): { mesh: MeshData; piece?: MeshData } {
   switch (edit.type) {
+    case 'uv': return { mesh: applyUvLayout(mesh, edit) };
     case 'repair': return { mesh: applyRepairs(mesh, edit.patches) };
     case 'move': case 'rotate': case 'scale': return { mesh: transform(mesh, edit) };
     case 'delete': case 'separate': {

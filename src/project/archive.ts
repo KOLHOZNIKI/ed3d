@@ -3,6 +3,8 @@ import { AssetDocument, defaultHistoryBudget, type ObjectOverrides, type Origina
 import { atlasColor, type AtlasState, type TextureEdit, type WorkingState } from './state';
 import { decodePng, encodeImage } from '../texture/image';
 import { boundaryId, decodeEdit } from '../mesh/commands';
+import type { TextureBake } from '../e00/rebake';
+import { glbSlots } from '../uv/transfer';
 
 const MiB = 1024 * 1024;
 export const projectLimit = 512 * MiB;
@@ -73,13 +75,14 @@ export async function writeProject(document: AssetDocument<WorkingState>, option
   const geometry = atlas && {
     indices: await retain(new Uint8Array(atlas.indices.buffer)), uv: await retain(new Uint8Array(atlas.uv.buffer)),
     sourceCorners: await retain(new Uint8Array(atlas.sourceCorners.buffer)), faceComponents: await retain(new Uint8Array(atlas.faceComponents.buffer)),
-    metrics: atlas.metrics,
+    metrics: atlas.metrics, seams: atlas.seams,
   };
-  let bake;
-  if (state.bake) {
-    const { maps, ...metadata } = state.bake;
-    bake = { ...metadata, maps: await Promise.all(maps.map(async ({ png, ...map }) => ({ ...map, hash: await retain(png) }))) };
-  }
+  const retainBake = async ({ maps, coverage, ...metadata }: TextureBake) => ({ ...metadata,
+    maps: await Promise.all(maps.map(async ({ png, ...map }) => ({ ...map, hash: await retain(png) }))),
+    coverage: coverage && await retain(coverage) });
+  const bake = state.bake && await retainBake(state.bake);
+  const uvBakes = state.uvBakes && Object.fromEntries(await Promise.all(Object.entries(state.uvBakes).map(async ([id, value]) =>
+    [id, { channel: value.channel, bake: await retainBake(value.bake) }])));
   let paint;
   if (state.paint) {
     const { png, ...metadata } = state.paint;
@@ -100,9 +103,9 @@ export async function writeProject(document: AssetDocument<WorkingState>, option
     }
     meshEdits = await retain(bytes);
   }
-  const manifest = encoder.encode(JSON.stringify({ format: 'AssetFixer', schemaVersion: 5, id: options?.id ?? document.id,
+  const manifest = encoder.encode(JSON.stringify({ format: 'AssetFixer', schemaVersion: 6, id: options?.id ?? document.id,
     name: options?.name ?? document.name, revision, settings: { historyBudget }, scene, originals: originalRefs,
-    resources, working: { objects: state.objects, geometry, bake, paint, textures, meshEdits, keepOpen: state.keepOpen } }));
+    resources, working: { objects: state.objects, geometry, bake, paint, textures, meshEdits, keepOpen: state.keepOpen, uvBakes } }));
   if (manifest.byteLength > MiB || expanded + manifest.byteLength > limits.total) throw new Error('The project manifest exceeds its size limit.');
   files.set('manifest.json', manifest);
   const bytes = await pack(files);
@@ -119,7 +122,7 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
   const manifest = record(JSON.parse(decoder.decode(encoded)));
   if (manifest.format !== 'AssetFixer') throw new Error('This file is not an AssetFixer project.');
   const version = integer(manifest.schemaVersion, 1);
-  if (version > 5) throw new Error(`Project schema ${version} is newer than this application supports.`);
+  if (version > 6) throw new Error(`Project schema ${version} is newer than this application supports.`);
   // Version 1 had a fixed history budget. Version 2 persists the project setting.
   const historyBudget = version === 1 ? defaultHistoryBudget : integer(record(manifest.settings).historyBudget, MiB, projectLimit);
   if (historyBudget % MiB) throw new Error('Invalid project history budget.');
@@ -209,6 +212,11 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
     atlas = {
       indices: new Uint32Array(asWords(data.indices)), uv: new Float32Array(asWords(data.uv)),
       sourceCorners: new Uint32Array(asWords(data.sourceCorners)), faceComponents: new Uint32Array(asWords(data.faceComponents)),
+      seams: data.seams === undefined ? undefined : list(data.seams, 1_000_000).map(value => {
+        const seam = text(value, 32);
+        if (!/^\d{1,10}\/\d{1,10}$/.test(seam)) throw new Error('Invalid saved UV seam.');
+        return seam;
+      }),
       metrics: {
         width: integer(m.width, 1, 8192), height: integer(m.height, 1, 8192), charts: integer(m.charts, 1),
         separatedFaces: integer(m.separatedFaces), milliseconds: finite(m.milliseconds), controlPoints: integer(m.controlPoints, 1),
@@ -216,16 +224,16 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
       },
     };
   }
-  let bake: WorkingState['bake'];
-  if (working.bake) {
-    if (!atlas) throw new Error('The saved bake has no target atlas.');
-    const data = record(working.bake), width = integer(data.width, 1, 16384), height = integer(data.height, 1, 16384);
-    if (width !== atlas.metrics.width * 2 || height !== atlas.metrics.height * 2 || width * height > 16_777_216 * 4) {
+  const readBake = (value: unknown, target?: AtlasState): TextureBake => {
+    const data = record(value), width = integer(data.width, 1, 16384), height = integer(data.height, 1, 16384);
+    const scale = data.direct === undefined ? 2 : 1;
+    if (target && (width !== target.metrics.width * scale || height !== target.metrics.height * scale) || width * height > 16_777_216 * 4) {
       throw new Error('Saved baked images do not match the atlas dimensions.');
     }
-    const maps = list(data.maps, 4).map(value => {
+    const slots: readonly string[] = target ? ['map', 'normalMap', 'emissiveMap', 'aoMap', 'alphaMap', 'roughness', 'metallic'] : glbSlots;
+    const maps = list(data.maps, slots.length).map(value => {
       const map = record(value), slot = text(map.slot, 32), source = text(map.source, 2048), png = resource(map.hash);
-      if (!['map', 'normalMap', 'roughness', 'metallic'].includes(slot)) throw new Error('Unknown project bake map slot.');
+      if (!slots.includes(slot)) throw new Error('Unknown project bake map slot.');
       validatePng(png, width, height);
       return { slot, source, png };
     });
@@ -235,8 +243,28 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
     if (data.generated !== undefined && (data.generated !== true || maps.length !== 1 || maps[0].source !== 'Generated Base Color')) {
       throw new Error('Invalid generated paint atlas.');
     }
-    bake = { maps, width, height, padding: integer(data.padding), covered: integer(data.covered, 1, width * height),
-      padded: integer(data.padded, 0, width * height), boundaryOnlyTriangles: integer(data.boundaryOnlyTriangles), generated: data.generated };
+    const covered = integer(data.covered, 1, width * height);
+    let direct: TextureBake['direct'], coverage: TextureBake['coverage'];
+    if (data.direct !== undefined) {
+      const info = record(data.direct);
+      if (info.filter !== 'linear' && info.filter !== 'nearest') throw new Error('Invalid UV sampling filter.');
+      direct = { sourceName: text(info.sourceName, 160), filter: info.filter, misses: integer(info.misses, 0, covered) };
+      coverage = resource(data.coverage);
+      validatePng(coverage, width, height);
+    } else if (!target || data.coverage !== undefined) throw new Error('A UV transfer requires coverage diagnostics.');
+    return { maps, width, height, padding: integer(data.padding), covered,
+      padded: integer(data.padded, 0, width * height), boundaryOnlyTriangles: integer(data.boundaryOnlyTriangles), generated: data.generated, direct, coverage };
+  };
+  if (working.bake && !atlas) throw new Error('The saved bake has no target atlas.');
+  const bake = working.bake ? readBake(working.bake, atlas) : undefined;
+  let uvBakes: Record<string, { channel: number; bake: TextureBake }> | undefined;
+  if (version >= 6 && working.uvBakes !== undefined) {
+    uvBakes = Object.create(null) as NonNullable<typeof uvBakes>;
+    for (const [object, value] of Object.entries(record(working.uvBakes))) {
+      if (!entries.has(object)) throw new Error('A UV transfer refers to an unknown object.');
+      const item = record(value);
+      uvBakes[object] = { channel: integer(item.channel, 0, 3), bake: readBake(item.bake) };
+    }
   }
   let paint: WorkingState['paint'];
   if (working.paint) {
@@ -261,7 +289,7 @@ export async function readProject(blob: Blob): Promise<ProjectData> {
   const id = text(manifest.id, 36);
   if (!uuidPattern.test(id)) throw new Error('Invalid project identifier.');
   return { id, name: text(manifest.name, 160), revision: integer(manifest.revision, 0, 1e12), originals, historyBudget, scene,
-    state: { objects, atlas, bake, paint, textures, meshEdits, keepOpen } };
+    state: { objects, atlas, bake, paint, textures, meshEdits, keepOpen, uvBakes } };
 }
 
 function validatePng(png: Uint8Array<ArrayBuffer>, width: number, height: number) {

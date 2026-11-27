@@ -1,7 +1,7 @@
-import { Mesh, Source, Texture, type Material } from 'three';
+import { ClampToEdgeWrapping, Mesh, Source, Texture, type Material } from 'three';
 import type { Model, ModelAdapter } from '../project/adapter';
 import { blankPaintMesh } from '../e00/rebake';
-import { atlasColor, type WorkingState } from '../project/state';
+import { atlasColor, type UvBake, type WorkingState } from '../project/state';
 import { decodeImage, decodePng, drawImage, encodeImage, type TextureImage } from './image';
 
 type ColorMaterial = Material & { map: Texture | null };
@@ -23,6 +23,7 @@ export interface TextureTarget {
   readonly binding: TextureBinding;
   readonly atlas: boolean;
   readonly shared: readonly TextureBinding[];
+  readonly transfer?: UvBake;
 }
 
 export class TextureCatalog {
@@ -30,10 +31,12 @@ export class TextureCatalog {
   #decoded?: { source: Blob; image: Promise<TextureImage> };
   #atlases = new WeakMap<Uint8Array, TextureImage>();
   #generatedBinding?: TextureBinding;
+  #format: Model['format'];
 
   constructor(adapter: ModelAdapter) {
     const first = new Map<object | string, { key: string; blob: Blob; name?: string }>();
     const model = adapter.model;
+    this.#format = model.format;
     const generated = model.format === 'fbx' && blankPaintMesh(model);
     for (const [object, node] of adapter.objects) {
       if (!(node instanceof Mesh)) continue;
@@ -71,14 +74,21 @@ export class TextureCatalog {
       const binding = state.bake.generated ? this.#generatedBinding : this.bindings[0];
       return binding ? [{ binding, key: atlasColor, atlas: true, shared: [binding] }] : [];
     }
-    const keyFor = (binding: TextureBinding) => state.textures?.[binding.id] ? binding.id : binding.sharedKey;
+    const keyFor = (binding: TextureBinding) => state.textures?.[binding.id] || state.uvBakes?.[binding.object] ? binding.id : binding.sharedKey;
     return this.bindings.map(binding => {
       const key = keyFor(binding);
-      return { binding, key, atlas: false, shared: this.bindings.filter(other => keyFor(other) === key) };
+      return { binding, key, atlas: false, transfer: state.uvBakes?.[binding.object], shared: this.bindings.filter(other => keyFor(other) === key) };
     });
   }
 
   validate(state: WorkingState) {
+    for (const [object, transfer] of Object.entries(state.uvBakes ?? {})) {
+      const binding = this.bindings.find(item => item.object === object);
+      const channel = transfer.channel ? `uv${transfer.channel}` : 'uv';
+      if (this.#format !== 'glb' || !binding || Array.isArray(binding.mesh.material) || !binding.mesh.geometry.hasAttribute(channel)) {
+        throw new Error('The saved UV transfer has no matching GLB material and channel.');
+      }
+    }
     if (state.bake?.generated && !this.#generatedBinding) throw new Error('The source does not support a generated paint atlas.');
     for (const [key, edit] of Object.entries(state.textures ?? {})) {
       if (key === atlasColor) {
@@ -94,6 +104,7 @@ export class TextureCatalog {
   load(target: TextureTarget, state: WorkingState): Promise<TextureImage> {
     const working = state.textures?.[target.key]?.image;
     if (working) return Promise.resolve(working);
+    if (target.transfer) return Promise.resolve(this.transferredImage(target)!);
     if (target.atlas) {
       const png = state.paint?.png ?? state.bake?.maps.find(map => map.slot === 'map')?.png;
       if (!png) throw new Error('The baked Base Color map is missing.');
@@ -108,6 +119,24 @@ export class TextureCatalog {
     if (this.#decoded?.source !== blob) this.#decoded = { source: blob, image: decodeImage(blob) };
     return this.#decoded.image;
   }
+
+  transferredImage(target: TextureTarget) {
+    const png = target.transfer?.bake.maps.find(entry => entry.slot === 'map')?.png;
+    if (!png) return;
+    let image = this.#atlases.get(png);
+    if (!image) { image = decodePng(png); this.#atlases.set(png, image); }
+    return image;
+  }
+}
+
+export function transferSampling(texture: Texture, channel: number) {
+  texture.channel = channel;
+  texture.offset.set(0, 0);
+  texture.repeat.set(1, 1);
+  texture.center.set(0, 0);
+  texture.rotation = 0;
+  texture.matrix.identity();
+  texture.wrapS = texture.wrapT = ClampToEdgeWrapping;
 }
 
 export function sourceImage(image: TextureImage): HTMLCanvasElement {

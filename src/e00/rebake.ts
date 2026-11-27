@@ -18,6 +18,8 @@ export interface TextureBake {
   padding: number;
   boundaryOnlyTriangles: number;
   generated?: true;
+  direct?: { sourceName: string; filter: 'nearest' | 'linear'; misses: number };
+  coverage?: Uint8Array<ArrayBuffer>;
   projection?: { sourceName: string; misses: number; maxDistance: number; eligibleSources: number[][] };
 }
 
@@ -56,6 +58,17 @@ export async function rebakeAsset(asset: ImportedAsset, signal?: AbortSignal, ba
       ((material.transparent || material.alphaTest > 0) && !asset.alphaProfile)) {
     throw new Error('The E00 bake requires one textured FBX material and an explicit profile for alpha.');
   }
+  const maps = await originalFbxMaps(asset, material, baseColor);
+  const { position, normal: normals, uv } = mesh.geometry.attributes;
+  const output = await bakeInWorker({
+    ...bakeTarget(atlas), position: Float32Array.from(position.array), normals: Float32Array.from(normals.array),
+    sourceUv: Float32Array.from(uv.array), maps,
+  }, signal);
+  return { ...asset, textureBake: output };
+}
+
+export async function originalFbxMaps(asset: ImportedAsset, material: MeshPhongMaterial | MeshLambertMaterial, baseColor?: Uint8Array<ArrayBuffer>) {
+  if (!material.map) throw new Error('The FBX material has no linked Base Color.');
   const normal = material instanceof MeshPhongMaterial ? material.normalMap : null;
   for (const [slot, value] of Object.entries(material)) {
     if (value?.isTexture && slot !== 'map' && slot !== 'normalMap') {
@@ -72,12 +85,7 @@ export async function rebakeAsset(asset: ImportedAsset, signal?: AbortSignal, ba
     maps.push({ slot, source, mode: 'linear', ...await readPixels(bytes) });
   }
 
-  const { position, normal: normals, uv } = mesh.geometry.attributes;
-  const output = await bakeInWorker({
-    ...bakeTarget(atlas), position: Float32Array.from(position.array), normals: Float32Array.from(normals.array),
-    sourceUv: Float32Array.from(uv.array), maps,
-  }, signal);
-  return { ...asset, textureBake: output };
+  return maps;
 }
 
 export async function projectBaseColor(source: ImportedAsset, target: ImportedAsset, eligibleSources: number[][],
@@ -164,7 +172,7 @@ async function readLinkedMap(asset: ImportedAsset, slot: string, texture: Textur
     wrapS: samplerWrap(texture.wrapS), wrapT: samplerWrap(texture.wrapT), ...imageData };
 }
 
-function samplerWrap(wrap: Wrapping): NonNullable<BakeMap['wrapS']> {
+export function samplerWrap(wrap: Wrapping): NonNullable<BakeMap['wrapS']> {
   if (wrap === RepeatWrapping) return 'repeat';
   if (wrap === MirroredRepeatWrapping) return 'mirror';
   if (wrap === ClampToEdgeWrapping) return 'clamp';
@@ -192,10 +200,11 @@ async function readPixels(bytes: Uint8Array<ArrayBuffer>) {
   }
 }
 
-async function bakeInWorker(input: BakeInput, signal?: AbortSignal): Promise<TextureBake> {
+export async function bakeInWorker(input: BakeInput, signal?: AbortSignal): Promise<TextureBake> {
   const worker = new Worker(new URL('./rebake-worker.ts', import.meta.url), { type: 'module' });
   const projection = input.projection;
-  return finishWorker(worker, input, [input.position.buffer, input.normals.buffer, input.sourceUv.buffer, input.targetUv.buffer,
-    ...input.maps.map(map => map.pixels.buffer), ...(projection ? [projection.sourcePosition.buffer,
-      projection.sourceComponents.buffer, projection.targetComponents.buffer] : [])], signal);
+  return finishWorker(worker, input, [...new Set([input.position.buffer, input.normals.buffer, input.sourceUv.buffer, input.targetUv.buffer,
+    ...input.maps.flatMap(map => [map.pixels.buffer, ...(map.uv ? [map.uv.buffer] : [])]),
+    ...(input.direct?.missing ? [input.direct.missing.buffer] : []), ...(projection ? [projection.sourcePosition.buffer,
+      projection.sourceComponents.buffer, projection.targetComponents.buffer] : [])])], signal);
 }

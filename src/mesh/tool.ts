@@ -213,7 +213,7 @@ export class MeshTool {
   }
 
   #command({ adapter, id }: Context): MeshEdit {
-    const object = id, type = choice('operation') as Exclude<MeshEdit['type'], 'repair'>;
+    const object = id, type = choice('operation') as Exclude<MeshEdit['type'], 'repair' | 'uv'>;
     const vertices = this.#selection.vertex;
     const edge = () => {
       if (this.#selection.edge.length !== 1) throw new Error('Select exactly one edge.');
