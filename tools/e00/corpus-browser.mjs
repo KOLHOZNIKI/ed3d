@@ -52,9 +52,9 @@ try {
   }
   observed.f16_invalid_index = await open('f16_invalid_index.glb', /GLB triangle 1 references a vertex outside its position array/);
   assert.ok(await exportGlb.isEnabled());
-  observed.f16_missing_texture = await open('f16_missing_texture.zip', /Missing, ambiguous or unreadable textures:.*Source.png/);
+  observed.f16_missing_texture = await open('f16_missing_texture.zip', /Missing or ambiguous textures:.*Source.png/);
   assert.ok(await exportGlb.isEnabled());
-  observed.f12_zup_axes = await open('f12_zup_axes.fbx', /E00 supports binary FBX with \+X right, \+Y up and \+Z front/);
+  observed.f12_zup_axes = await open('f12_zup_axes.fbx', /The file declares -X right, \+Z up, \+Y front\..*binary FBX with \+X right, \+Y up and \+Z front/);
   assert.ok(await exportGlb.isEnabled());
   const stillLoaded = await download(() => exportGlb.click(), 'f16_non_manifold_e00.glb');
   assert.ok((await readFile(stillLoaded)).length > 0);

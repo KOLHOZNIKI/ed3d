@@ -74,7 +74,7 @@ export async function importAsset(input: readonly File[], assignments?: TextureA
   if (paths.length !== 1) throw new Error('Select exactly one FBX with its PNG/JPEG maps, or a ZIP containing them.');
   const [modelPath] = paths;
   const bytes = files.get(modelPath)!;
-  validateFbxAxes(bytes);
+  validateFbxAxes(bytes, basename(modelPath));
 
   const images = new Map([...files].filter(([path]) => imagePattern.test(path)));
   const imagePathsByUrl = new Map<string, string>();

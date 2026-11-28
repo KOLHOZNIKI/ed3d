@@ -405,7 +405,9 @@ async function checkTripoInputs({ page, input, status, exportButton, tripoPath, 
   const wrongAxes = await readFile(join(tripoPath, 'tripo_convert_720eb24f-5864-47f1-8cfb-aed1d6df6c86.zip'));
   await input.setInputFiles({ name: 'unsupported.zip', mimeType: 'application/zip', buffer: wrongAxes });
   await page.waitForFunction(() => !document.querySelector('#sources').disabled);
-  assert.match(await status.textContent(), /supports binary FBX with \+X right/);
+  assert.match(await status.textContent(), /Unsupported FBX axes in “tripo_convert_720eb24f-5864-47f1-8cfb-aed1d6df6c86\.fbx”\./);
+  assert.match(await status.textContent(), /The file declares \+X right, \+Z up, -Y front\..*export a GLB/);
+  assert.ok(await exportButton.isEnabled());
 }
 
 async function checkAdverseSkin({ page, input, status, exportButton }) {

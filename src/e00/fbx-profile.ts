@@ -1,18 +1,14 @@
-const axisSettings = {
-  CoordAxis: 0,
-  CoordAxisSign: 1,
-  UpAxis: 1,
-  UpAxisSign: 1,
-  FrontAxis: 2,
-  FrontAxisSign: 1,
-};
+const directions = [['CoordAxis', 'right'], ['UpAxis', 'up'], ['FrontAxis', 'front']] as const;
+const properties = new Set<string>(directions.flatMap(([axis]) => [axis, `${axis}Sign`]));
+const axisNames = ['X', 'Y', 'Z'];
+const compatibleExport = 'Export a binary FBX with +X right, +Y up and +Z front, or export a GLB.';
 
 // FBXLoader exposes units but omits axis metadata. Read only the global settings
-// required to reject input outside this prototype's coordinate profile.
-export function validateFbxAxes(bytes: Uint8Array<ArrayBuffer>): void {
+// required to check the coordinate profile before loading or editing the scene.
+export function validateFbxAxes(bytes: Uint8Array<ArrayBuffer>, filename: string): void {
   const decoder = new TextDecoder();
   if (bytes.length < 27 || decoder.decode(bytes.subarray(0, 23)) !== 'Kaydara FBX Binary  \0\x1a\0') {
-    throw new Error('Expected a binary FBX file.');
+    throw new Error(`Could not read “${filename}” as a binary FBX. Export in Binary FBX format or export a GLB.`);
   }
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const wide = view.getUint32(23, true) >= 7500;
@@ -49,13 +45,22 @@ export function validateFbxAxes(bytes: Uint8Array<ArrayBuffer>): void {
         return value;
       };
       const name = readString();
-      if (!Object.hasOwn(axisSettings, name)) continue;
+      if (!properties.has(name)) continue;
       for (let i = 0; i < 3; i++) readString();
       if (cursor + 5 > node.children || bytes[cursor] !== 73) throw new Error('Invalid FBX axis value.');
       axes.set(name, view.getInt32(cursor + 1, true));
     }
   }
-  if (Object.entries(axisSettings).some(([axis, value]) => axes.get(axis) !== value)) {
-    throw new Error('E00 supports binary FBX with +X right, +Y up and +Z front.');
+  if (axes.size !== properties.size) {
+    throw new Error(`“${filename}” is missing FBX coordinate settings. ${compatibleExport}`);
+  }
+  const basis = directions.map(([name, direction]) => ({ axis: axes.get(name)!, sign: axes.get(`${name}Sign`)!, direction }));
+  if (new Set(basis.map(({ axis }) => axis)).size !== directions.length ||
+      basis.some(({ axis, sign }) => !axisNames[axis] || sign !== 1 && sign !== -1)) {
+    throw new Error(`“${filename}” has invalid FBX coordinate settings. ${compatibleExport}`);
+  }
+  if (basis.some(({ axis, sign }, i) => axis !== i || sign !== 1)) {
+    const actual = basis.map(({ axis, sign, direction }) => `${sign > 0 ? '+' : '-'}${axisNames[axis]} ${direction}`).join(', ');
+    throw new Error(`Unsupported FBX axes in “${filename}”. The file declares ${actual}. ${compatibleExport}`);
   }
 }

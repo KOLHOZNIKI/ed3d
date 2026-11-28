@@ -13,6 +13,8 @@
 
 The local module accepts one scene or one FBX model per import. **Export selection** includes selected meshes or groups, required ancestor transforms, referenced skin joints and surviving animation tracks. Standalone and batch exports target independent static objects created in **Extract**. Project labels and viewport visibility remain editor state. Whole-scene export retains source visibility. Resource scope, known conversions, and original SHA-256 hashes appear in the compatibility reports.
 
+Binary FBX import supports the declared axes **+X right, +Y up, +Z front**. The import message reports the filename and its declared axes when they differ. Convert the axes in the source tool or export a self-contained GLB.
+
 Choose **PNG** under **FBX maps** to write external PNG images in whole-scene, selection, standalone and batch packages. Source JPEGs are decoded at their original dimensions and recorded in `textureConversions`. Linked paths in the FBX and the material manifest point to the PNG files. Existing PNGs and working lossless maps are used directly. Choose **Source files** to retain unchanged source image encodings.
 
 ## Project archives
