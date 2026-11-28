@@ -116,7 +116,8 @@ try {
   const viewport = field('viewport');
   await viewport.scrollIntoViewIfNeeded();
   const rect = await viewport.boundingBox();
-  await page.mouse.click(rect.x + .50 * rect.width, rect.y + .42 * rect.height);
+  const frameHeight = Math.min(rect.height, rect.width * 3 / 4);
+  await page.mouse.click(rect.x + .50 * rect.width, rect.y + .50 * rect.height - .08 * frameHeight);
   assert.match(await field('mesh-ids').inputValue(), /^\d+$/);
   await ids('vertex', [0]);
   await choose('mesh-operation', 'move');
@@ -128,8 +129,9 @@ try {
     if (r > 180 && g < 125 && b < 125) red.push([i % gizmo.width, Math.floor(i / gizmo.width)]);
   }
   assert.ok(red.length > 5, 'The X gizmo axis was not rendered.');
-  red.sort((a, b) => a[0] - b[0]);
-  const [gx, gy] = red[Math.floor(red.length / 2)];
+  const gx = Math.max(...red.map(([x]) => x)) - 6;
+  const arrow = red.filter(([x]) => x === gx);
+  const [, gy] = arrow[Math.floor(arrow.length / 2)];
   const toolRect = await viewport.boundingBox();
   const sx = toolRect.x + gx * toolRect.width / gizmo.width, sy = toolRect.y + gy * toolRect.height / gizmo.height;
   await page.mouse.move(sx, sy);

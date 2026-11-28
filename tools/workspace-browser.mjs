@@ -46,6 +46,17 @@ try {
   await page.screenshot({ path: join(output, 'empty.png') });
   await open(page, plate);
   const viewport = field('viewport');
+  const stage = page.locator('.model-stage');
+  const viewportFillsStage = async () => {
+    assert.deepEqual(await viewport.boundingBox(), await stage.boundingBox());
+    await page.waitForFunction(() => {
+      const canvas = document.querySelector('#viewport');
+      const { width, height } = canvas.getBoundingClientRect();
+      const scale = Math.min(devicePixelRatio, 2, 4096 / Math.max(width, height));
+      return canvas.width === Math.round(width * scale) && canvas.height === Math.round(height * scale);
+    });
+  };
+  await viewportFillsStage();
   const statusbar = page.locator('.statusbar');
   const statusHeight = (await statusbar.boundingBox()).height;
   const initialViewport = await viewport.boundingBox();
@@ -116,6 +127,7 @@ try {
   await details('view-comparison');
   await choose('view-compare', 'split');
   await ready();
+  await viewportFillsStage();
   assert.equal(await field('model-view').getAttribute('data-compare'), 'split');
   assert.equal(await field('view-reference-label').textContent(), 'Original');
   await click('view-capture');
@@ -150,6 +162,7 @@ try {
   assert.equal(await field('texture-panel').isVisible(), true);
   assert.equal(await viewport.isVisible(), true);
   await field('workspace-editor-resize').press('ArrowLeft');
+  await viewportFillsStage();
   await choose('workspace-layout', 'uv');
   await layout('uv');
   await page.screenshot({ path: join(output, 'uv.png') });
@@ -205,19 +218,59 @@ try {
   for (const id of ['view-grid', 'view-axes', 'view-bounds']) await field(id).uncheck();
   const silhouette = async mode => {
     await choose('view-display', mode);
-    const { data, channels, width, height } = decode(await viewport.screenshot());
+    const { data, channels, width, height } = decode(await viewport.screenshot({
+      style: '#view-compare-labels { visibility: hidden; }',
+    }));
     const mask = new Uint8Array(width * height);
-    for (let i = 0; i < mask.length; i++) {
+    // The partially covered outer pixels can include the panels beside the canvas.
+    const background = (width * 2 + 2) * channels;
+    for (let y = 2; y < height - 2; y++) for (let x = 2; x < width - 2; x++) {
+      const i = y * width + x;
       const offset = i * channels;
-      mask[i] = +([0, 1, 2].some(channel => data[offset + channel] !== data[channel]));
+      mask[i] = +([0, 1, 2].some(channel => data[offset + channel] !== data[background + channel]));
     }
-    return mask;
+    return { mask, width, height };
   };
-  const textured = await silhouette('textured'), captured = await silhouette('matcap-graphite');
+  const { mask: textured } = await silhouette('textured'), { mask: captured } = await silhouette('matcap-graphite');
   assert.equal(textured.length, captured.length);
   const visible = textured.reduce((count, value) => count + value, 0);
   assert.ok(visible > 10_000);
   assert.ok(textured.reduce((count, value, i) => count + +(value !== captured[i]), 0) < visible * .01);
+
+  const checkProportions = ({ mask, width, height }, left, right) => {
+    let minX = width, maxX = -1, minY = height, maxY = -1;
+    for (let y = 0; y < height; y++) for (let x = left; x < right; x++) {
+      if (!mask[y * width + x]) continue;
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+    }
+    const shapeWidth = maxX - minX + 1, shapeHeight = maxY - minY + 1;
+    assert.ok(shapeWidth > 100 && shapeHeight > 50 && Math.abs(shapeWidth / shapeHeight - 2) <= .04,
+      `Expected a 2:1 silhouette, got ${shapeWidth} × ${shapeHeight}.`);
+    assert.ok(Math.abs(minX + maxX + 1 - left - right) <= 2, 'The model should stay centered horizontally.');
+    return { x: minX + shapeWidth / 4, y: minY + shapeHeight / 2 };
+  };
+  for (const width of [2600, 1280]) {
+    await page.setViewportSize({ width, height: 1080 });
+    await viewportFillsStage();
+    for (const projection of ['Perspective', 'Orthographic']) {
+      await choose('projection', projection);
+      const shape = await silhouette('solid');
+      const position = checkProportions(shape, 0, shape.width);
+      await click('object-mode');
+      await viewport.click({ position });
+      assert.equal(await field('scene-hierarchy').getByRole('button', { name: 'CutoutPanel' }).getAttribute('aria-pressed'), 'true');
+      await viewport.click({ position: { x: 2, y: 2 } });
+      await choose('view-compare', 'split');
+      await ready();
+      await viewportFillsStage();
+      const split = await silhouette('solid'), divider = Math.floor(split.width / 2);
+      checkProportions(split, 0, divider);
+      checkProportions(split, divider, split.width);
+      await choose('view-compare', 'working');
+    }
+  }
+  await page.setViewportSize({ width: 1920, height: 1080 });
 
   await open(page, resolve('tools/e00/fixtures/corpus/f03_boundaries.glb'));
   await field('scene-hierarchy').locator('button').first().click();
@@ -245,7 +298,7 @@ try {
   const report = { browser: browser.version(), viewportPixels: pixels, uniqueDisplays: displays.length, guides: true,
     comparison: true, preservedExportTextures: true, resizablePanels: true, restoredLayout: 'uv-only', shortcutSave: true, meshSelection: true,
     compactOverflow: overflow, statusHeight, stableViewportOnSelection: true, pbrCompanionMaps: true, stylizedSkinPose: true,
-    matcapLighting: true, matcapOpacity: true, matcapSkinPose: true, local: true };
+    matcapLighting: true, matcapOpacity: true, matcapSkinPose: true, responsiveViewport: true, local: true };
   await writeFile(join(output, 'browser.json'), JSON.stringify(report, null, 2) + '\n');
   console.log(JSON.stringify(report));
 } finally {

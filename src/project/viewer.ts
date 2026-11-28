@@ -1,4 +1,4 @@
-import { AmbientLight, AnimationMixer, AxesHelper, Box3, Box3Helper, DataTexture, DirectionalLight, GridHelper, MOUSE, Mesh, MeshBasicMaterial,
+import { AmbientLight, AnimationMixer, AxesHelper, Box3, Box3Helper, DataTexture, DirectionalLight, GridHelper, MathUtils, MOUSE, Mesh, MeshBasicMaterial,
   MeshLambertMaterial, MeshNormalMaterial, MeshPhongMaterial, MeshStandardMaterial, NeutralToneMapping, OrthographicCamera, PerspectiveCamera, PMREMGenerator, Raycaster,
   RepeatWrapping, Scene, SkinnedMesh, SRGBColorSpace, Texture, Vector2, Vector3, WebGLRenderer,
   type AnimationClip, type BufferGeometry, type Material, type Object3D, type WebGLRenderTarget } from 'three';
@@ -14,6 +14,8 @@ import { atlasColor, type WorkingState } from './state';
 export type DisplayMode = 'textured' | 'pbr' | 'unlit' | 'solid' | 'wire' | 'edges' | 'checker' | 'normals' | ShaderLook | MatcapLook;
 export type CompareMode = 'working' | 'reference' | 'split';
 type ReferenceView = { root: Object3D; appearance?: Appearance };
+const verticalFov = 40;
+const frameSlope = Math.tan(MathUtils.degToRad(verticalFov / 2));
 
 function checkerMaterial() {
   const size = 64;
@@ -34,7 +36,9 @@ export class Viewer {
   readonly scene = new Scene();
   #renderer: WebGLRenderer | null;
   #canvas: HTMLCanvasElement;
-  #ratio: number;
+  #framingAspect: number;
+  #viewportAspect: number;
+  #frameHalfHeight = 1;
   #fixedBuffer: boolean;
   #compare: CompareMode = 'working';
   #reference?: ReferenceView;
@@ -84,9 +88,8 @@ export class Viewer {
 
   constructor(canvas: HTMLCanvasElement, onContext: (lost: boolean) => void) {
     this.#canvas = canvas;
-    this.#ratio = canvas.width / canvas.height;
+    this.#framingAspect = this.#viewportAspect = canvas.width / canvas.height;
     this.#fixedBuffer = canvas.hasAttribute('data-fixed-buffer');
-    canvas.parentElement?.style.setProperty('--viewport-aspect', String(this.#ratio));
     const context = canvas.getContext('webgl2', { antialias: true });
     this.#renderer = context ? new WebGLRenderer({ canvas, context }) : null;
     this.#renderer?.setClearColor(0x19232e);
@@ -120,24 +123,49 @@ export class Viewer {
 
   resize() {
     if (!this.#renderer || this.#contextLost) return;
-    const cursor = document.getElementById('paint-cursor') as HTMLCanvasElement;
-    if (this.#fixedBuffer) {
-      if (cursor.width !== this.#canvas.width || cursor.height !== this.#canvas.height) {
-        cursor.width = this.#canvas.width;
-        cursor.height = this.#canvas.height;
-      }
-      return;
-    }
     const rect = this.#canvas.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
-    const scale = Math.min(devicePixelRatio, 2, 4096 / Math.max(rect.width, rect.height));
-    const width = Math.round(rect.width * scale), height = Math.round(rect.height * scale);
-    if (width < 1 || height < 1 || width === this.#canvas.width && height === this.#canvas.height) return;
-    this.#renderer.setSize(width, height, false);
-    cursor.width = width;
-    cursor.height = height;
+    const aspect = rect.width / rect.height, changed = aspect !== this.#viewportAspect;
+    this.#viewportAspect = aspect;
+    const reprojected = this.#updateProjection();
+    let resized = false;
+    if (!this.#fixedBuffer) {
+      const scale = Math.min(devicePixelRatio, 2, 4096 / Math.max(rect.width, rect.height));
+      const width = Math.max(1, Math.round(rect.width * scale)), height = Math.max(1, Math.round(rect.height * scale));
+      resized = width !== this.#canvas.width || height !== this.#canvas.height;
+      if (resized) this.#renderer.setSize(width, height, false);
+    }
+    const cursor = document.getElementById('paint-cursor') as HTMLCanvasElement;
+    if (cursor.width !== this.#canvas.width || cursor.height !== this.#canvas.height) {
+      cursor.width = this.#canvas.width;
+      cursor.height = this.#canvas.height;
+    }
+    if (!resized && !reprojected && !changed) return;
     for (const listener of this.#cameraListeners) listener();
     this.render();
+  }
+
+  #updateProjection() {
+    const camera = this.#camera;
+    if (!camera) return false;
+    const aspect = this.#viewportAspect / (this.#compare === 'split' ? 2 : 1);
+    // Widen a landscape view and extend a narrow view vertically while keeping the target and zoom.
+    const fit = Math.max(1, this.#framingAspect / aspect);
+    if (camera instanceof PerspectiveCamera) {
+      const fov = fit === 1 ? verticalFov : MathUtils.radToDeg(2 * Math.atan(frameSlope * fit));
+      if (camera.aspect === aspect && camera.fov === fov) return false;
+      camera.aspect = aspect;
+      camera.fov = fov;
+    } else {
+      const height = this.#frameHalfHeight * fit, width = height * aspect;
+      if (camera.right === width && camera.top === height) return false;
+      camera.left = -width;
+      camera.right = width;
+      camera.top = height;
+      camera.bottom = -height;
+    }
+    camera.updateProjectionMatrix();
+    return true;
   }
 
   setDisplay(mode: DisplayMode) {
@@ -178,7 +206,6 @@ export class Viewer {
     const container = this.#canvas.parentElement!;
     if (this.comparing) container.dataset.compare = this.#compare;
     else delete container.dataset.compare;
-    container.style.setProperty('--viewport-aspect', String(this.#ratio * (this.#compare === 'split' ? 2 : 1)));
     this.#configureOrbit();
     this.resize();
     this.render();
@@ -354,15 +381,15 @@ export class Viewer {
   #frameBox(box: Box3, orthographic: boolean, direction: Vector3) {
     if (box.isEmpty()) return;
     const center = box.getCenter(new Vector3()), radius = Math.max(box.getSize(new Vector3()).length() / 2, 0.001);
-    const aspect = this.#ratio;
-    const height = 3.5 * radius * Math.tan(20 * Math.PI / 180);
+    const height = this.#frameHalfHeight = 3.5 * radius * frameSlope;
     this.#orbit?.dispose();
     const camera = orthographic
-      ? new OrthographicCamera(-height * aspect, height * aspect, height, -height, radius / 100, radius * 100)
-      : new PerspectiveCamera(40, aspect, radius / 100, radius * 100);
+      ? new OrthographicCamera(-height, height, height, -height, radius / 100, radius * 100)
+      : new PerspectiveCamera(verticalFov, 1, radius / 100, radius * 100);
     camera.position.copy(center).addScaledVector(direction.normalize(), 3.5 * radius);
     camera.lookAt(center);
     this.#camera = camera;
+    this.#updateProjection();
     this.#orbit = new OrbitControls(camera, this.#canvas);
     this.#orbit.target.copy(center);
     this.#configureOrbit();

@@ -43,9 +43,15 @@ try {
   };
   const front = async () => { await select('projection', { label: 'Orthographic' }); await select('view-direction', { label: 'Front' }); };
   const viewport = page.locator('#viewport');
+  // The fixture's paint targets are normalized to the camera's 4:3 framing area.
+  const framingArea = async () => {
+    const box = await viewport.boundingBox();
+    const width = Math.min(box.width, box.height * 4 / 3), height = width * 3 / 4;
+    return { x: box.x + (box.width - width) / 2, y: box.y + (box.height - height) / 2, width, height };
+  };
   const move = async (p, options) => {
     await viewport.scrollIntoViewIfNeeded();
-    const box = await viewport.boundingBox();
+    const box = await framingArea();
     await page.mouse.move(box.x + p[0] * box.width, box.y + p[1] * box.height, options);
   };
   const stroke = async (a, b = a) => {
@@ -100,7 +106,7 @@ try {
   assert.deepEqual((await paintImage('fold-undone.zip')).data, base.data);
 
   await select('paint-mode', 'screen');
-  await set('paint-size', 90 * (await viewport.boundingBox()).width / 640);
+  await set('paint-size', 90 * (await framingArea()).width / 640);
   const screenCursor = await rendered(center);
   assert.ok(screenCursor > surfaceCursor, [screenCursor, surfaceCursor]);
   await stroke(center, [.477, .60]);

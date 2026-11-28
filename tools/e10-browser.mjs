@@ -119,7 +119,8 @@ try {
   async function brush(x, y, move = false, width = .54, height = 1) {
     await viewport.scrollIntoViewIfNeeded();
     const bounds = await viewport.boundingBox(), z = 3.5 * Math.hypot(width, height) / 2;
-    const scale = bounds.height / (2 * z * Math.tan(20 * Math.PI / 180));
+    const frameHeight = Math.min(bounds.height, bounds.width * 3 / 4);
+    const scale = frameHeight / (2 * z * Math.tan(20 * Math.PI / 180));
     const clientX = bounds.x + bounds.width / 2 + x * scale, clientY = bounds.y + bounds.height / 2 - (y - height / 2) * scale;
     await page.mouse.move(clientX, clientY);
     await page.mouse.down();
