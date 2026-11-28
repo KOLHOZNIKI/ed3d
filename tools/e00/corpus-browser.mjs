@@ -54,10 +54,28 @@ try {
   assert.ok(await exportGlb.isEnabled());
   observed.f16_missing_texture = await open('f16_missing_texture.zip', /Missing or ambiguous textures:.*Source.png/);
   assert.ok(await exportGlb.isEnabled());
-  observed.f12_zup_axes = await open('f12_zup_axes.fbx', /The file declares -X right, \+Z up, \+Y front\..*binary FBX with \+X right, \+Y up and \+Z front/);
-  assert.ok(await exportGlb.isEnabled());
   const stillLoaded = await download(() => exportGlb.click(), 'f16_non_manifold_e00.glb');
   assert.ok((await readFile(stillLoaded)).length > 0);
+  observed.f12_zup_axes = await open('f12_zup_axes.fbx', /2 triangles · 0 bones · 1 clips/);
+  const converted = await download(() => page.getByRole('button', { name: 'Export FBX ZIP' }).click(), 'f12_zup_axes_e00.zip');
+  const axisManifest = JSON.parse(new TextDecoder().decode(unzipSync(await readFile(converted))['manifest.json']));
+  assert.deepEqual(axisManifest.sourceAxes, ['-X', '+Z', '+Y']);
+  assert.equal(axisManifest.unitsInCentimeters, 2.54);
+  const mirrored = await readFile(fixture('f12_zup_axes.fbx'));
+  const axisProperty = 'FrontAxisSign';
+  let end = mirrored.indexOf(axisProperty) + axisProperty.length;
+  for (let i = 0; i < 3; i++) {
+    assert.equal(mirrored[end], 'S'.charCodeAt(0));
+    end += 5 + mirrored.readUInt32LE(end + 1);
+  }
+  assert.equal(mirrored[end], 'I'.charCodeAt(0));
+  assert.equal(mirrored.readInt32LE(end + 1), 1);
+  mirrored.writeInt32LE(-1, end + 1);
+  await input.setInputFiles({ name: 'left-handed.fbx', mimeType: 'application/octet-stream', buffer: mirrored });
+  await page.waitForFunction(() => !document.querySelector('#sources').disabled);
+  observed.f12_mirrored_axes = await status.textContent();
+  assert.match(observed.f12_mirrored_axes, /Unsupported FBX axes in “left-handed\.fbx”.*requires a handedness conversion.*export a GLB/);
+  assert.ok(await page.getByRole('button', { name: 'Export FBX ZIP' }).isEnabled());
 
   await page.evaluate(() => {
     const node = document.createElement('input');

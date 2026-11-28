@@ -4,7 +4,7 @@ The browser prototype accepts one binary FBX with external PNG or JPEG maps, eit
 
 ## Results
 
-Chrome opened each fixture, downloaded its FBX ZIP, and reopened the ZIP with the same triangle, bone, and clip counts. It also opened the loose static FBX with its companion image, reported the missing image when the FBX was opened alone, rejected a ZIP path outside the virtual folder, and rejected a Z-up Tripo asset outside the current profile. No external requests were observed from the browser page.
+Chrome opened each fixture, downloaded its FBX ZIP, and reopened the ZIP with the same triangle, bone, and clip counts. It also opened the loose static FBX with its companion image, reported the missing image when the FBX was opened alone, and rejected a ZIP path outside the virtual folder. No external requests were observed from the browser page.
 
 | Fixture | Unity 2022.3.62f2 and 6000.3.9f1 | Independent read with ufbx v0.23.0 |
 | --- | --- | --- |
@@ -15,6 +15,18 @@ Chrome opened each fixture, downloaded its FBX ZIP, and reopened the ZIP with th
 The ufbx check compares polygon boundaries and the control point index at every corner. Axes and units matched for all three fixtures. The maximum corner normal difference on either Tripo fixture was about `1.21e-6°`. The exported ZIPs retain all source JPEG bytes. The character's Roughness and Metallic maps are included in `unassigned/` and require manual assignment.
 
 Unity's comparison used Generic rigs, imported normals, calculated MikkTSpace tangents, four skin influences, file scale, and disabled mesh compression, animation compression, mesh optimization, and axis baking. Humanoid Avatar validity was checked separately on the real character. The Unity position probe matches vertices by their coordinates in world space.
+
+## Axis conversion
+
+The importer rotates right-handed FBX axes into the editor's +X right, +Y up, +Z front basis and applies the same conversion to skin bind matrices. The exported FBX uses that basis and retains the input unit scale. `sourceAxes` in the ZIP manifest records the declared right, up, and front axes in that order. Files that require a handedness conversion still produce a diagnostic.
+
+| Fixture | Verification |
+| --- | --- |
+| Static Tripo Z-up, `tripo_convert_ef592d28-d275-43e4-b6d3-b76c96596304.zip` | Chrome opened and reopened the model. ufbx matched all 9,716 control points, polygon connectivity and UVs. The largest world-space normal difference was `1.21e-6°`. Unity 6000.3.9f1 imported 19,278 triangles in both files with a maximum world-space position difference of `2.15e-7 m`. The two linked 8192 × 8192 PNG maps had identical decoded RGBA samples, and Unity linked both. |
+| Skinned Tripo Z-up, `tripo_convert_720eb24f-5864-47f1-8cfb-aed1d6df6c86.zip` | ufbx matched polygon connectivity, corner UVs and weights for all 44 bones. Unity matched imported weights and measured at most `6.32e-7 m` of difference over three forearm rotations. Unity and ufbx both counted 18,459 triangles before and after export. The browser preview counted 18,457 before and after its own triangulation. |
+| F12 animated Z-up control | ufbx converted the source to the export basis independently. `ReferenceLift` preserved its duration and 6.35 mm movement across 21 samples with a maximum position difference below `1e-9 m`. |
+
+The two Tripo archives are local test inputs. Their SHA-256 digests in table order are `3dd1d18f127b7525c1c66efc102cd83598daf32a70964f78e6652a60f0b1d384` and `b1e9d3fde54c82d561f6838d5e43f23f46c3f95a8d132ff2f11b2c97f725526d`. Run `inspect_fbx original.fbx exported.fbx --axes` for the independent round-trip check.
 
 ## Position edit round-trip
 
@@ -40,7 +52,7 @@ Both errors are within the `5.33e-4 m` tolerance for this fixture. ufbx evaluate
 
 ## Compatibility decisions
 
-- Both Tripo fixtures declare +X right, +Y up, +Z front, and 100 centimeters per source unit. The Comfy exporter emits these axis signs with `axisForward: '-Z'`. The prototype copies the source `UnitScaleFactor` and keeps `bakeSpaceTransform` disabled. Other axis conventions require separate validation.
+- The plate and 67-bone Tripo fixtures declare +X right, +Y up, +Z front, and 100 centimeters per source unit. The Comfy exporter emits these axis signs with `axisForward: '-Z'`. The writer copies the source `UnitScaleFactor` and keeps `bakeSpaceTransform` disabled.
 - The first export prototype wrote one control point per render triangle corner. The adapter now reads the source control points, polygon boundaries, corner attributes and skin clusters from the patched Three.js loader. It passes polygon indices and per-corner layers to the patched Comfy writer while the preview continues to use triangles. `npm ci` applies both patches at their pinned dependency versions.
 - The move command is exercised by the E00 browser harness. It writes the edited positions into a separate snapshot and retains the imported polygons, corner attributes and skin clusters. The export leaves the authored normals in place. The interactive geometry editor is a later stage. The prototype reports an export error for morph targets and meshes without source polygons.
 - AT-01 and AT-02 have fixture results for the unedited, position edit, and real animation paths. Visual comparison and coverage of additional rigs and animation structures remain open. The synthetic FBX is generated with the same candidate writer and remains a separate regression case. The GLB and geometry prototypes are tracked in the specification.

@@ -1,11 +1,12 @@
+import { Matrix4, SkinnedMesh, type Group } from 'three';
+
 const directions = [['CoordAxis', 'right'], ['UpAxis', 'up'], ['FrontAxis', 'front']] as const;
 const properties = new Set<string>(directions.flatMap(([axis]) => [axis, `${axis}Sign`]));
 const axisNames = ['X', 'Y', 'Z'];
-const compatibleExport = 'Export a binary FBX with +X right, +Y up and +Z front, or export a GLB.';
+const compatibleExport = 'Export a binary FBX with right-handed axes, or export a GLB.';
 
-// FBXLoader exposes units but omits axis metadata. Read only the global settings
-// required to check the coordinate profile before loading or editing the scene.
-export function validateFbxAxes(bytes: Uint8Array<ArrayBuffer>, filename: string): void {
+// FBXLoader exposes units but omits the complete axis basis.
+export function readFbxAxes(bytes: Uint8Array<ArrayBuffer>, filename: string) {
   const decoder = new TextDecoder();
   if (bytes.length < 27 || decoder.decode(bytes.subarray(0, 23)) !== 'Kaydara FBX Binary  \0\x1a\0') {
     throw new Error(`Could not read “${filename}” as a binary FBX. Export in Binary FBX format or export a GLB.`);
@@ -59,8 +60,34 @@ export function validateFbxAxes(bytes: Uint8Array<ArrayBuffer>, filename: string
       basis.some(({ axis, sign }) => !axisNames[axis] || sign !== 1 && sign !== -1)) {
     throw new Error(`“${filename}” has invalid FBX coordinate settings. ${compatibleExport}`);
   }
-  if (basis.some(({ axis, sign }, i) => axis !== i || sign !== 1)) {
-    const actual = basis.map(({ axis, sign, direction }) => `${sign > 0 ? '+' : '-'}${axisNames[axis]} ${direction}`).join(', ');
-    throw new Error(`Unsupported FBX axes in “${filename}”. The file declares ${actual}. ${compatibleExport}`);
+  const source = basis.map(({ axis, sign }) => `${sign > 0 ? '+' : '-'}${axisNames[axis]}`);
+  const rotation = new Matrix4();
+  for (const [i, { axis, sign }] of basis.entries()) {
+    // Each row projects a source point onto one of its declared axes.
+    for (let x = 0; x < 3; x++) rotation.elements[x * 4 + i] = x === axis ? sign : 0;
   }
+  if (rotation.determinant() !== 1) {
+    const actual = basis.map(({ direction }, i) => `${source[i]} ${direction}`).join(', ');
+    throw new Error(`Unsupported FBX axes in “${filename}”. The file declares ${actual}, which requires a handedness conversion. ${compatibleExport}`);
+  }
+  const needsRotation = basis.some(({ axis, sign }, i) => axis !== i || sign !== 1);
+  return { source, rotation: needsRotation ? rotation : undefined };
+}
+
+export function rotateFbxScene(scene: Group, rotation: Matrix4) {
+  // The loader keeps its synthetic scene root for conversion. Rotate it so
+  // authored node transforms, animation curves and mesh-local data stay intact.
+  scene.quaternion.setFromRotationMatrix(rotation);
+  const inverseRotation = rotation.clone().transpose();
+  const adjusted = new Set<Matrix4>();
+  scene.traverse(node => {
+    if (!(node instanceof SkinnedMesh)) return;
+    node.bindMatrix.premultiply(rotation);
+    for (const inverse of node.skeleton.boneInverses) {
+      if (adjusted.has(inverse)) continue;
+      inverse.multiply(inverseRotation);
+      adjusted.add(inverse);
+    }
+  });
+  scene.updateMatrixWorld(true);
 }

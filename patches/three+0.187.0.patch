@@ -60,7 +60,17 @@ index fc155a4..25ddbdf 100644
 +		const animations = new AnimationParser( this.trimAnimationClips, this.manager.assetFixerSampleCurve ).parse();
  
  		// if all the models where already combined in a single group, just return that
- 		if ( sceneGraph.children.length === 1 && sceneGraph.children[ 0 ].isGroup ) {
+-		if ( sceneGraph.children.length === 1 && sceneGraph.children[ 0 ].isGroup ) {
++		if ( ! this.manager.assetFixerConvertAxes && sceneGraph.children.length === 1 && sceneGraph.children[ 0 ].isGroup ) {
+@@ -1032,7 +1047,7 @@ class FBXTreeParser {
+ 		// up-axis conventions (Y-up or Z-up). Three.js uses Y-up, so rotate
+ 		// the scene when the file uses Z-up (UpAxis === 2).
+ 
+-		if ( 'GlobalSettings' in fbxTree && 'UpAxis' in fbxTree.GlobalSettings ) {
++		if ( ! this.manager.assetFixerConvertAxes && 'GlobalSettings' in fbxTree && 'UpAxis' in fbxTree.GlobalSettings ) {
+ 
+ 			const upAxis = fbxTree.GlobalSettings.UpAxis.value;
+ 
 @@ -1119,27 +1134,19 @@ class FBXTreeParser {
  
  					if ( rawBone.ID === parent.ID ) {

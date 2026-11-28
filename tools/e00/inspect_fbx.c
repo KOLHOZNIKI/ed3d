@@ -5,10 +5,10 @@
 #include <string.h>
 #include "ufbx.h"
 
-static ufbx_scene *load(const char *path, size_t mesh_count)
+static ufbx_scene *load_with_options(const char *path, size_t mesh_count, const ufbx_load_opts *opts)
 {
     ufbx_error error;
-    ufbx_scene *scene = ufbx_load_file(path, NULL, &error);
+    ufbx_scene *scene = ufbx_load_file(path, opts, &error);
     if (!scene) {
         char description[1024];
         ufbx_format_error(description, sizeof(description), &error);
@@ -21,6 +21,11 @@ static ufbx_scene *load(const char *path, size_t mesh_count)
         exit(1);
     }
     return scene;
+}
+
+static ufbx_scene *load(const char *path, size_t mesh_count)
+{
+    return load_with_options(path, mesh_count, NULL);
 }
 
 static void stats(const ufbx_scene *scene)
@@ -414,6 +419,33 @@ static ufbx_vec3 posed_point(const ufbx_scene *scene, uint32_t mesh_id, size_t i
     return (ufbx_vec3){ .x = point.x * meters, .y = point.y * meters, .z = point.z * meters };
 }
 
+static bool compare_world_axes(const ufbx_scene *source, const ufbx_scene *exported)
+{
+    const ufbx_coordinate_axes axes = exported->settings.axes, canonical = ufbx_axes_right_handed_y_up;
+    const bool axis_match = axes.right == canonical.right && axes.up == canonical.up && axes.front == canonical.front;
+    const bool unit_match = fabs(source->settings.unit_meters - exported->settings.unit_meters) < 1e-12;
+    double geometry = 0, normals = 0, skin = 0;
+    const ufbx_mesh *a = source->meshes.data[0], *b = exported->meshes.data[0];
+    if (a->instances.count != 1 || b->instances.count != 1) return false;
+    const ufbx_matrix *left = &a->instances.data[0]->geometry_to_world, *right = &b->instances.data[0]->geometry_to_world;
+    const double meters = source->settings.unit_meters;
+    for (size_t i = 0; i < a->num_vertices; i++) {
+        geometry = fmax(geometry, meters * point_distance(ufbx_transform_position(left, a->vertices.data[i]),
+                                                         ufbx_transform_position(right, b->vertices.data[i])));
+        if (a->skin_deformers.count) skin = fmax(skin, point_distance(posed_point(source, 0, i), posed_point(exported, 0, i)));
+    }
+    const ufbx_matrix left_normal = ufbx_matrix_for_normals(left), right_normal = ufbx_matrix_for_normals(right);
+    if (a->vertex_normal.exists && b->vertex_normal.exists) for (size_t i = 0; i < a->num_indices; i++) {
+        const ufbx_vec3 n = ufbx_transform_direction(&left_normal, ufbx_get_vertex_vec3(&a->vertex_normal, i));
+        const ufbx_vec3 m = ufbx_transform_direction(&right_normal, ufbx_get_vertex_vec3(&b->vertex_normal, i));
+        normals = fmax(normals, normal_angle(n, m));
+    }
+    printf(",\"canonicalAxes\":%s,\"sameUnits\":%s,\"maxWorldPositionErrorMeters\":%.9g,"
+           "\"maxWorldNormalErrorDegrees\":%.9g,\"maxSkinnedPositionErrorMeters\":%.9g",
+           axis_match ? "true" : "false", unit_match ? "true" : "false", geometry, normals, skin);
+    return axis_match && unit_match && geometry <= 1e-5 && normals <= 1e-4 && skin <= 1e-5;
+}
+
 static bool check_clip_extrema;
 
 typedef struct { double *times; size_t count, capacity; } time_list;
@@ -475,7 +507,7 @@ static int by_time(const void *p, const void *q)
 }
 
 static bool compare_clips(const ufbx_scene *original, const ufbx_scene *exported,
-                          const ufbx_mesh *mesh, const ufbx_mesh *target_mesh)
+                          const ufbx_mesh *mesh, const ufbx_mesh *target_mesh, bool allow_rigid_motion)
 {
     if (original->anim_stacks.count == 0) return exported->anim_stacks.count == 0;
     if (mesh->instances.count != 1 || target_mesh->instances.count != 1) return false;
@@ -489,7 +521,7 @@ static bool compare_clips(const ufbx_scene *original, const ufbx_scene *exported
     }
     const double tolerance = fmax(1e-6, 1e-4 * original->settings.unit_meters * point_distance(min, max));
     bool names_match = original->anim_stacks.count == exported->anim_stacks.count;
-    double max_start_error = 0, max_duration_error = 0, max_error = 0, source_deformation = 0;
+    double max_start_error = 0, max_duration_error = 0, max_error = 0, source_deformation = 0, source_motion = 0;
     size_t samples = 0, extrema = 0;
     double extrema_error = 0;
     for (size_t i = 0; i < original->anim_stacks.count; i++) {
@@ -513,9 +545,11 @@ static bool compare_clips(const ufbx_scene *original, const ufbx_scene *exported
             const ufbx_vec3 anchor = posed_point(left, mesh->typed_id, 0), first_anchor = posed_point(first, mesh->typed_id, 0);
             for (size_t vertex = 0; vertex < mesh->num_vertices; vertex++) {
                 const ufbx_vec3 point = posed_point(left, mesh->typed_id, vertex);
+                const ufbx_vec3 initial = posed_point(first, mesh->typed_id, vertex);
                 max_error = fmax(max_error, point_distance(point, posed_point(right, target_mesh->typed_id, vertex)));
+                source_motion = fmax(source_motion, point_distance(point, initial));
                 source_deformation = fmax(source_deformation, fabs(point_distance(point, anchor) -
-                    point_distance(posed_point(first, mesh->typed_id, vertex), first_anchor)));
+                    point_distance(initial, first_anchor)));
             }
             samples++;
             ufbx_free_scene(right);
@@ -547,9 +581,10 @@ static bool compare_clips(const ufbx_scene *original, const ufbx_scene *exported
     }
     printf(",\"animation\":{\"sameNames\":%s,\"samples\":%zu,\"maxStartErrorSeconds\":%.9g,"
            "\"maxDurationErrorSeconds\":%.9g,\"maxDeformationErrorMeters\":%.9g,"
-           "\"sourceShapeChangeMeters\":%.9g,\"deformationToleranceMeters\":%.9g,\"extremaSamples\":%zu,\"maxExtremaErrorMeters\":%.9g}",
-           names_match ? "true" : "false", samples, max_start_error, max_duration_error, max_error, source_deformation, tolerance, extrema, extrema_error);
-    return names_match && max_start_error <= 1e-5 && max_duration_error <= 1e-5 && max_error <= tolerance && source_deformation > tolerance &&
+           "\"sourceShapeChangeMeters\":%.9g,\"sourceMotionMeters\":%.9g,\"deformationToleranceMeters\":%.9g,\"extremaSamples\":%zu,\"maxExtremaErrorMeters\":%.9g}",
+           names_match ? "true" : "false", samples, max_start_error, max_duration_error, max_error, source_deformation, source_motion, tolerance, extrema, extrema_error);
+    return names_match && max_start_error <= 1e-5 && max_duration_error <= 1e-5 && max_error <= tolerance &&
+        (allow_rigid_motion ? source_motion : source_deformation) > tolerance &&
         (!check_clip_extrema || (extrema > 0 && extrema_error <= tolerance));
 }
 
@@ -608,7 +643,7 @@ static bool compare_soft_move(ufbx_scene *original, const ufbx_scene *exported, 
     printf(",\"softSelection\":{\"samePolygonConnectivity\":true,\"sameSourceSkinWeights\":true,\"changedControlPoints\":%zu,"
            "\"untouchedCoincidentPoints\":%zu,\"maxPositionError\":%.9g,\"maxUvError\":%.9g,\"seedNormalAngle\":%.9g}",
            changed, unmoved_coincident, position_error, uv_error, seed_normal_angle);
-    const bool animation = compare_clips(original, exported, a, b);
+    const bool animation = compare_clips(original, exported, a, b, false);
     return (radius == 0 || changed > 1) && (a->skin_deformers.count || (unmoved_coincident == 1 && seed_normal_angle > 80)) &&
         position_error <= 1e-7 && uv_error <= 1e-9 && animation;
 }
@@ -831,7 +866,7 @@ static bool compare_shared_skin(const ufbx_scene *original, const ufbx_scene *ex
                    "\"sameRawWeights\":%s,\"maxBaseDelta\":%.9g,\"maxBindMatrixDelta\":%.9g,\"sameCornerUv\":%s",
                    i ? "," : "", names[i], a->num_vertices, a->num_triangles, skin->max_weights_per_vertex,
                    topology ? "true" : "false", weights ? "true" : "false", base_delta, bind_delta, uv ? "true" : "false");
-            const bool animated = topology && compare_clips(original, exported, a, b);
+            const bool animated = topology && compare_clips(original, exported, a, b, false);
             const double tolerance = base_pose ? 1e-6 : 1e-9;
             compatible &= topology && weights && animated && base_delta <= tolerance && bind_delta <= tolerance && (!base_pose || uv);
             printf("}");
@@ -1157,7 +1192,7 @@ static bool e04_mesh_report(char **paths)
             "\"threeContours\":%s,\"weightedSplit\":%s,\"sharedSkinAfterSeparate\":%s",
             move_ok ? "true" : "false", undo_corners ? "true" : "false", split_ok ? "true" : "false", uv_gap, normal_gap,
             holes_ok ? "true" : "false", skin_ok ? "true" : "false", piece_ok ? "true" : "false");
-    const bool clip_ok = skin_ok && compare_clips(original, skinned, rig, s);
+    const bool clip_ok = skin_ok && compare_clips(original, skinned, rig, s, false);
     puts("}");
     ufbx_scene *scenes[] = { source, moved, split, undone, holes, original, skinned, pieces };
     for (size_t i = 0; i < sizeof(scenes) / sizeof(scenes[0]); i++) ufbx_free_scene(scenes[i]);
@@ -1221,7 +1256,7 @@ static bool e05_mesh_report(char **paths)
     }
     printf("{\"staticPatchPreservedBoundaryAndCorners\":%s,\"fanPreservedBoundaryAndCorners\":%s,\"newWeights\":[%.10g,%.10g]",
         planar ? "true" : "false", skinned ? "true" : "false", w0, w1);
-    const bool clip = skinned && compare_clips(rig, fan, c, d);
+    const bool clip = skinned && compare_clips(rig, fan, c, d, false);
     puts("}");
     ufbx_free_scene(source); ufbx_free_scene(repair); ufbx_free_scene(rig); ufbx_free_scene(fan);
     return planar && skinned && clip;
@@ -1305,8 +1340,9 @@ int main(int argc, char **argv)
     const bool weight = argc == 4 && (!strcmp(argv[3], "--weight-stroke") || !strcmp(argv[3], "--weight-wide"));
     const bool stitch = argc == 4 && strcmp(argv[3], "--uv-stitch") == 0;
     const bool points_only = argc == 4 && strcmp(argv[3], "--same-points") == 0;
-    if (argc != 3 && argc != 5 && !shared && !rig && !weight && !stitch && !check_clip_extrema && !points_only) {
-        fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx [--shared-skin | --selected-skin | --base-pose | --clip-extrema | --rig-moved | --rig-renamed | --rig-deleted | --weight-stroke | --weight-wide | --uv-stitch | control-point offset-y | --seams offset-y | --atlas source-corners.bin | --baked source-corners.bin | --smooth center | --grid center | --soft-move radius]\n");
+    const bool axes = argc == 4 && strcmp(argv[3], "--axes") == 0;
+    if (argc != 3 && argc != 5 && !shared && !rig && !weight && !stitch && !check_clip_extrema && !points_only && !axes) {
+        fprintf(stderr, "Usage: inspect_fbx original.fbx exported.fbx [--axes | --shared-skin | --selected-skin | --base-pose | --clip-extrema | --rig-moved | --rig-renamed | --rig-deleted | --weight-stroke | --weight-wide | --uv-stitch | control-point offset-y | --seams offset-y | --atlas source-corners.bin | --baked source-corners.bin | --smooth center | --grid center | --soft-move radius]\n");
         return 2;
     }
     const bool baked = argc == 5 && strcmp(argv[3], "--baked") == 0;
@@ -1327,8 +1363,9 @@ int main(int argc, char **argv)
             return 2;
         }
     }
-    ufbx_scene *original = load(argv[1], shared || rig ? 2 : 1);
-    ufbx_scene *exported = load(argv[2], (shared && !selected) || rig ? 2 : 1);
+    const ufbx_load_opts options = { .target_axes = ufbx_axes_right_handed_y_up, .evaluate_skinning = true };
+    ufbx_scene *original = load_with_options(argv[1], shared || rig ? 2 : 1, axes ? &options : NULL);
+    ufbx_scene *exported = load_with_options(argv[2], (shared && !selected) || rig ? 2 : 1, axes ? &options : NULL);
     if (weight) {
         const bool matches = compare_weight_edit(original, exported, !strcmp(argv[3], "--weight-wide"));
         ufbx_free_scene(exported);
@@ -1355,7 +1392,7 @@ int main(int argc, char **argv)
         }
         const bool weights_match = same_count && same_skin_weights(a, b);
         printf(",\"maxPointError\":%.9g,\"sameSourceSkinWeights\":%s", max_error, weights_match ? "true" : "false");
-        const bool animation = weights_match && compare_clips(original, exported, a, b);
+        const bool animation = weights_match && compare_clips(original, exported, a, b, false);
         puts("}");
         ufbx_free_scene(exported);
         ufbx_free_scene(original);
@@ -1398,6 +1435,7 @@ int main(int argc, char **argv)
     const bool topology = same_connectivity(a, b);
     const bool weights = same_skin_weights(a, b);
     bool edit_matches = !edited;
+    bool attributes_match = false;
     printf(",\"samePolygonConnectivity\":%s,\"sameSourceSkinWeights\":%s", topology ? "true" : "false", weights ? "true" : "false");
     if (topology) {
         double position = 0.0, uv = 0.0, normal = 0.0, position_error = 0.0, outside_delta = 0.0;
@@ -1435,6 +1473,7 @@ int main(int argc, char **argv)
         printf(",\"maxPositionDeltaByControlPoint\":%.9g,\"changedControlPoints\":%zu", position, changed);
         if (same_uv_sets && a->uv_sets.count) printf(",\"maxUvDeltaInCornerOrder\":%.9g", uv);
         if (has_normal) printf(",\"maxNormalAngleInCornerOrder\":%.9g", normal);
+        attributes_match = same_uv_sets && uv <= 1e-9 && a->vertex_normal.exists == b->vertex_normal.exists;
         if (edited) {
             edit_matches = corner_uses > 1 && changed == 1 && position_error <= 1e-9 && same_uv_sets && a->uv_sets.count && uv <= 1e-9;
             printf(",\"positionEdit\":{\"controlPoint\":%llu,\"offsetY\":%.9g,\"observedOffset\":[%.9g,%.9g,%.9g],"
@@ -1444,10 +1483,11 @@ int main(int argc, char **argv)
         }
     }
     if (edited && edit_matches) original->meshes.data[0]->vertices.data[control_point].y += offset_y;
-    const bool animation = topology && compare_clips(original, exported, a, b);
+    const bool animation = topology && compare_clips(original, exported, a, b, axes);
     const bool stitched_uv = !stitch || (topology && compare_stitched_uv(a, b));
+    const bool world = !axes || (topology && attributes_match && compare_world_axes(original, exported));
     puts("}");
     ufbx_free_scene(exported);
     ufbx_free_scene(original);
-    return topology && weights && edit_matches && animation && stitched_uv ? 0 : 1;
+    return topology && weights && edit_matches && animation && stitched_uv && world ? 0 : 1;
 }

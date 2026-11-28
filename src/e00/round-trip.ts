@@ -1,7 +1,7 @@
 import { FBXExporter } from '@comfyorg/fbx-exporter-three';
 import { ClampToEdgeWrapping, LoadingManager, Mesh, Texture, type Group } from 'three';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
-import { validateFbxAxes } from './fbx-profile';
+import { readFbxAxes, rotateFbxScene } from './fbx-profile';
 import { fbxFrameRate, sampleFbxAutoCurve } from './fbx-animation';
 import { offsetControlPointY, sourceMesh, useSourceTopology, type FbxSourceMesh } from './fbx-topology';
 import { sceneStats } from './scene-stats';
@@ -33,6 +33,7 @@ export interface ImportedAsset {
   name: string;
   scene: Group;
   unitScale: number;
+  sourceAxes: readonly string[];
   fps?: number;
   stats: ReturnType<typeof sceneStats>;
   deformation: ReturnType<typeof sourceDeformation>;
@@ -74,7 +75,7 @@ export async function importAsset(input: readonly File[], assignments?: TextureA
   if (paths.length !== 1) throw new Error('Select exactly one FBX with its PNG/JPEG maps, or a ZIP containing them.');
   const [modelPath] = paths;
   const bytes = files.get(modelPath)!;
-  validateFbxAxes(bytes, basename(modelPath));
+  const axes = readFbxAxes(bytes, basename(modelPath));
 
   const images = new Map([...files].filter(([path]) => imagePattern.test(path)));
   const imagePathsByUrl = new Map<string, string>();
@@ -85,6 +86,7 @@ export async function importAsset(input: readonly File[], assignments?: TextureA
   const checkTexture = textureImportBudget();
   const manager = Object.assign(new LoadingManager(), {
     assetFixerSampleCurve: sampleFbxAutoCurve,
+    assetFixerConvertAxes: !!axes.rotation,
     assetFixerEmbeddedImage(content: ArrayBuffer | string, name: string) {
       const data = typeof content === 'string' ? Uint8Array.from(atob(content), char => char.charCodeAt(0)) : new Uint8Array(content);
       checkTexture(data, name);
@@ -119,6 +121,7 @@ export async function importAsset(input: readonly File[], assignments?: TextureA
   let scene: Group | undefined;
   try {
     scene = new FBXLoader(manager).parse(bytes.byteLength === bytes.buffer.byteLength ? bytes.buffer : bytes.slice().buffer, '');
+    if (axes.rotation) rotateFbxScene(scene, axes.rotation);
     if (hasImages) await loaded;
     if (broken.size) throw new Error(`Unreadable textures: ${[...broken].join(', ')}`);
     if (unresolved.size) throw new TextureAssignmentError([...unresolved], [...images.keys()]);
@@ -131,7 +134,8 @@ export async function importAsset(input: readonly File[], assignments?: TextureA
     const deformation = sourceDeformation(scene);
     const alphaProfile = readAlphaProfile(files.get('manifest.json'), modelPath, scene);
     const fps = fbxFrameRate(scene.userData.assetFixerTimeMode, scene.userData.assetFixerCustomFrameRate);
-    return { format: 'fbx', name: basename(modelPath).slice(0, -4), scene, unitScale, fps, stats, deformation, images, imagePathsByUrl, alphaProfile };
+    return { format: 'fbx', name: basename(modelPath).slice(0, -4), scene, unitScale, sourceAxes: axes.source,
+      fps, stats, deformation, images, imagePathsByUrl, alphaProfile };
   } catch (error) {
     if (scene) disposeModel({ scene });
     throw error;
@@ -304,7 +308,8 @@ export async function exportAsset(asset: ImportedAsset, sourceEdits?: ReadonlyMa
   }
   files.set('manifest.json', new TextEncoder().encode(JSON.stringify({
     stage: transferMetadata?.some(map => map.projection) ? 'E08' : extract ? 'E07' : 'E00',
-    model, unitsInCentimeters: asset.unitScale, meshes: asset.stats, extract: extractMetadata, transfers: transferMetadata,
+    model, unitsInCentimeters: asset.unitScale, sourceAxes: asset.sourceAxes, meshes: asset.stats,
+    extract: extractMetadata, transfers: transferMetadata,
     skinInfluences: asset.deformation.pointsOverPreviewLimit > 0 ? {
       maxPerControlPoint: asset.deformation.maxSkinInfluences, pointsOverPreviewLimit: asset.deformation.pointsOverPreviewLimit, previewLimit: 4,
     } : undefined,
