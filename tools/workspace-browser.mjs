@@ -84,7 +84,7 @@ try {
   const project = await field('project-status').textContent();
   const digest = bytes => createHash('sha256').update(bytes).digest('hex');
   const displays = [];
-  for (const mode of ['textured', 'pbr', 'matcap-clay', 'matcap-graphite', 'matcap-metal', 'cartoon', 'sketch', 'hologram',
+  for (const mode of ['textured', 'pbr', 'matcap-clay', 'matcap-graphite', 'matcap-metal', 'cartoon', 'sketch',
     'unlit', 'solid', 'wire', 'edges', 'checker', 'normals']) {
     await choose('view-display', mode);
     await ready();

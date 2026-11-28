@@ -16,13 +16,13 @@ Workspace settings, display styles, helpers, comparison and isolation are previe
 
 ## Shader previews
 
-Use **Display** to switch between the regular material view, **PBR Studio**, **Cartoon**, **Sketch**, and **Hologram**. PBR Studio uses an offline studio lighting environment and reads the GLB material maps or the compatible Base Color, Normal, Roughness and Metallic maps supplied with an FBX. Cartoon keeps the base colors under banded shading. Sketch uses ink hatching, and Hologram highlights the silhouette with cyan scan lines. The presets apply to the viewport, including skinned poses and side-by-side comparison. The project's materials and export use the working asset data.
+Use **Display** to switch between the regular material view, **PBR Studio**, **Cartoon** and **Sketch**. PBR Studio uses an offline studio lighting environment and reads the GLB material maps or the compatible Base Color, Normal, Roughness and Metallic maps supplied with an FBX. Cartoon keeps the base colors under banded shading. Sketch uses ink hatching. The presets apply to the viewport, including skinned poses and side-by-side comparison. The project's materials and export use the working asset data.
 
-The browser check rendered 11 distinct static views in Chrome and Edge. Swapping the Tripo character's Roughness and Metallic images changed the PBR preview. A manual joint rotation changed the Cartoon preview of the shared-skeleton fixture. The Tripo plate export retained its original texture bytes while Hologram was active.
+Swapping the Tripo character's Roughness and Metallic images changed the PBR preview. A manual joint rotation changed the Cartoon preview of the shared-skeleton fixture.
 
 **MatCap Clay**, **MatCap Graphite** and **MatCap Metal** show the surface normals with camera-relative baked lighting. AssetFixer generates the three sphere textures locally. The preview reads material opacity and cutouts, and replaces the source surface colors. Scene exposure controls continue to apply to lighting-based views.
 
-The MatCap follow-up rendered 14 distinct views in Chrome and Edge. MatCap Clay produced the same frame at different exposure settings and showed the opposite side when the camera turned. Graphite retained the transparent silhouette of the GLB material fixture and followed a manual bone pose. The Tripo plate FBX retained its original texture bytes when exported in MatCap Metal.
+The workspace browser check rendered 13 distinct static views in Chrome and Edge. MatCap Clay produced the same frame at different exposure settings and showed the opposite side when the camera turned. Graphite retained the transparent silhouette of the GLB material fixture and followed a manual bone pose. The Tripo plate FBX retained its original texture bytes when exported in MatCap Metal.
 
 ## Verification
 

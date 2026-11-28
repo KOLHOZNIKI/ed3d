@@ -17,11 +17,6 @@ const shaderLooks = {
     ink = max(ink, 1.0 - smoothstep(0.05, 0.24, facing));
     outgoingLight = mix(vec3(0.79, 0.76, 0.65) * (1.0 - 0.20 * shade), vec3(0.022, 0.024, 0.032), ink);
   `,
-  hologram: /* glsl */ `
-    float line = pow(0.5 + 0.5 * cos(gl_FragCoord.y * 1.26), 4.0);
-    float rim = pow(1.0 - facing, 2.1);
-    outgoingLight = vec3(0.016, 0.13, 0.20) + (0.27 * line + 0.88 * rim) * vec3(0.12, 0.80, 1.0);
-  `,
 };
 
 export type ShaderLook = keyof typeof shaderLooks;
