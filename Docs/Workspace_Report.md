@@ -14,6 +14,12 @@ The workspace addresses the screen organization, panel controls and model inspec
 
 Workspace settings, display styles, helpers, comparison and isolation are preview data. An exported FBX or GLB uses the working document and the selected export scope.
 
+## Shader previews
+
+Use **Display** to switch between the regular material view, **PBR Studio**, **Cartoon**, **Sketch**, and **Hologram**. PBR Studio uses an offline studio lighting environment and reads the GLB material maps or the compatible Base Color, Normal, Roughness and Metallic maps supplied with an FBX. Cartoon keeps the base colors under banded shading. Sketch uses ink hatching, and Hologram highlights the silhouette with cyan scan lines. The presets apply to the viewport, including skinned poses and side-by-side comparison. The project's materials and export use the working asset data.
+
+The browser check rendered 11 distinct static views in Chrome and Edge. Swapping the Tripo character's Roughness and Metallic images changed the PBR preview. A manual joint rotation changed the Cartoon preview of the shared-skeleton fixture. The Tripo plate export retained its original texture bytes while Hologram was active.
+
 ## Verification
 
 The desktop browser check used Chrome 158.0.8127.37 and Edge 158.0.4370.45 at 1920 × 1080. The 3D drawing buffer measured 1160 × 870 at DPR 1 in the default layout. The Tripo plate exercised all seven static display modes, lighting and guide settings, isolation and paired comparison. The shared-skeleton fixture exercised the bone tree and weight heatmap. A compact 920-pixel-wide viewport had no horizontal page overflow.

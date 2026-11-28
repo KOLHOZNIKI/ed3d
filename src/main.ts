@@ -145,7 +145,8 @@ interface Workspace {
 }
 
 let current: Workspace | undefined;
-let comparison: { model: Model; adapter?: ModelAdapter; appearance?: Appearance; snapshot?: PinnedSnapshot } | undefined;
+let comparison: { model: Model; adapter: ModelAdapter; textures: TextureCatalog; state: WorkingState;
+  appearance: Appearance; snapshot?: PinnedSnapshot } | undefined;
 let displayMode: DisplayMode = 'textured';
 let selected = '';
 let selectedIds = new Set<string>();
@@ -214,6 +215,7 @@ const editor = new TextureEditor({
   },
   unlit(value) {
     unlit = value;
+    viewer.previewUnlit(value);
     void refreshAppearance();
   },
 });
@@ -738,7 +740,7 @@ async function refreshAppearance() {
   const ticket = ++lookId;
   const revision = work.document.revision;
   try {
-    const appearance = await prepareAppearance(work.model, work.textures, work.document.state, undefined, unlit);
+    const appearance = await prepareAppearance(work.model, work.textures, work.document.state, undefined, unlit, displayMode);
     if (current !== work || work.document.revision !== revision || ticket !== lookId) disposeAppearance(appearance);
     else {
       viewer.replaceAppearance(appearance);
@@ -764,7 +766,7 @@ function previewTextureStroke(target?: TextureTarget, canvas?: HTMLCanvasElement
   }
   liveTarget = target;
   const ticket = ++liveId;
-  void prepareAppearance(work.model, work.textures, work.document.state, { target, canvas }, unlit).then(appearance => {
+  void prepareAppearance(work.model, work.textures, work.document.state, { target, canvas }, unlit, displayMode).then(appearance => {
     if (current !== work || ticket !== liveId) disposeAppearance(appearance);
     else { viewer.setLive(appearance); viewer.updateLive(); }
   }).catch(error => { if (ticket === liveId) status.textContent = errorMessage(error); });
@@ -925,7 +927,8 @@ async function makeWorkspace(model: Model, data?: ProjectData, originals = data?
     if (working.format === 'fbx' && !working.textureBake?.generated && working.textureBake?.maps.some(map => !working.images.has(map.source))) {
       throw new Error('A saved baked map refers to an unknown source image.');
     }
-    return { workspace: { adapter, document, model: working, textures }, appearance: await prepareAppearance(working, textures, document.state) };
+    return { workspace: { adapter, document, model: working, textures },
+      appearance: await prepareAppearance(working, textures, document.state, undefined, false, displayMode) };
   } catch (error) {
     adapter?.dispose();
     disposeModel(model);
@@ -1244,7 +1247,7 @@ async function applyWorking(work: Workspace, revision: number, state: WorkingSta
     const model = work.adapter.materialize(state);
     const textures = piecesBefore === work.adapter.mesh.pieces.map(piece => piece.id).join(',') ? work.textures : new TextureCatalog(work.adapter);
     textures.validate(state);
-    if (visualChange) appearance = await prepareAppearance(model, textures, state, undefined, unlit);
+    if (visualChange) appearance = await prepareAppearance(model, textures, state, undefined, unlit, displayMode);
     signal?.throwIfAborted();
     if (current !== work) throw new Error('The active project changed during the operation.');
     work.document.assertRevision(revision);
@@ -1440,13 +1443,35 @@ viewDirection.addEventListener('change', () => frame());
 frameAll.addEventListener('click', () => frame());
 frameSelection.addEventListener('click', () => frame(true));
 viewDisplay.addEventListener('change', () => {
-  if (viewDisplay.value === 'weights') openWeights();
-  else {
+  if (viewDisplay.value === 'weights') { openWeights(); return; }
+  const mode = viewDisplay.value as DisplayMode, work = current;
+  const activate = () => {
     weighting = false;
-    displayMode = viewDisplay.value as DisplayMode;
+    displayMode = mode;
     viewer.setDisplay(displayMode);
     controls();
-  }
+  };
+  if (work?.model.format !== 'fbx' || (mode === 'pbr') === (displayMode === 'pbr')) { activate(); return; }
+  void locked(async () => {
+    const appearance = await prepareAppearance(work.model, work.textures, work.document.state, undefined, unlit, mode);
+    const reference = comparison;
+    let referenceLook: Appearance | undefined;
+    try {
+      if (reference) referenceLook = await prepareAppearance(reference.model, reference.textures, reference.state, undefined, false, mode);
+    } catch (error) {
+      disposeAppearance(appearance);
+      throw error;
+    }
+    lookId++;
+    viewer.replaceAppearance(appearance);
+    if (reference && referenceLook) {
+      disposeAppearance(reference.appearance);
+      reference.appearance = referenceLook;
+      viewer.compare(viewCompare.value as CompareMode, { root: reference.model.scene, appearance: referenceLook });
+    }
+    activate();
+    status.textContent = modelStatus(work.model);
+  }, 'Preparing local viewport materials…');
 });
 for (const setting of [viewGrid, viewAxes, viewBounds]) setting.addEventListener('change', () =>
   viewer.setGuides(viewGrid.checked, viewAxes.checked, viewBounds.checked));
@@ -1458,8 +1483,8 @@ function releaseComparison() {
   viewer.compare('working');
   element('view-compare-labels').hidden = true;
   if (!comparison) return;
-  if (comparison.appearance) disposeAppearance(comparison.appearance);
-  comparison.adapter?.dispose();
+  disposeAppearance(comparison.appearance);
+  comparison.adapter.dispose();
   disposeModel(comparison.model);
   comparison = undefined;
 }
@@ -1477,10 +1502,27 @@ function showComparison() {
       const copy = snapshot && await makeWorkspace(model, { id: work.document.id, name: work.document.name, scene: work.document.scene,
         historyBudget: work.document.historyBudget, originals: work.document.originals, textureAssignments: work.document.textureAssignments,
         revision: snapshot.revision, state: snapshot.state });
-      if (copy) copy.workspace.adapter.applyVisibility(snapshot.state);
+      let reference: typeof comparison;
+      if (copy) {
+        const { workspace, appearance } = copy;
+        workspace.adapter.applyVisibility(snapshot.state);
+        reference = { model: workspace.model, adapter: workspace.adapter, textures: workspace.textures,
+          state: snapshot.state, appearance, snapshot };
+      } else {
+        let adapter: ModelAdapter | undefined;
+        try {
+          adapter = new ModelAdapter(model);
+          const textures = new TextureCatalog(adapter), state = { objects: {} };
+          const appearance = await prepareAppearance(model, textures, state, undefined, false, displayMode);
+          reference = { model, adapter, textures, state, appearance };
+        } catch (error) {
+          adapter?.dispose();
+          disposeModel(model);
+          throw error;
+        }
+      }
       releaseComparison();
-      comparison = { model: copy ? copy.workspace.model : model, adapter: copy ? copy.workspace.adapter : undefined,
-        appearance: copy ? copy.appearance : undefined, snapshot };
+      comparison = reference;
     }
     viewer.compare(mode, { root: comparison.model.scene, appearance: comparison.appearance });
     element('view-reference-label').textContent = snapshot ? `Snapshot · revision ${snapshot.revision}` : 'Original';

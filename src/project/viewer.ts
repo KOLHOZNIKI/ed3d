@@ -1,14 +1,17 @@
 import { AmbientLight, AnimationMixer, AxesHelper, Box3, Box3Helper, DataTexture, DirectionalLight, GridHelper, MOUSE, Mesh, MeshBasicMaterial,
-  MeshLambertMaterial, MeshNormalMaterial, MeshPhongMaterial, MeshStandardMaterial, OrthographicCamera, PerspectiveCamera, Raycaster,
+  MeshLambertMaterial, MeshNormalMaterial, MeshPhongMaterial, MeshStandardMaterial, NeutralToneMapping, OrthographicCamera, PerspectiveCamera, PMREMGenerator, Raycaster,
   RepeatWrapping, Scene, SkinnedMesh, SRGBColorSpace, Texture, Vector2, Vector3, WebGLRenderer,
-  type AnimationClip, type BufferGeometry, type Material, type Object3D } from 'three';
+  type AnimationClip, type BufferGeometry, type Material, type Object3D, type WebGLRenderTarget } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import type { Model } from './adapter';
+import { pbrMaterial, shaderLook, type ShaderLook } from './display-material';
 import { applyViews, disposeAppearance, emptyAppearance, sourceAppearance, unlitColor, type Appearance } from '../texture/appearance';
 import { sourceImage, type TextureCatalog, type TextureTarget } from '../texture/bindings';
+import { addFbxPbrMaps } from '../texture/preview-pbr';
 import { atlasColor, type WorkingState } from './state';
 
-export type DisplayMode = 'textured' | 'unlit' | 'solid' | 'wire' | 'edges' | 'checker' | 'normals';
+export type DisplayMode = 'textured' | 'pbr' | 'unlit' | 'solid' | 'wire' | 'edges' | 'checker' | 'normals' | ShaderLook;
 export type CompareMode = 'working' | 'reference' | 'split';
 type ReferenceView = { root: Object3D; appearance?: Appearance };
 
@@ -57,6 +60,7 @@ export class Viewer {
   #bounds = new Box3Helper(new Box3(), 0x708fa2);
   #ambient = new AmbientLight(0xffffff, 1.5);
   #keyLight = new DirectionalLight(0xffffff, 2);
+  #studio?: WebGLRenderTarget;
   #display: DisplayMode = 'textured';
   #materials = {
     solid: new MeshStandardMaterial({ color: 0x9badbf, roughness: .76 }),
@@ -72,7 +76,7 @@ export class Viewer {
   #mixers = new WeakMap<AnimationClip, AnimationMixer>();
   #manualPose?: () => () => void;
   #previewUnlit = false;
-  #unlitMaterials = new Map<Material, MeshBasicMaterial>();
+  #displayMaterials = new Map<string, Material>();
   onPoseRender?: () => void;
   #cameraListeners = new Set<() => void>();
   #contextLost = false;
@@ -94,6 +98,8 @@ export class Viewer {
     canvas.addEventListener('webglcontextlost', event => {
       event.preventDefault();
       this.#contextLost = true;
+      this.#studio?.dispose();
+      this.#studio = undefined;
       onContext(true);
     });
     canvas.addEventListener('webglcontextrestored', () => {
@@ -165,7 +171,7 @@ export class Viewer {
         this.#referenceScene.add(reference.root);
         this.#referenceBounds.box.setFromObject(reference.root);
       }
-      this.#clearUnlitMaterials();
+      this.#clearDisplayMaterials();
       this.#renderer?.renderLists.dispose();
     }
     const container = this.#canvas.parentElement!;
@@ -229,7 +235,9 @@ export class Viewer {
     this.#mixers = new WeakMap();
     this.#manualPose = undefined;
     this.#previewUnlit = false;
-    this.#clearUnlitMaterials();
+    this.#clearDisplayMaterials();
+    this.#studio?.dispose();
+    this.#studio = undefined;
     this.onPoseRender = undefined;
     if (this.#appearance) disposeAppearance(this.#appearance);
     this.#appearance = undefined;
@@ -242,14 +250,14 @@ export class Viewer {
 
   replaceAppearance(appearance?: Appearance) {
     if (this.#appearance) disposeAppearance(this.#appearance);
-    this.#clearUnlitMaterials();
+    this.#clearDisplayMaterials();
     this.#appearance = appearance;
   }
 
   setLive(appearance?: Appearance) {
     if (this.#live) {
       disposeAppearance(this.#live);
-      this.#clearUnlitMaterials();
+      this.#clearDisplayMaterials();
     }
     this.#live = appearance;
   }
@@ -393,6 +401,11 @@ export class Viewer {
   render() {
     if (!this.#renderer || !this.#camera || this.#contextLost) return;
     const renderer = this.#renderer;
+    if (!this.#studio && this.#display === 'pbr' && (!this.#previewUnlit || this.comparing)) {
+      const generator = new PMREMGenerator(renderer), room = new RoomEnvironment();
+      try { this.#studio = generator.fromScene(room, .055, .1, 100, { size: 128 }); }
+      finally { room.dispose(); generator.dispose(); }
+    }
     const restore = applyViews((this.#live ?? this.#appearance)?.views ?? []);
     const display = this.#previewUnlit ? 'unlit' : this.#display;
     const clearDisplay = this.#applyDisplay(this.#model, display);
@@ -456,7 +469,14 @@ export class Viewer {
 
   #draw(scene: Scene, model: Object3D | undefined, display: DisplayMode) {
     const renderer = this.#renderer!, camera = this.#camera!;
-    renderer.render(scene, camera);
+    if (display === 'pbr' && this.#studio) {
+      const { toneMapping } = renderer, { environment, environmentIntensity } = scene;
+      renderer.toneMapping = NeutralToneMapping;
+      scene.environment = this.#studio.texture;
+      scene.environmentIntensity = this.#keyLight.intensity * .35;
+      try { renderer.render(scene, camera); }
+      finally { renderer.toneMapping = toneMapping; scene.environment = environment; scene.environmentIntensity = environmentIntensity; }
+    } else renderer.render(scene, camera);
     if (display !== 'edges' || !model) return;
     const previous = renderer.autoClear;
     const clear = this.#applyDisplay(model, display, true);
@@ -469,16 +489,16 @@ export class Viewer {
     }
   }
 
-  #clearUnlitMaterials() {
-    for (const material of this.#unlitMaterials.values()) material.dispose();
-    this.#unlitMaterials.clear();
+  #clearDisplayMaterials() {
+    for (const material of this.#displayMaterials.values()) material.dispose();
+    this.#displayMaterials.clear();
   }
 
   #applyDisplay(root: Object3D | undefined, mode: DisplayMode, overlay = false) {
     if (mode === 'textured' || mode === 'edges' && !overlay) return;
     const views: { mesh: Mesh; material: Material | Material[] }[] = [];
     const materialFor = (material: Material) => {
-      if (mode !== 'unlit') {
+      if (mode === 'solid' || mode === 'normals' || mode === 'checker' || mode === 'wire' || mode === 'edges') {
         const base = this.#materials[mode];
         if (base.side === material.side) return base;
         const id = `${mode}/${material.side}`;
@@ -490,12 +510,18 @@ export class Viewer {
         }
         return sided;
       }
-      let result = this.#unlitMaterials.get(material);
+      if (mode === 'pbr' && material instanceof MeshStandardMaterial) return material;
+      const id = `${mode}/${material.id}`;
+      let result = this.#displayMaterials.get(id);
       if (!result) {
-        const source = material as Material & { color?: MeshBasicMaterial['color']; map?: Texture | null };
-        result = unlitColor(material, source.map ?? null);
-        if (source.color) result.color.copy(source.color);
-        this.#unlitMaterials.set(material, result);
+        if (mode === 'unlit') {
+          const source = material as Material & { color?: MeshBasicMaterial['color']; map?: Texture | null };
+          const basic = unlitColor(material, source.map ?? null);
+          if (source.color) basic.color.copy(source.color);
+          result = basic;
+        } else if (mode === 'pbr') result = pbrMaterial(material);
+        else result = shaderLook(material, mode);
+        this.#displayMaterials.set(id, result);
       }
       return result;
     };
@@ -512,7 +538,19 @@ function shown(object: Object3D): boolean {
 }
 
 export async function prepareAppearance(model: Model, catalog: TextureCatalog, state: WorkingState,
-  live?: { target: TextureTarget; canvas: HTMLCanvasElement }, unlit = false): Promise<Appearance> {
+  live?: { target: TextureTarget; canvas: HTMLCanvasElement }, unlit = false, display: DisplayMode = 'textured'): Promise<Appearance> {
+  const appearance = await prepareSurface(model, catalog, state, live, unlit);
+  try {
+    if (model.format === 'fbx' && display === 'pbr' && !unlit) await addFbxPbrMaps(appearance, catalog, state, live);
+    return appearance;
+  } catch (error) {
+    disposeAppearance(appearance);
+    throw error;
+  }
+}
+
+async function prepareSurface(model: Model, catalog: TextureCatalog, state: WorkingState,
+  live: { target: TextureTarget; canvas: HTMLCanvasElement } | undefined, unlit: boolean): Promise<Appearance> {
   if (model.format !== 'fbx' || !model.uvAtlas || !model.textureBake) return sourceAppearance(catalog, state, 'preview', live, unlit).appearance;
   const mesh = model.scene.getObjectByProperty('isMesh', true);
   const source = mesh instanceof Mesh ? mesh.material : undefined;

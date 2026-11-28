@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { strFromU8, unzipSync } from 'fflate';
+import { strFromU8, unzipSync, zipSync } from 'fflate';
 import { preview } from 'vite';
 
 const [executablePath, outputName = 'chrome'] = process.argv.slice(2);
@@ -11,7 +11,9 @@ const output = resolve('test-results/workspace', outputName);
 await mkdir(output, { recursive: true });
 const app = await preview({ preview: { host: '127.0.0.1', port: 4300 } });
 const url = `http://127.0.0.1:${app.httpServer.address().port}/`;
-const plate = 'D:/downloads/Tripo/ceramic plate 3d model.zip';
+const tripo = 'D:/downloads/Tripo';
+const plate = join(tripo, 'ceramic plate 3d model.zip');
+const character = join(tripo, 'tripo_convert_8b04a473-804b-41a0-ab47-e84ae233629b.zip');
 const skin = resolve('tools/e00/fixtures/shared_skin.fbx');
 let browser;
 try {
@@ -24,6 +26,7 @@ try {
   });
   const page = await context.newPage();
   page.on('pageerror', error => errors.push(error.message));
+  page.on('console', entry => { if (entry.type() === 'error' && /Shader|WebGL/i.test(entry.text())) errors.push(entry.text()); });
   page.on('dialog', dialog => dialog.accept());
   await page.goto(url);
   const field = id => page.locator(`#${id}`);
@@ -80,8 +83,10 @@ try {
   const project = await field('project-status').textContent();
   const digest = bytes => createHash('sha256').update(bytes).digest('hex');
   const displays = [];
-  for (const mode of ['textured', 'unlit', 'solid', 'wire', 'edges', 'checker', 'normals']) {
+  for (const mode of ['textured', 'pbr', 'cartoon', 'sketch', 'hologram', 'unlit', 'solid', 'wire', 'edges', 'checker', 'normals']) {
     await choose('view-display', mode);
+    await ready();
+    assert.equal(await field('view-display').inputValue(), mode);
     displays.push(digest(await viewport.screenshot()));
   }
   assert.equal(new Set(displays).size, displays.length, 'Each display mode should render a different image.');
@@ -110,7 +115,7 @@ try {
   await ready();
   assert.match(await field('project-status').textContent(), /Revision 2/i);
   await viewport.screenshot({ path: join(output, 'compare.png') });
-  await choose('view-display', 'wire');
+  await choose('view-display', 'hologram');
   const [exported] = await Promise.all([page.waitForEvent('download'), click('export')]);
   const exportPath = join(output, 'plate.zip');
   await exported.saveAs(exportPath);
@@ -148,10 +153,34 @@ try {
   assert.equal(await reopened.locator('#workspace').getAttribute('data-layout'), 'uv-only');
   await reopened.close();
 
+  await open(page, character);
+  await choose('workspace-layout', 'model');
+  await choose('view-display', 'pbr');
+  await ready();
+  const beforeMaps = digest(await viewport.screenshot());
+  const pack = unzipSync(await readFile(character));
+  const roughness = Object.keys(pack).find(path => path.endsWith('_roughness.jpg'));
+  const metallic = Object.keys(pack).find(path => path.endsWith('_metallic.jpg'));
+  assert.ok(roughness && metallic);
+  [pack[roughness], pack[metallic]] = [pack[metallic], pack[roughness]];
+  await open(page, { name: 'swapped-maps.zip', mimeType: 'application/zip', buffer: Buffer.from(zipSync(pack)) });
+  assert.match(await field('status').textContent(), /17[\s,]?623 triangles/);
+  assert.equal(await field('view-display').inputValue(), 'pbr');
+  assert.notEqual(digest(await viewport.screenshot()), beforeMaps);
+
   await open(page, skin);
+  await choose('workspace-layout', 'model');
+  await choose('view-display', 'cartoon');
+  const restLook = digest(await viewport.screenshot());
   await details('scene-bones');
   await field('scene-bone-list').locator('button').first().click();
   assert.equal(await field('rig-mode').getAttribute('aria-pressed'), 'true');
+  await choose('rig-edit-mode', 'pose');
+  await field('rig-z').fill('24');
+  await click('rig-apply');
+  await ready();
+  assert.match(await field('status').textContent(), /Rotate manual pose joint applied/);
+  assert.notEqual(digest(await viewport.screenshot()), restLook);
   await choose('view-display', 'weights');
   assert.equal(await field('weights-mode').getAttribute('aria-pressed'), 'true');
 
@@ -180,7 +209,7 @@ try {
   assert.deepEqual(external, []);
   const report = { browser: browser.version(), viewportPixels: pixels, uniqueDisplays: displays.length, guides: true,
     comparison: true, preservedExportTextures: true, resizablePanels: true, restoredLayout: 'uv-only', shortcutSave: true, meshSelection: true,
-    compactOverflow: overflow, statusHeight, stableViewportOnSelection: true, local: true };
+    compactOverflow: overflow, statusHeight, stableViewportOnSelection: true, pbrCompanionMaps: true, stylizedSkinPose: true, local: true };
   await writeFile(join(output, 'browser.json'), JSON.stringify(report, null, 2) + '\n');
   console.log(JSON.stringify(report));
 } finally {

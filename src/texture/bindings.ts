@@ -243,7 +243,7 @@ export function sourceImage(image: TextureImage): HTMLCanvasElement {
   return canvas;
 }
 
-export function mappedTexture(texture: Texture, image: HTMLCanvasElement): Texture {
+export function mappedTexture(texture: Texture, image: HTMLCanvasElement | HTMLImageElement): Texture {
   const mapped = texture.clone();
   mapped.source = new Source(image);
   mapped.needsUpdate = true;
