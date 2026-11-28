@@ -20,6 +20,10 @@ Use **Display** to switch between the regular material view, **PBR Studio**, **C
 
 The browser check rendered 11 distinct static views in Chrome and Edge. Swapping the Tripo character's Roughness and Metallic images changed the PBR preview. A manual joint rotation changed the Cartoon preview of the shared-skeleton fixture. The Tripo plate export retained its original texture bytes while Hologram was active.
 
+**MatCap Clay**, **MatCap Graphite** and **MatCap Metal** show the surface normals with camera-relative baked lighting. AssetFixer generates the three sphere textures locally. The preview reads material opacity and cutouts, and replaces the source surface colors. Scene exposure controls continue to apply to lighting-based views.
+
+The MatCap follow-up rendered 14 distinct views in Chrome and Edge. MatCap Clay produced the same frame at different exposure settings and showed the opposite side when the camera turned. Graphite retained the transparent silhouette of the GLB material fixture and followed a manual bone pose. The Tripo plate FBX retained its original texture bytes when exported in MatCap Metal.
+
 ## Verification
 
 The desktop browser check used Chrome 158.0.8127.37 and Edge 158.0.4370.45 at 1920 × 1080. The 3D drawing buffer measured 1160 × 870 at DPR 1 in the default layout. The Tripo plate exercised all seven static display modes, lighting and guide settings, isolation and paired comparison. The shared-skeleton fixture exercised the bone tree and weight heatmap. A compact 920-pixel-wide viewport had no horizontal page overflow.

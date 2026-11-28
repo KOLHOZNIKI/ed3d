@@ -5,13 +5,13 @@ import { AmbientLight, AnimationMixer, AxesHelper, Box3, Box3Helper, DataTexture
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import type { Model } from './adapter';
-import { pbrMaterial, shaderLook, type ShaderLook } from './display-material';
+import { isMatcapLook, matcapMaterial, matcapTexture, pbrMaterial, shaderLook, type MatcapLook, type ShaderLook } from './display-material';
 import { applyViews, disposeAppearance, emptyAppearance, sourceAppearance, unlitColor, type Appearance } from '../texture/appearance';
 import { sourceImage, type TextureCatalog, type TextureTarget } from '../texture/bindings';
 import { addFbxPbrMaps } from '../texture/preview-pbr';
 import { atlasColor, type WorkingState } from './state';
 
-export type DisplayMode = 'textured' | 'pbr' | 'unlit' | 'solid' | 'wire' | 'edges' | 'checker' | 'normals' | ShaderLook;
+export type DisplayMode = 'textured' | 'pbr' | 'unlit' | 'solid' | 'wire' | 'edges' | 'checker' | 'normals' | ShaderLook | MatcapLook;
 export type CompareMode = 'working' | 'reference' | 'split';
 type ReferenceView = { root: Object3D; appearance?: Appearance };
 
@@ -77,6 +77,7 @@ export class Viewer {
   #manualPose?: () => () => void;
   #previewUnlit = false;
   #displayMaterials = new Map<string, Material>();
+  #matcaps = new Map<MatcapLook, Texture>();
   onPoseRender?: () => void;
   #cameraListeners = new Set<() => void>();
   #contextLost = false;
@@ -236,6 +237,8 @@ export class Viewer {
     this.#manualPose = undefined;
     this.#previewUnlit = false;
     this.#clearDisplayMaterials();
+    for (const texture of this.#matcaps.values()) texture.dispose();
+    this.#matcaps.clear();
     this.#studio?.dispose();
     this.#studio = undefined;
     this.onPoseRender = undefined;
@@ -520,7 +523,14 @@ export class Viewer {
           if (source.color) basic.color.copy(source.color);
           result = basic;
         } else if (mode === 'pbr') result = pbrMaterial(material);
-        else result = shaderLook(material, mode);
+        else if (isMatcapLook(mode)) {
+          let capture = this.#matcaps.get(mode);
+          if (!capture) {
+            capture = matcapTexture(mode);
+            this.#matcaps.set(mode, capture);
+          }
+          result = matcapMaterial(material, capture);
+        } else result = shaderLook(material, mode);
         this.#displayMaterials.set(id, result);
       }
       return result;

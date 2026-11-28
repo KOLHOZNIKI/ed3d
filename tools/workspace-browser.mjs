@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { decode } from 'fast-png';
 import { strFromU8, unzipSync, zipSync } from 'fflate';
 import { preview } from 'vite';
 
@@ -83,15 +84,24 @@ try {
   const project = await field('project-status').textContent();
   const digest = bytes => createHash('sha256').update(bytes).digest('hex');
   const displays = [];
-  for (const mode of ['textured', 'pbr', 'cartoon', 'sketch', 'hologram', 'unlit', 'solid', 'wire', 'edges', 'checker', 'normals']) {
+  for (const mode of ['textured', 'pbr', 'matcap-clay', 'matcap-graphite', 'matcap-metal', 'cartoon', 'sketch', 'hologram',
+    'unlit', 'solid', 'wire', 'edges', 'checker', 'normals']) {
     await choose('view-display', mode);
     await ready();
     assert.equal(await field('view-display').inputValue(), mode);
     displays.push(digest(await viewport.screenshot()));
   }
   assert.equal(new Set(displays).size, displays.length, 'Each display mode should render a different image.');
-  await choose('view-display', 'textured');
   await details('view-options');
+  await choose('view-display', 'matcap-clay');
+  const bakedLight = digest(await viewport.screenshot());
+  await field('view-exposure').fill('-1');
+  assert.equal(digest(await viewport.screenshot()), bakedLight);
+  await field('view-exposure').fill('0');
+  await choose('view-direction', 'Right');
+  assert.notEqual(digest(await viewport.screenshot()), bakedLight);
+  await choose('view-direction', 'Oblique');
+  await choose('view-display', 'textured');
   await field('view-grid').uncheck();
   const noGrid = digest(await viewport.screenshot());
   await field('view-grid').check();
@@ -115,7 +125,7 @@ try {
   await ready();
   assert.match(await field('project-status').textContent(), /Revision 2/i);
   await viewport.screenshot({ path: join(output, 'compare.png') });
-  await choose('view-display', 'hologram');
+  await choose('view-display', 'matcap-metal');
   const [exported] = await Promise.all([page.waitForEvent('download'), click('export')]);
   const exportPath = join(output, 'plate.zip');
   await exported.saveAs(exportPath);
@@ -181,8 +191,33 @@ try {
   await ready();
   assert.match(await field('status').textContent(), /Rotate manual pose joint applied/);
   assert.notEqual(digest(await viewport.screenshot()), restLook);
+  await choose('view-display', 'matcap-graphite');
+  const posedMatcap = digest(await viewport.screenshot());
+  await click('rig-reset-pose');
+  await ready();
+  assert.notEqual(digest(await viewport.screenshot()), posedMatcap);
   await choose('view-display', 'weights');
   assert.equal(await field('weights-mode').getAttribute('aria-pressed'), 'true');
+
+  await open(page, resolve('tools/e00/fixtures/corpus/f08_material_bindings.glb'));
+  await choose('projection', 'Orthographic');
+  await choose('view-direction', 'Front');
+  for (const id of ['view-grid', 'view-axes', 'view-bounds']) await field(id).uncheck();
+  const silhouette = async mode => {
+    await choose('view-display', mode);
+    const { data, channels, width, height } = decode(await viewport.screenshot());
+    const mask = new Uint8Array(width * height);
+    for (let i = 0; i < mask.length; i++) {
+      const offset = i * channels;
+      mask[i] = +([0, 1, 2].some(channel => data[offset + channel] !== data[channel]));
+    }
+    return mask;
+  };
+  const textured = await silhouette('textured'), captured = await silhouette('matcap-graphite');
+  assert.equal(textured.length, captured.length);
+  const visible = textured.reduce((count, value) => count + value, 0);
+  assert.ok(visible > 10_000);
+  assert.ok(textured.reduce((count, value, i) => count + +(value !== captured[i]), 0) < visible * .01);
 
   await open(page, resolve('tools/e00/fixtures/corpus/f03_boundaries.glb'));
   await field('scene-hierarchy').locator('button').first().click();
@@ -209,7 +244,8 @@ try {
   assert.deepEqual(external, []);
   const report = { browser: browser.version(), viewportPixels: pixels, uniqueDisplays: displays.length, guides: true,
     comparison: true, preservedExportTextures: true, resizablePanels: true, restoredLayout: 'uv-only', shortcutSave: true, meshSelection: true,
-    compactOverflow: overflow, statusHeight, stableViewportOnSelection: true, pbrCompanionMaps: true, stylizedSkinPose: true, local: true };
+    compactOverflow: overflow, statusHeight, stableViewportOnSelection: true, pbrCompanionMaps: true, stylizedSkinPose: true,
+    matcapLighting: true, matcapOpacity: true, matcapSkinPose: true, local: true };
   await writeFile(join(output, 'browser.json'), JSON.stringify(report, null, 2) + '\n');
   console.log(JSON.stringify(report));
 } finally {

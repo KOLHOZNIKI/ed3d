@@ -1,4 +1,5 @@
-import { MeshPhongMaterial, MeshStandardMaterial, type Material } from 'three';
+import { Color, DataTexture, LinearFilter, MeshMatcapMaterial, MeshPhongMaterial, MeshStandardMaterial, SRGBColorSpace, Vector3,
+  type Material, type Texture } from 'three';
 
 const shaderLooks = {
   cartoon: /* glsl */ `
@@ -25,7 +26,46 @@ const shaderLooks = {
 
 export type ShaderLook = keyof typeof shaderLooks;
 
-function copySurface(material: MeshPhongMaterial | MeshStandardMaterial, source: Material) {
+const matcapPresets = {
+  'matcap-clay': { color: 0xe6a18a, ambient: .23, key: .85, fill: .19, specular: .095, gloss: 14, rim: .045 },
+  'matcap-graphite': { color: 0x7d96ad, ambient: .24, key: .75, fill: .32, specular: .16, gloss: 25, rim: .11 },
+  'matcap-metal': { color: 0xa5b8ce, ambient: .19, key: .49, fill: .27, specular: .72, gloss: 52, rim: .24 },
+};
+
+export type MatcapLook = keyof typeof matcapPresets;
+export const isMatcapLook = (mode: string): mode is MatcapLook => Object.hasOwn(matcapPresets, mode);
+
+export function matcapTexture(look: MatcapLook) {
+  const { color, ambient, key, fill, specular, gloss, rim } = matcapPresets[look];
+  const size = 128, pixels = new Uint8Array(size * size * 4);
+  const base = new Color(color), value = new Color(), rgb = { r: 0, g: 0, b: 0 };
+  const normal = new Vector3(), keyLight = new Vector3(-.62, .74, .48).normalize(), fillLight = new Vector3(.76, -.34, .33).normalize();
+  const view = new Vector3(0, 0, 1), keyHalf = keyLight.clone().add(view).normalize(), fillHalf = fillLight.clone().add(view).normalize();
+  const byte = (component: number) => Math.round(255 * Math.min(1, component));
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    const nx = (x + .5) / size * 2 - 1, ny = (y + .5) / size * 2 - 1;
+    // Extend the rim outside the sphere so bilinear filtering can sample the whole disk.
+    const z = Math.sqrt(Math.max(0, 1 - nx * nx - ny * ny));
+    normal.set(nx, ny, z).normalize();
+    const light = ambient + key * Math.max(0, normal.dot(keyLight)) + fill * Math.max(0, normal.dot(fillLight));
+    const highlights = specular * (Math.max(0, normal.dot(keyHalf)) ** gloss + .28 * Math.max(0, normal.dot(fillHalf)) ** (gloss * .6));
+    const edge = rim * (1 - z) ** 3 * Math.max(0, normal.dot(fillLight));
+    value.setRGB(base.r * light + .95 * highlights + .62 * edge, base.g * light + highlights + .8 * edge, base.b * light + highlights + edge);
+    value.getRGB(rgb, SRGBColorSpace);
+    const offset = (y * size + x) * 4;
+    pixels[offset] = byte(rgb.r);
+    pixels[offset + 1] = byte(rgb.g);
+    pixels[offset + 2] = byte(rgb.b);
+    pixels[offset + 3] = 255;
+  }
+  const texture = new DataTexture(pixels, size, size);
+  texture.colorSpace = SRGBColorSpace;
+  texture.minFilter = texture.magFilter = LinearFilter;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+function copySurface(material: MeshPhongMaterial | MeshStandardMaterial | MeshMatcapMaterial, source: Material) {
   const surface = source as Material & Partial<Pick<MeshPhongMaterial, 'map' | 'color' | 'alphaMap'>>;
   if (surface.color) material.color.copy(surface.color);
   material.map = surface.map ?? null;
@@ -37,6 +77,30 @@ function copySurface(material: MeshPhongMaterial | MeshStandardMaterial, source:
   material.depthWrite = source.depthWrite;
   material.side = source.side;
   material.vertexColors = source.vertexColors;
+}
+
+export function matcapMaterial(source: Material, matcap: Texture) {
+  const material = new MeshMatcapMaterial({ matcap, toneMapped: false });
+  copySurface(material, source);
+  material.color.set(0xffffff);
+  material.alphaToCoverage = source.alphaToCoverage;
+  if (!source.transparent && source.alphaTest === 0 && !source.alphaHash) material.map = null;
+  material.onBeforeCompile = shader => {
+    // Use Base Color and vertex colors only for alpha, so their RGB values never tint the capture.
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <map_fragment>', /* glsl */ `
+        #ifdef USE_MAP
+          diffuseColor.a *= texture2D(map, vMapUv).a;
+        #endif
+      `)
+      .replace('#include <color_fragment>', /* glsl */ `
+        #ifdef USE_COLOR_ALPHA
+          diffuseColor.a *= vColor.a;
+        #endif
+      `)
+      .replace('vec3 viewDir = normalize( vViewPosition );', 'vec3 viewDir = isOrthographic ? vec3(0.0, 0.0, 1.0) : normalize(vViewPosition);');
+  };
+  return material;
 }
 
 export function shaderLook(source: Material, look: ShaderLook) {
